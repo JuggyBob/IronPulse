@@ -208,12 +208,28 @@ the body — the diff already shows what changed.
 
 ## Review process
 
-- At least **one approving review** is required before merge.
-- All required status checks must pass.
-- A maintainer will squash-merge, so write commit messages for the person reading the log later.
-- **Disagreeing with a review is welcome.** Say why you think something is better — the review is a
-  conversation, not an order.
-- Reviews may take a few days. This is a small project maintained in someone's spare time.
+`main` is protected. Concretely:
+
+| Rule | Why |
+|---|---|
+| **Build, Unit tests, Lint and Secret scan must all pass** | The real gate. Nothing merges without them. |
+| **Checks must be up to date with the branch** | A green run from an earlier commit does not count. |
+| **Force pushes and branch deletion are blocked** | `main` is the release branch. |
+| **Every review conversation must be resolved** | No merging with an unanswered question. |
+| **A pull request is required** | Even for the maintainer. |
+
+**An approving review is not required**, because this project has exactly one maintainer and GitHub
+does not let you approve your own pull request. Requiring one would make the repository permanently
+unmergeable rather than stricter. If outside contributions pick up, turn it back on in
+**Settings → Branches → Branch protection rules**.
+
+The trade-off is honest: for the maintainer's own changes, CI is the only external check. For
+everyone else's, CI plus a maintainer read before merge is the norm here.
+
+A maintainer squash-merges, so write commit messages for the person reading the log later.
+**Disagreeing with a review is welcome** — say why you think something is better; a review is a
+conversation, not an order. Reviews may take a few days: this is a small project maintained in
+someone's spare time.
 
 ---
 
