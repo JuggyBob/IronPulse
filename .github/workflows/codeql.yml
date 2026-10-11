@@ -22,7 +22,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
@@ -30,8 +36,17 @@ jobs:
           language: kotlin
           queries: security-and-quality
 
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
+      # Explicit build steps rather than `autobuild`.
+      #
+      # Autobuild for a Gradle project runs `./gradlew assemble`, which includes
+      # `assembleRelease` — and configuring :app:packageRelease fails without the release signing
+      # secrets, which a pull request from a fork never has. The analysis then dies on a build
+      # error rather than reporting anything.
+      #
+      # Only the debug variant is needed: it compiles exactly the same source that CodeQL
+      # analyses, and it needs no secrets.
+      - name: Build (debug only)
+        run: ./gradlew assembleDebug --stacktrace
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v3
