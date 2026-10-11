@@ -104,3 +104,6 @@ npm-debug.log*
 yarn-error.log*
 Thumbs.db
 desktop.ini
+# Local UI automation dumps (adb uiautomator / screencap scratch files)
+_ui*.xml
+_wip*.png
