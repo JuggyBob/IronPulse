@@ -18,8 +18,8 @@ android {
     applicationId = "com.aistudio.fitness.ironpulse"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0.0-release"
+    versionCode = 2
+    versionName = "1.0.1-release"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
