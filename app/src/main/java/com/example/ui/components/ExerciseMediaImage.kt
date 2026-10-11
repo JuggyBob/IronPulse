@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import android.content.Context
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -51,6 +52,35 @@ import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 
 /**
+ * Builds the video player for a picked exercise video.
+ *
+ * Separate from [ExerciseGif] so the @UnstableApi opt-in covers exactly the two Media3
+ * members that need it (controllerAutoShow and setShutterBackgroundColor) rather than the
+ * whole screen. A @OptIn on the composable would not reach inside the AndroidView factory
+ * lambda, so the usage lives here instead.
+ */
+// @OptIn satisfies the Kotlin compiler, which treats @UnstableApi as a hard error.
+// @Suppress satisfies lint, whose UnsafeOptInUsageError check does not recognise the
+// @OptIn on this declaration and would report the same usage twice.
+@OptIn(androidx.media3.common.util.UnstableApi::class)
+@Suppress("UnsafeOptInUsageError")
+private fun makeVideoPlayerView(context: Context, uri: String): PlayerView {
+    val player = ExoPlayer.Builder(context).build().apply {
+        setMediaItem(MediaItem.fromUri(uri))
+        repeatMode = ExoPlayer.REPEAT_MODE_ONE
+        playWhenReady = true
+        prepare()
+    }
+    return PlayerView(context).apply {
+        this.player = player
+        useController = true
+        // The app draws its own controls and chrome around this block.
+        controllerAutoShow = false
+        setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+    }
+}
+
+/**
  * The animation for an exercise.
  *
  * Three sources, in order of preference (see [ExerciseMedia.resolve]):
@@ -95,21 +125,7 @@ fun ExerciseGif(
             source == ExerciseMedia.Source.LOCAL_VIDEO && started -> {
                 val uri = localUri.trim()
                 AndroidView(
-                    factory = { context ->
-                        val player = ExoPlayer.Builder(context).build().apply {
-                            setMediaItem(MediaItem.fromUri(uri))
-                            repeatMode = ExoPlayer.REPEAT_MODE_ONE
-                            playWhenReady = true
-                            prepare()
-                        }
-                        PlayerView(context).apply {
-                            this.player = player
-                            useController = true
-                            // The app draws its own controls and chrome around this block.
-                            controllerAutoShow = false
-                            setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
-                        }
-                    },
+                    factory = { context -> makeVideoPlayerView(context, uri) },
                     update = { view ->
                         view.player?.playWhenReady = true
                     },

@@ -71,18 +71,16 @@ android {
     includeInBundle = true
   }
 
-  // Lint reports, it does not gate the build.
+  // Lint gates the build.
   //
-  // There are four pre-existing `NewApi` errors — the Coil ImageDecoderDecoder registration in
-  // IronPulseApp.kt is annotated as API 28+, and the app supports 24 — so `lintDebug` aborted and
-  // CI failed before it had analysed anything. They are real findings and are tracked, but they
-  // predate CI and fixing them means changing application code, which is not something to slip
-  // into a tooling change.
-  //
-  // The report is still produced and uploaded on every run, so nothing is hidden: turn this back
-  // on once the four are fixed.
+  // It used to be advisory, because four errors — an API 28 Coil decoder registered
+  // against minSdk 24, an API 26 Vibrator overload reachable on 24, and two Media3
+  // @UnstableApi members — aborted lintDebug before it had analysed anything. Those four
+  // are now fixed in the code, so the errors are gone and lint is a real gate again.
+  // Warnings remain non-fatal: there are roughly forty, mostly obsolete-dependency and
+  // unused-resource findings, and none is worth blocking a build over.
   lint {
-    abortOnError = false
+    abortOnError = true
     warningsAsErrors = false
     checkDependencies = true
   }

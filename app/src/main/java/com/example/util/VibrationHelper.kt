@@ -75,11 +75,19 @@ object VibrationHelper {
         }
     }
 
-    @Suppress("DEPRECATION")
+    // Both annotations, for different reasons.
+    //
+    // DEPRECATION: the call was deprecated in API 33 but is still the only way to pass
+    // AudioAttributes to the legacy Vibrator API, which is what lets the buzz survive Do Not
+    // Disturb and silent mode.
+    //
+    // NewApi: vibrate(VibrationEffect, AudioAttributes) needs API 26, and the app supports 24.
+    // It is nonetheless safe to call, because the only callers sit inside the
+    // Build.VERSION.SDK_INT >= Build.VERSION_CODES.O branch of vibrateRestFinished, and lint
+    // cannot see that through a separate function.
+    @Suppress("DEPRECATION", "NewApi")
     private fun tryVibrate(vibrator: Vibrator, effect: VibrationEffect, attributes: AudioAttributes): Boolean =
         try {
-            // Deprecated in API 33 but still the only way to pass AudioAttributes to the legacy
-            // Vibrator API, which is what lets the buzz survive Do Not Disturb and silent mode.
             vibrator.vibrate(effect, attributes)
             true
         } catch (e: Exception) {
