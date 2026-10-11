@@ -1,0 +1,19 @@
+# Configuration for GitHub issue templates.
+#
+# `blank_issues_enabled: false` means every issue must go through one of the templates below.
+# Every report we get from a blank form is missing the build version, the device, or the exact
+# reproduction steps — which is usually enough information to have told us what the bug was.
+blank_issues_enabled: false
+
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/JuggyBob/IronPulse/blob/main/SECURITY.md
+    about: Report privately. Please do not open a public issue for a security problem.
+
+  - name: Ask a question or discuss an idea
+    url: https://github.com/JuggyBob/IronPulse/discussions
+    about: For anything that does not fit a bug report or a feature request.
+
+  - name: Development Methodology & Transparency
+    url: https://github.com/JuggyBob/IronPulse#readme
+    about: How this project is built and maintained.

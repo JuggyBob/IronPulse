@@ -1,0 +1,115 @@
+name: Bug report
+description: Something in the app does not work the way it should.
+title: "[Bug] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing this. Please fill in as much as you can — the sections below are the
+        ones we cannot work out on our own.
+
+        **If this is a security vulnerability, do not post it here.** Follow
+        [SECURITY.md](../blob/main/SECURITY.md) instead.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead.
+      placeholder: |
+        Expected: tapping the exercise name during a quick workout opens its details.
+        Actual: nothing happens; the tap does nothing at all.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact steps, from a cold start if possible.
+      placeholder: |
+        1. Open the app and go to the Exercises tab
+        2. Tap "Start"
+        3. Tap "+ Add Set" on any exercise
+        4. Tap the exercise name
+    validations:
+      required: true
+
+  - type: textarea
+    id: original
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error text
+      description: The exact wording of any error, crash message or logcat line.
+      render: text
+    validations:
+      required: false
+
+  - type: input
+    id: build
+    attributes:
+      label: Build version
+      description: The version shown in the footer at the bottom of any tab.
+      placeholder: v1.0.0
+    validations:
+      required: true
+
+  - type: input
+    id: android
+    attributes:
+      label: Android version
+      placeholder: Android 14 (API 34)
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      description: Model and manufacturer, if you know it.
+      placeholder: Pixel 8
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Does it reproduce every time?
+      description: Every time, sometimes, or only once?
+      placeholder: Every time.
+    validations:
+      required: true
+
+  - type: textarea
+    id: eraser
+    attributes:
+      label: Does it still happen after "Erase all app data"?
+      description: |
+        This rules out stale local data, which causes more reports than actual bugs.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: regression
+    attributes:
+      label: Regression
+      options:
+        - label: This used to work and stopped working.
+        - label: This has never worked.
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, screen recordings, or context we are missing.
+    validations:
+      required: false

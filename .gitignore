@@ -1,0 +1,106 @@
+# ============================================================================
+# IronPulse — .gitignore
+# ============================================================================
+
+# --- Android / Gradle build outputs -----------------------------------------
+*.apk
+*.aab
+*.ap_
+*.aar
+*.dex
+*.class
+/bin/
+/build/
+/app/build/
+/.cxx/
+/captures/
+/externalNativeBuild/
+/output/
+
+# Gradle itself
+.gradle/
+gradle-app.setting
+!gradle/wrapper/gradle-wrapper.jar
+.gradletasknamecache/
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+.kotlin/
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+release/
+
+# --- Keystores & signing material (NEVER COMMIT) ----------------------------
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pepk
+*.pem
+*.key
+google-services.json
+
+# --- Secrets ----------------------------------------------------------------
+.env
+.env.*
+!.env.example
+secrets.properties
+secrets.xml
+
+# --- OS noise ---------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Editors / tooling caches ----------------------------------------------
+__pycache__/
+*.py[cod]
+*.log
+.vscode/
+.idea/dictionaries
+*.swp
+*.swo
+*~
+.history/
+
+# --- Local-only project notes (maintainer working documents) -----------------
+# These are working notes kept on the maintainer's machine, not part of the
+# published project. They are deliberately not tracked.
+RELEVANTFILES.md
+IMPLEMENTATION_CHECKLIST.md
+IMPLEMENTATION_CHECKLIST*.md
+
+# --- Local backup archives --------------------------------------------------
+/Backups/
+backup/
+*.bak
+*.backup
+
+# --- Test artefacts ---------------------------------------------------------
+# Roborazzi reference screenshots ARE committed on purpose.
+#
+# `testDebugUnitTest` runs Roborazzi in compare mode, so it needs the golden images to compare
+# against. Gitignoring them would make CI fail on a clean checkout, and re-recording them during
+# CI would silently accept any visual regression.
+#
+# Regenerate deliberately, and review the diff:
+#   ./gradlew recordRoborazziDebug
+#
+# Output that is genuinely disposable:
+app/build/outputs/roborazzi/
+
+# --- OS / package manager noise that sometimes appears in a working tree ----
+npm-debug.log*
+yarn-error.log*
+Thumbs.db
+desktop.ini

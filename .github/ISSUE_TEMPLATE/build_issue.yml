@@ -1,0 +1,74 @@
+name: Configuration or build problem
+description: The project will not build, or the app will not install.
+title: "[Build] "
+labels: ["build", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For problems getting the project to build or the APK to install.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of problem?
+      multiple: true
+      options:
+        - Gradle sync or configuration fails
+        - Compilation error
+        - The debug build succeeds but the app crashes on launch
+        - The release build fails or produces a bad APK
+        - The APK will not install
+        - A test fails that I cannot reproduce
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: What did you run?
+      render: shell
+      placeholder: ./gradlew assembleDebug
+    validations:
+      required: true
+
+  - type: textarea
+    id: error
+    attributes:
+      label: Full error output
+      description: From the first error, not the last line.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: jdk
+    attributes:
+      label: JDK version
+      placeholder: 17.0.9
+    validations:
+      required: true
+
+  - type: input
+    id: gradle
+    attributes:
+      label: Gradle wrapper version
+      placeholder: 9.3.1
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Commit hash or release
+      placeholder: a1b2c3d
+    validations:
+      required: false

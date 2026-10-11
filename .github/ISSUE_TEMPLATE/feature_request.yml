@@ -1,0 +1,77 @@
+name: Feature request
+description: Suggest something the app could do better.
+title: "[Feature] "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe the **problem** before the solution — a problem statement is much easier to
+        evaluate, because the same problem usually has several good answers and one of them may be
+        better than what you have in mind.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What is hard, slow, or impossible today?
+      placeholder: |
+        When I finish a set I have to scroll back up to find "+ Add Set" again, because the tray
+        covers the exercise list.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What you would like to happen instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Even briefly. This often points at a better solution for everyone.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part of the app?
+      multiple: true
+      options:
+        - Exercise library
+        - Logging / quick workout
+        - Routine workout
+        - My own exercises / media
+        - Progress & analytics
+        - AI coach
+        - Profile & weigh-ins
+        - Settings
+        - Onboarding
+        - Accessibility / theming
+    validations:
+      required: true
+
+  - type: textarea
+    id: offline
+    attributes:
+      label: Does this need to work without an API key?
+      description: |
+        Most of the app works fully offline. If your request depends on AI, say so — it changes
+        whether it can be an offline feature or not.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: data
+    attributes:
+      label: Data handling
+      options:
+        - label: This feature stores new data on the device.
+        - label: This feature sends data to the AI.
+    validations:
+      required: false

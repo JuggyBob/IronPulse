@@ -1,0 +1,37 @@
+# Code owners for IronPulse.
+#
+# Anyone listed here is automatically requested as a reviewer when a pull request touches the
+# matching paths. Combined with branch protection (a required approving review before merge), this
+# is what stops a change to, say, the database migrations landing without a second pair of eyes.
+
+# Default owner for everything not matched below.
+*                               @JuggyBob
+
+# Build, dependencies and CI. A change here affects every developer and every release.
+.github/                        @JuggyBob
+build.gradle.kts                @JuggyBob
+settings.gradle.kts             @JuggyBob
+gradle.properties               @JuggyBob
+gradle/                         @JuggyBob
+app/build.gradle.kts            @JuggyBob
+app/proguard-rules.pro          @JuggyBob
+
+# Database. A bad migration is the one change that can destroy a user's history, and it cannot be
+# undone by shipping a new version.
+app/src/main/java/com/example/data/db/         @JuggyBob
+app/src/main/java/com/example/data/dao/        @JuggyBob
+app/src/main/java/com/example/data/seed/       @JuggyBob
+app/src/main/java/com/example/data/repository/ @JuggyBob
+
+# Anything that touches user data leaving the device.
+app/src/main/java/com/example/data/api/        @JuggyBob
+app/src/main/java/com/example/data/preferences/ @JuggyBob
+SECURITY.md                                     @JuggyBob
+
+# Tests.
+app/src/test/                 @JuggyBob
+app/src/androidTest/          @JuggyBob
+
+# Documentation and project meta.
+*.md                          @JuggyBob
+docs/                         @JuggyBob
