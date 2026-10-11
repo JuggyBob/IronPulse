@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+# Runs on every push to main and on every pull request against main.
+# Both events are required: a push run does not tell you whether the merge will build, and a
+# pull_request run does not cover a direct push to main.
+
 jobs:
   build:
     name: Build
