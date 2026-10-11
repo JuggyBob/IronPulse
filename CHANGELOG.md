@@ -109,6 +109,24 @@ First public release.
 
 ---
 
+## [Unreleased]
+
+### Changed
+- **Lint is a hard gate again.** Four errors that predated CI are fixed, so `lintDebug`
+  fails the build on an error rather than only reporting one:
+  - The Coil `ImageDecoderDecoder` is now registered only on API 28+, matching what its
+    comment always claimed; below 28 the GIF decoder remains the only one.
+  - The API 26 `Vibrator.vibrate(effect, attributes)` overload is now explicitly
+    suppressed as `NewApi`, because the only callers sit behind an API 26 check that lint
+    cannot see through a separate function.
+  - The two Media3 `@UnstableApi` members (`controllerAutoShow`,
+    `setShutterBackgroundColor`) are opted into in a single isolated helper.
+
+  No user-visible behaviour changed. Roughly forty warnings remain (obsolete dependencies,
+  unused resources) and stay non-fatal.
+
+---
+
 ## [Unreleased Format]
 
 Entries are grouped under **Added**, **Changed**, **Deprecated**, **Removed**, **Fixed** and

@@ -2,6 +2,7 @@ package com.example.util
 
 import android.app.Application
 import android.content.Context
+import android.os.Build
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import coil.decode.GifDecoder
@@ -27,8 +28,13 @@ class IronPulseApp : Application(), ImageLoaderFactory {
         ImageLoader.Builder(this)
             .components {
                 // ImageDecoderDecoder covers API 28+ and delegates to the platform's animated decoder;
-                // GifDecoder covers 24 to 27, which the app still supports.
-                add(ImageDecoderDecoder.Factory())
+                // GifDecoder covers 24 to 27, which the app still supports. The version check is
+                // what makes that split real: registering ImageDecoderDecoder below 28 would
+                // reach for an API the device does not have, so the GIF decoder is the only
+                // one on those devices.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    add(ImageDecoderDecoder.Factory())
+                }
                 add(GifDecoder.Factory())
             }
             .memoryCache {
