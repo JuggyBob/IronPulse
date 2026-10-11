@@ -3,16 +3,16 @@
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](LICENSE)
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9-7F52FF.svg)](https://kotlinlang.org)
 [![Android](https://img.shields.io/badge/Android-7.1%2B-3DDC84.svg)](https://developer.android.com)
-[![Release](https://img.shields.io/badge/release-v1.0.0-blue.svg)](https://github.com/JuggyBob/IronPulse/releases)
+[![Release](https://img.shields.io/badge/release-v1.0.1-blue.svg)](https://github.com/JuggyBob/IronPulse/releases)
 
 A dark-themed workout logger for strength training and calisthenics, built for the gym:
 offline by default, no account, no tracking, and a 1,300+ movement catalog that streams its
 animations on demand instead of shipping them in the APK.
 
 <p align="center">
-  <img src="docs/screenshots/01-exercise-library.png" width="30%" alt="Exercise library" />
-  <img src="docs/screenshots/02-exercise-detail.png" width="30%" alt="Exercise detail" />
   <img src="docs/screenshots/03-progress-analytics.png" width="30%" alt="Progress analytics" />
+  <img src="docs/screenshots/02-exercise-detail.png" width="30%" alt="Exercise detail" />
+  <img src="docs/screenshots/06-logging-quick-workout.png" width="30%" alt="Logging a quick workout" />
 </p>
 
 ---
@@ -38,11 +38,19 @@ cached**, not bundled, so the app stays small and an exercise you never open cos
 - Every exercise is editable — including the shipped library — so a row with wrong fields can be
   fixed instead of being lived with. Library edits ask first and survive catalog updates.
 
+<p align="center">
+  <img src="docs/screenshots/06-logging-quick-workout.png" width="45%" alt="A quick workout in progress" />
+</p>
+
 ### Your own exercises
 - Attach a photo or video of your own variation. It replaces the built-in animation, so you see
   *your* movement rather than someone else's.
 - The pick is copied into the app's own storage, so it keeps working after a restart rather than
   expiring with the gallery's permission.
+
+<p align="center">
+  <img src="docs/screenshots/07-create-custom-exercise.png" width="45%" alt="Create a custom exercise, with the media picker" />
+</p>
 
 ### Progress
 - Volume, estimated one-rep max, max reps, training streak and a 12-month activity heatmap.
@@ -152,6 +160,7 @@ Prebuilt APKs are attached to the
 
 | Version | File |
 |---|---|
+| **v1.0.1** | [`IronPulse-v1.0.1.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v1.0.1/IronPulse-v1.0.1.apk) |
 | v1.0.0 | [`IronPulse-v1.0.0.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v1.0.0/IronPulse-v1.0.0.apk) |
 
 Requires Android 7.1 (API 24) or newer.

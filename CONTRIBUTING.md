@@ -22,6 +22,7 @@ a pull request.
 - [Review process](#review-process)
 - [Adding tests](#adding-tests)
 - [Reporting a security issue](#reporting-a-security-issue)
+- [Releasing](#releasing)
 
 ---
 
@@ -272,3 +273,47 @@ you may be wrong. Report unacceptable behaviour to the maintainer privately.
 ## Reporting a security issue
 
 **Do not open a public issue.** Follow [SECURITY.md](SECURITY.md).
+
+---
+
+## Releasing
+
+Releases are published **manually**, not by CI. This is deliberate.
+
+A release build needs the upload keystore (``my-upload-key.jks``), which lives on the maintainer's
+machine and is never committed -- that is the whole point of it. A workflow cannot sign an APK with a
+key it does not have, so an automated release job can only ever fail on that step. Rather than leave a
+workflow that reddens on every tag, the release is built and attached by hand.
+
+To cut a release:
+
+1. **Bump the version** in ``app/build.gradle.kts`` (``versionCode``, ``versionName``) on its own
+   branch and merge it.
+2. **Tag it.** The tag drives the version:
+
+   ```bash
+   git tag -a v1.0.2 -m "IronPulse v1.0.2"
+   git push origin v1.0.2
+   ```
+
+3. **Build the release APK** locally with the upload key and record its checksum.
+4. **Attach both to the release**, writing the notes from ``CHANGELOG.md``:
+
+   ```bash
+   gh release create v1.0.2 IronPulse-v1.0.2.apk IronPulse-v1.0.2.apk.sha256 \
+     --title "IronPulse v1.0.2" \
+     --notes-file CHANGELOG.md \
+     --verify-tag
+   ```
+
+5. **Update the README** download table and the version badge in the same branch as the bump.
+
+``*.apk`` files are gitignored, so the release artefact is attached to the release and never checked
+into the repository.
+
+CI still guards the code: ``Build``, ``Unit tests``, ``Lint`` and ``Secret scan`` run on every push
+and pull request, so what goes into a release is what passed them.
+
+Supported versions are listed in [SECURITY.md](SECURITY.md). A security release follows the same
+manual process; only the newest release is supported, and older ones stay downloadable for anyone who
+needs them.

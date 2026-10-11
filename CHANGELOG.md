@@ -92,11 +92,29 @@ First public release.
 
 ---
 
+## [1.0.1] — 2026-10-11
+
+### Fixed
+- **Choosing "lb" during onboarding had no effect.** The unit chips on the "About you" page wrote to
+  the live preference key but the screen read a different, profile-only key that nothing writes
+  until the form is submitted — so selecting "lb" appeared to do nothing at all. The two keys now
+  agree, and the profile edit dialog's own unit selector writes the live key too, so changing the
+  unit there no longer appears to be ignored.
+- Weights already typed into the onboarding form are converted in place when the unit changes, so
+  switching from lb to kg re-reads the number correctly instead of keeping the stale figure.
+
+### Changed
+- Entering a unit in the "About you" page now also updates the live setting, so the app never ships
+  a profile whose stored unit disagrees with the one the athlete picked.
+
+---
+
 ## [Unreleased Format]
 
 Entries are grouped under **Added**, **Changed**, **Deprecated**, **Removed**, **Fixed** and
 **Security**, each newest first. Versions follow [SemVer](https://semver.org/): bump the patch for a
 fix, the minor for a feature, the major for a breaking change.
 
-[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/JuggyBob/IronPulse/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/JuggyBob/IronPulse/releases/tag/v1.0.0
