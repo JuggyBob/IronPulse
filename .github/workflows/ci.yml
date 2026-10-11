@@ -10,10 +10,6 @@ on:
 permissions:
   contents: read
 
-# Runs on every push to main and on every pull request against main.
-# Both events are required: a push run does not tell you whether the merge will build, and a
-# pull_request run does not cover a direct push to main.
-
 jobs:
   build:
     name: Build
@@ -34,9 +30,6 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build debug APK
-<<<<<<< HEAD
-        run: ./gradlew assembleDebug --stacktrace
-=======
         # The executable bit on gradlew is recorded in git, not in the filesystem. Without it a
         # checkout on Linux lands a non-executable script and the build dies with "Permission
         # denied" before Gradle ever starts.
@@ -66,7 +59,18 @@ jobs:
           java-version: '17'
 
       - name: Run unit tests
+        # Runs Roborazzi in compare mode, which is why the reference screenshots in
+        # app/src/test/screenshots are committed rather than gitignored: without them a clean
+        # checkout has nothing to compare against.
         run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: app/build/reports/tests/
+          retention-days: 14
 
   lint:
     name: Lint
@@ -93,4 +97,3 @@ jobs:
           name: lint-report
           path: app/build/reports/lint-results-debug.html
           retention-days: 14
->>>>>>> 0a2827a90e316c1c276f2a904b2a47aaf4d6a598
