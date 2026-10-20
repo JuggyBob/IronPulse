@@ -42,7 +42,7 @@ import kotlinx.coroutines.sync.withLock
         ChatMessageEntity::class,
         GeminiSummary::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -223,6 +223,25 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Records the body weight that applied when each set was logged.
+         *
+         * Without it a bodyweight set has no weight of its own: the app reads the athlete's current
+         * weight, so weighing in today rewrote what last month's pull-ups weighed. The snapshot
+         * is what makes the isolated weight tag stable.
+         *
+         * Existing rows default to 0, which reads as "not recorded" and falls back to the current
+         * profile weight. That is the best guess for a set logged before the snapshot existed, and
+         * it never invents a number.
+         */
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `logged_sets` ADD COLUMN `bodyWeightKg` REAL NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -237,7 +256,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_4_5,
                         MIGRATION_5_6,
                         MIGRATION_6_7,
-                        MIGRATION_7_8
+                        MIGRATION_7_8,
+                        MIGRATION_8_9
                     )
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .addCallback(DatabasePrepopulationCallback(context))

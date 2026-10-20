@@ -167,7 +167,7 @@ fun SelectRoutineDayDialog(
                                 }
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    text = day.exercises.joinToString(" • ") { "${it.exerciseName} (${RoutineParser.cleanPrescription(it.prescription, it.equipment).ifBlank { "${it.targetSets}x${it.targetReps}" }})" },
+                                    text = day.exercises.joinToString(" • ") { "${it.exerciseName} (${RoutineParser.shortPrescription(it.prescription, it.equipment).ifBlank { "${it.targetSets}x${it.targetReps}" }})" },
                                     style = MaterialTheme.typography.bodySmall.copy(lineHeight = 16.sp),
                                     color = TextMuted,
                                     maxLines = 2,
@@ -233,7 +233,7 @@ fun RoutineExerciseListDisplay(
                             }
                         }
                     }
-                    val firstDayPreview = days.first().exercises.take(3).joinToString(", ") { "${it.exerciseName} (${RoutineParser.cleanPrescription(it.prescription, it.equipment).ifBlank { "${it.targetSets}x${it.targetReps}" }})" }
+                    val firstDayPreview = days.first().exercises.take(3).joinToString(", ") { "${it.exerciseName} (${RoutineParser.shortPrescription(it.prescription, it.equipment).ifBlank { "${it.targetSets}x${it.targetReps}" }})" }
                     Text(
                         text = "Day 1 Preview: $firstDayPreview" + if (days.first().exercises.size > 3 || days.size > 1) " ..." else "",
                         style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
@@ -242,7 +242,7 @@ fun RoutineExerciseListDisplay(
                         overflow = TextOverflow.Ellipsis
                     )
                 } else {
-                    val preview = days[0].exercises.take(4).joinToString(", ") { "${it.exerciseName} (${RoutineParser.cleanPrescription(it.prescription, it.equipment).ifBlank { "${it.targetSets}x${it.targetReps}" }})" }
+                    val preview = days[0].exercises.take(4).joinToString(", ") { "${it.exerciseName} (${RoutineParser.shortPrescription(it.prescription, it.equipment).ifBlank { "${it.targetSets}x${it.targetReps}" }})" }
                     Text(
                         text = "${days[0].exercises.size} prescribed exercises: $preview" + if (days[0].exercises.size > 4) " ..." else "",
                         style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
@@ -408,10 +408,11 @@ private fun RoutineExerciseItemRow(
     index: Int,
     item: RoutineExerciseItem
 ) {
+    // The tag is deliberately short: "3 sets x 12 reps" and nothing else. A load or a comment
+    // makes it wide enough to wrap onto its own line, and the load belongs to the athlete anyway.
     val displayPrescription = remember(item.prescription, item.equipment) {
-        RoutineParser.cleanPrescription(item.prescription, item.equipment).ifBlank {
+        RoutineParser.shortPrescription(item.prescription, item.equipment).ifBlank {
             if (item.targetHoldSeconds > 0) "${item.targetSets} sets x ${item.targetHoldSeconds}s"
-            else if (item.targetWeight > 0.0) "${item.targetSets} sets x ${item.targetReps} reps @ ${item.targetWeight}kg"
             else "${item.targetSets} sets x ${item.targetReps} reps"
         }
     }

@@ -124,6 +124,7 @@ import com.example.data.model.WeightUnit
 import com.example.data.model.MuscleCategory
 import com.example.ui.components.DayDropdown
 import com.example.ui.components.MuscleSelectorDialog
+import com.example.ui.components.AutoSaveIndicator
 import com.example.ui.components.ExerciseDetailDialog
 import com.example.ui.components.ExerciseEditorDialog
 import com.example.ui.components.CustomExerciseDialog
@@ -191,6 +192,8 @@ fun LogWorkoutScreen(
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
     val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
     val customExerciseResult by viewModel.customExerciseResult.collectAsStateWithLifecycle()
+    // When the workout in progress was last written to disk, for the "auto saved" indicator.
+    val lastAutoSaveAt by viewModel.lastAutoSaveAt.collectAsStateWithLifecycle()
 
     var showCustomExerciseDialog by remember { mutableStateOf(false) }
     var exerciseBeingEdited by remember { mutableStateOf<Exercise?>(null) }
@@ -253,6 +256,7 @@ fun LogWorkoutScreen(
     var trayState by remember { mutableStateOf(QuickWorkoutTrayState.PARTIAL) }
     var showExitWorkoutDialog by remember { mutableStateOf(false) }
     var showFinishDialog by remember { mutableStateOf(false) }
+    var showRenameWorkoutDialog by remember { mutableStateOf(false) }
     var showRestTimerDialog by rememberSaveable { mutableStateOf(false) }
     var finishNotes by remember { mutableStateOf("") }
     var showExitRoutinePrompt by remember { mutableStateOf(false) }
@@ -971,13 +975,27 @@ fun LogWorkoutScreen(
                                         )
                                     }
                                     Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "Quick Workout",
-                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = TextWhite,
-                                        maxLines = 1,
-                                        softWrap = false
-                                    )
+                                    // The title is the name of the session that ends up in the
+                                    // history, so tapping it renames the workout.
+                                    Column(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .clickable { showRenameWorkoutDialog = true }
+                                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                                            .testTag("quick_workout_title")
+                                    ) {
+                                        Text(
+                                            text = activeSession?.title?.ifBlank { "Quick Workout" } ?: "Quick Workout",
+                                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = TextWhite,
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                        AutoSaveIndicator(
+                                            lastAutoSaveAt = lastAutoSaveAt,
+                                            modifier = Modifier.padding(top = 2.dp)
+                                        )
+                                    }
                                 }
 
                                 // Center: Perfectly Centered Drag Handle Bar + Centered Timer directly below it
@@ -1332,6 +1350,63 @@ fun LogWorkoutScreen(
                 }
             }
         }
+    }
+
+    // Rename Workout Dialog
+    if (showRenameWorkoutDialog) {
+        var renameValue by remember { mutableStateOf(activeSession?.title ?: "Quick Workout") }
+        AlertDialog(
+            onDismissRequest = { showRenameWorkoutDialog = false },
+            containerColor = DarkSurface,
+            title = {
+                Text(
+                    text = "Name this workout",
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    color = TextWhite
+                )
+            },
+            text = {
+                OutlinedTextField(
+                    value = renameValue,
+                    onValueChange = { renameValue = it.take(60) },
+                    singleLine = true,
+                    label = { Text("Workout name", color = TextMuted) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = ElectricCyan,
+                        unfocusedBorderColor = DarkBorder,
+                        focusedTextColor = TextWhite,
+                        unfocusedTextColor = TextWhite,
+                        cursorColor = ElectricCyan
+                    ),
+                    modifier = Modifier.testTag("rename_workout_field")
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showRenameWorkoutDialog = false
+                        viewModel.renameActiveWorkout(renameValue)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.testTag("confirm_rename_workout_button")
+                ) {
+                    Text(
+                        text = "Save",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = DarkBg
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showRenameWorkoutDialog = false },
+                    modifier = Modifier.testTag("cancel_rename_workout_button")
+                ) {
+                    Text("Cancel", color = TextMuted)
+                }
+            }
+        )
     }
 
     // Exit Workout Dialog (same layout as the saved routine workout exit dialog)
@@ -1840,8 +1915,11 @@ fun ExerciseCard(
 
             // Ownership marker: only the exercises the user created or the AI registered can be
             // edited / deleted. User created = green, AI generated = light blue.
-            val isUserOwned = exercise.isCustom
-            val isAiOwned = exercise.isAiGenerated
+            //
+            // An AI registered exercise is custom too, so isCustom alone would label it as the
+            // user's own. The AI flag has to win: it is the more specific fact about who made it.
+            val isUserOwned = exercise.isUserCreated
+            val isAiOwned = exercise.isAiCreated
             if (isUserOwned || isAiOwned) {
                 val markerColor = if (isUserOwned) MintGreen else AiBlue
                 Spacer(modifier = Modifier.height(8.dp))

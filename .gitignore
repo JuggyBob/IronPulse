@@ -7,6 +7,7 @@
 *.aab
 *.ap_
 *.aar
+*.bin
 *.dex
 *.class
 /bin/
@@ -51,6 +52,8 @@ google-services.json
 !.env.example
 secrets.properties
 secrets.xml
+# A base64 blob is a keystore wearing a hat.
+*.base64
 
 # --- OS noise ---------------------------------------------------------------
 .DS_Store

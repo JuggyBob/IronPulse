@@ -130,6 +130,19 @@ data class Exercise(
     val secondaryMuscleList: List<String>
         get() = parseMuscleList(secondaryMuscles)
 
+    /**
+     * True for the exercises the athlete created themselves.
+     *
+     * An exercise the AI registered is custom too, so [isCustom] alone would claim it as the
+     * athlete's own. The AI flag is the more specific fact about who made it, so it wins.
+     */
+    val isUserCreated: Boolean
+        get() = isCustom && !isAiGenerated
+
+    /** True for the exercises the AI registered on its own. */
+    val isAiCreated: Boolean
+        get() = isAiGenerated
+
     companion object {
         /**
          * Parses the stored muscle list without org.json.
@@ -218,7 +231,20 @@ data class LoggedSet(
     @ColumnInfo(defaultValue = "0")
     val distanceKm: Double = 0.0,
     val isCompleted: Boolean = true,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    /**
+     * The athlete's body weight at the moment this set was logged, in kilograms.
+     *
+     * Stored rather than looked up because the body weight changes: a set logged last month was
+     * done at the body weight of last month, and reading today's number for it would rewrite the
+     * history every time the athlete weighs in. The isolated weight tag, the volume maths and the
+     * one rep max all read this instead of the current profile weight.
+     *
+     * 0 means "not recorded", which is the case for every set logged before this field existed.
+     * Those fall back to the current profile weight, which is the best guess available for them.
+     */
+    @ColumnInfo(defaultValue = "0")
+    val bodyWeightKg: Double = 0.0
 ) {
     /** Whether this set records a distance rather than a load. */
     val isDistanceBased: Boolean get() = ExerciseType.DISTANCE_BASED.contains(exerciseType)

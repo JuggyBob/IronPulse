@@ -21,6 +21,7 @@ import com.example.data.model.ExerciseSearch
 import com.example.data.model.GibberishNameDetector
 import com.example.data.seed.DatasetSeeder
 import com.example.data.seed.LibraryEditTracker
+import com.example.util.ProfileMediaStore
 import com.example.data.model.ExerciseFilters
 import com.example.data.model.ExerciseSchema
 import com.example.data.seed.toJsonArray
@@ -47,6 +48,8 @@ import com.example.data.model.CustomRoutinePromptState
 import com.example.data.model.WeightUnit
 import com.example.data.model.WeightConversion
 import com.example.data.model.UserProfile
+import com.example.data.model.WorkoutDraft
+import com.example.data.model.WorkoutDraftCodec
 import com.example.data.model.WorkoutSession
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.repository.FitnessRepository
@@ -213,6 +216,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             started = SharingStarted.Eagerly,
             initialValue = UserProfile(id = 1)
         )
+
+    /**
+     * The athlete's body weight right now, in kilograms, or 0 when the profile has no usable weight.
+     *
+     * Taken when a set is created, so the set carries the weight it was done at. A later weigh-in
+     * must not rewrite it.
+     */
+    private fun currentBodyWeightKg(): Double =
+        BodyWeightTimeline.currentWeightOrNull(userProfile.value.currentWeightKg) ?: 0.0
+
+    /**
+     * The athlete's profile picture, as a path inside the app's own storage.
+     *
+     * Empty when they have not chosen one, in which case the profile shows the default icon.
+     */
+    val profileAvatarPath: StateFlow<String> = userPreferencesRepo.profileAvatarPathFlow
+        .flowOn(Dispatchers.IO)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = ""
+        )
+
+    /**
+     * Stores the profile picture and forgets the one it replaces.
+     *
+     * The old file is deleted rather than left behind: it is a copy of a photo the athlete picked,
+     * and copies of photos are not something to accumulate silently.
+     */
+    fun setProfileAvatar(path: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val previous = profileAvatarPath.value
+            if (previous.isNotBlank() && previous != path) {
+                ProfileMediaStore.delete(getApplication())
+            }
+            userPreferencesRepo.setProfileAvatarPath(path)
+        }
+    }
+
+    /** Removes the profile picture and goes back to the default icon. */
+    fun clearProfileAvatar() {
+        viewModelScope.launch(Dispatchers.IO) {
+            ProfileMediaStore.delete(getApplication())
+            userPreferencesRepo.setProfileAvatarPath("")
+        }
+    }
 
     /**
      * Saves the athlete profile.
@@ -1274,7 +1323,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             reps = lastSet?.reps ?: if (exercise.exerciseType == ExerciseType.PURE_BODYWEIGHT) 10 else 8,
             holdDurationSeconds = lastSet?.holdDurationSeconds ?: 0,
             isCompleted = false,
-            timestamp = System.currentTimeMillis()
+            timestamp = System.currentTimeMillis(),
+            // The body weight that applies to this set, taken now so a later weigh-in does not
+            // rewrite it. The set is done at the body weight of the day it was logged.
+            bodyWeightKg = currentBodyWeightKg()
         )
         currentList.add(newSet)
         _activeSets.value = currentList
@@ -1363,6 +1415,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _activeSets.value = emptyList()
                 _activeSessionExercises.value = emptyList()
             }
+            // The workout is saved, so there is nothing left to offer back on the next launch.
+            clearWorkoutDraft()
         }
     }
 
@@ -1371,6 +1425,171 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _activeSession.value = null
         _activeSets.value = emptyList()
         _activeSessionExercises.value = emptyList()
+        clearWorkoutDraft()
+    }
+
+    // === AUTO SAVE OF THE WORKOUT IN PROGRESS ===
+    //
+    // A quick workout lived entirely in memory: the session, its exercises and its sets are three
+    // separate StateFlows and nothing was ever written down. Closing the app from the recents
+    // screen therefore threw the whole session away, down to the last set and the elapsed time.
+    //
+    // The state is now written to disk every few seconds and offered back on the next launch.
+
+    /**
+     * The auto saved workout found at startup, waiting for the athlete to continue or discard it.
+     *
+     * Null when there is nothing to restore, and again once they have decided.
+     */
+    private val _pendingWorkoutDraft = MutableStateFlow<WorkoutDraft?>(null)
+    val pendingWorkoutDraft: StateFlow<WorkoutDraft?> = _pendingWorkoutDraft.asStateFlow()
+
+    /** When the workout in progress was last written to disk, for the "auto saved" indicator. */
+    private val _lastAutoSaveAt = MutableStateFlow<Long?>(null)
+    val lastAutoSaveAt: StateFlow<Long?> = _lastAutoSaveAt.asStateFlow()
+
+    /**
+     * Writes the workout in progress to disk.
+     *
+     * Does nothing when no workout is running, so the loop can call it unconditionally.
+     */
+    fun saveActiveWorkoutDraftNow() {
+        val routine = _activeRoutineWorkout.value
+        val session = _activeSession.value
+        if (routine == null && session == null) return
+
+        val draft = if (routine != null) {
+            WorkoutDraft(
+                kind = WorkoutDraft.KIND_ROUTINE,
+                title = routine.routineName,
+                startTime = routine.startTime,
+                exerciseIds = routine.exercises.map { it.id },
+                sets = routine.sets,
+                routineId = routine.routineId,
+                routineGoal = routine.routineGoal,
+                dayNumber = routine.dayNumber ?: 1,
+                dayTitle = routine.dayTitle.orEmpty(),
+                dayNote = routine.dayNote,
+                routineItems = routine.routineItems
+            )
+        } else {
+            WorkoutDraft(
+                kind = WorkoutDraft.KIND_QUICK,
+                title = session?.title.orEmpty(),
+                startTime = session?.startTime ?: System.currentTimeMillis(),
+                exerciseIds = _activeSessionExercises.value.map { it.id },
+                sets = _activeSets.value
+            )
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.saveWorkoutDraft(WorkoutDraftCodec.encode(draft))
+            _lastAutoSaveAt.value = System.currentTimeMillis()
+        }
+    }
+
+    /** Forgets the saved workout. Called when the workout ends, is saved, or is discarded. */
+    private fun clearWorkoutDraft() {
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.clearWorkoutDraft()
+            _lastAutoSaveAt.value = null
+        }
+    }
+
+    /**
+     * Puts the saved workout back into the live state, exactly as it was.
+     *
+     * Every set comes back with the numbers the athlete typed, the exercise list comes back in
+     * the order it was built, and the start time is the original one, so the elapsed timer keeps
+     * counting from where it stopped rather than restarting.
+     */
+    fun restorePendingWorkoutDraft() {
+        val draft = _pendingWorkoutDraft.value ?: return
+        _pendingWorkoutDraft.value = null
+
+        val all = allExercises.value
+        val byId = all.associateBy { it.id }
+        val byName = all.associateBy { it.name.trim().lowercase() }
+
+        // An exercise that has since been deleted is rebuilt from the sets that mention it, so the
+        // athlete keeps the work they actually did even if the catalog row is gone.
+        fun resolve(id: Long, name: String, type: String): Exercise =
+            byId[id] ?: byName[name.trim().lowercase()] ?: Exercise(
+                id = id,
+                name = name,
+                category = "",
+                exerciseType = type,
+                equipment = "Bodyweight"
+            )
+
+        if (draft.isRoutine) {
+            val exercises = draft.routineItems.mapIndexed { index, item ->
+                val fromSets = draft.sets.firstOrNull { it.exerciseId == item.exerciseId }
+                resolve(item.exerciseId, item.exerciseName, fromSets?.exerciseType ?: item.exerciseType)
+            }.ifEmpty {
+                draft.exerciseIds.map { id ->
+                    val fromSets = draft.sets.firstOrNull { it.exerciseId == id }
+                    resolve(id, fromSets?.exerciseName.orEmpty(), fromSets?.exerciseType ?: ExerciseType.STANDARD_WEIGHT)
+                }
+            }
+            _activeRoutineWorkout.value = ActiveRoutineWorkoutState(
+                routineId = draft.routineId,
+                routineName = draft.title,
+                routineGoal = draft.routineGoal,
+                startTime = draft.startTime,
+                exercises = exercises,
+                routineItems = draft.routineItems,
+                sets = draft.sets,
+                dayNumber = draft.dayNumber,
+                dayTitle = draft.dayTitle.ifBlank { "Day 1" },
+                dayNote = draft.dayNote
+            )
+        } else {
+            val exercises = draft.exerciseIds.mapTo(mutableListOf()) { id ->
+                val fromSets = draft.sets.firstOrNull { it.exerciseId == id }
+                resolve(id, fromSets?.exerciseName.orEmpty(), fromSets?.exerciseType ?: ExerciseType.STANDARD_WEIGHT)
+            }
+            // An exercise with no set yet still belongs to the session: the athlete added it and
+            // has not logged the first set.
+            if (exercises.isEmpty()) {
+                draft.sets.map { it.exerciseId }.distinct().forEach { id ->
+                    val fromSets = draft.sets.firstOrNull { it.exerciseId == id }
+                    exercises.add(resolve(id, fromSets?.exerciseName.orEmpty(), fromSets?.exerciseType ?: ExerciseType.STANDARD_WEIGHT))
+                }
+            }
+            _activeSession.value = WorkoutSession(
+                id = 0L,
+                title = draft.title.ifBlank { "Quick Workout" },
+                startTime = draft.startTime,
+                endTime = draft.startTime
+            )
+            _activeSessionExercises.value = exercises
+            _activeSets.value = draft.sets
+        }
+    }
+
+    /** Throws the saved workout away. The athlete asked for it, so nothing is restored. */
+    fun discardPendingWorkoutDraft() {
+        _pendingWorkoutDraft.value = null
+        clearWorkoutDraft()
+    }
+
+    /**
+     * Renames the workout in progress.
+     *
+     * The quick workout's title is the name of the session that gets saved into the history, so
+     * naming it is how a workout is told apart from another one a month later.
+     */
+    fun renameActiveWorkout(title: String) {
+        val clean = title.trim().take(MAX_WORKOUT_NAME_LENGTH)
+        if (clean.isBlank()) return
+
+        _activeSession.value?.let { session ->
+            _activeSession.value = session.copy(title = clean)
+        }
+        _activeRoutineWorkout.value?.let { routine ->
+            _activeRoutineWorkout.value = routine.copy(routineName = clean)
+        }
     }
 
     fun deleteSession(session: WorkoutSession) {
@@ -1400,9 +1619,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /**
      * Available weights dynamically populated from the historical sets of the selected exercise.
      *
-     * A body weight set is isolated by the athlete's body weight stat (see
-     * [BodyWeightTimeline]), never by a weigh-in: weigh-ins are optional, and deleting them must not
-     * make every body weight exercise lose its weight.
+     * A body weight set is isolated by the body weight it was done at, which is the snapshot the
+     * set carries (see [BodyWeightTimeline]). Never by a weigh-in: weigh-ins are optional, and
+     * deleting them must not make every body weight exercise lose its weight.
      */
     val availableAddedWeights: StateFlow<List<Double>> = combine(
         exerciseHistorySets,
@@ -1418,10 +1637,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (set.weight > 0.0) weights.add(set.weight)
         }
 
-        // 2. Body weight sets: exactly one tag, the athlete profile body weight. A plain 0.0 entry
-        //    is never added here, it used to appear next to it as a misleading "BW: 0 kg".
-        if (sets.any { it.weight == 0.0 && it.addedWeight == 0.0 }) {
-            weights.add(BodyWeightTimeline.currentWeightKg(profile.currentWeightKg))
+        // 2. Body weight sets: tagged with the body weight that applied when they were logged.
+        //    Each set carries its own, so a set from last month keeps its own tag after a weigh-in
+        //    today, and two sets done at different body weights are two different tags. A plain
+        //    0.0 entry is never added here, it used to appear next to it as a misleading "BW: 0 kg".
+        for (set in sets) {
+            if (set.weight == 0.0 && set.addedWeight == 0.0) {
+                BodyWeightTimeline.bodyWeightForSet(set, profile.currentWeightKg)?.let { weights.add(it) }
+            }
         }
 
         weights.toList()
@@ -1442,14 +1665,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val dateFormat = DATE_FORMAT_CHART.get() ?: SimpleDateFormat("MMM d", Locale.getDefault())
         val dayFormat = DATE_FORMAT_DAY.get() ?: SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
 
-        // The athlete profile body weight is the required source, so it is always available
-        val bodyWeight = BodyWeightTimeline.currentWeightOrNull(profile.currentWeightKg)
+        // The body weight each set was done at, not today's. A set from last month keeps its own
+        // weight after a weigh-in today, which is the whole point of the snapshot.
+        fun bodyWeightOf(set: LoggedSet): Double? =
+            BodyWeightTimeline.bodyWeightForSet(set, profile.currentWeightKg)
 
-        /** Load actually lifted, or null when the athlete profile has no usable body weight. */
+        /** Load actually lifted, or null when there is no usable body weight for the set. */
         fun effectiveWeightOrNull(set: LoggedSet): Double? = when (set.exerciseType) {
             ExerciseType.STANDARD_WEIGHT -> set.weight
-            ExerciseType.ADDED_WEIGHT -> bodyWeight?.let { it + set.addedWeight }
-            else -> bodyWeight
+            ExerciseType.ADDED_WEIGHT -> bodyWeightOf(set)?.let { it + set.addedWeight }
+            else -> bodyWeightOf(set)
         }
 
         // Filter by isolated weight tag if specified
@@ -1457,7 +1682,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             sets.filter { set ->
                 set.weight == addedWeightFilter ||
                 set.addedWeight == addedWeightFilter ||
-                (set.weight == 0.0 && set.addedWeight == 0.0 && bodyWeight == addedWeightFilter)
+                (set.weight == 0.0 && set.addedWeight == 0.0 && bodyWeightOf(set) == addedWeightFilter)
             }
         } else {
             sets
@@ -1518,6 +1743,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             backfillAiGeneratedExercises()
             // Pick up any bodyweight record logged in a previous session
             refreshBenchmarkRecords()
+        }
+
+        // Offer back the workout that was in progress when the app was closed.
+        //
+        // Only offered when there is a saved draft: a normal launch has nothing to restore. The
+        // draft is left alone until the athlete decides, so the copy on disk stays intact in case
+        // they pick "Continue".
+        viewModelScope.launch {
+            val raw = userPreferencesRepo.activeWorkoutDraftFlow.first { true } ?: return@launch
+            val draft = WorkoutDraftCodec.decode(raw) ?: run {
+                // Unreadable draft: throw it away rather than leaving it to fail again.
+                userPreferencesRepo.clearWorkoutDraft()
+                return@launch
+            }
+            _pendingWorkoutDraft.value = draft
+        }
+
+        // The auto save loop.
+        //
+        // A single loop that runs for the life of the app rather than one started and stopped per
+        // workout: a workout can be started from the exercises tab, from a routine, and from a
+        // restored draft, and a loop that missed one of those entry points would silently stop
+        // saving. This one cannot miss any of them.
+        viewModelScope.launch {
+            while (isActive) {
+                delay(AUTO_SAVE_INTERVAL_MS)
+                saveActiveWorkoutDraftNow()
+            }
         }
 
         viewModelScope.launch {
@@ -1716,6 +1969,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.clearAllUserData()
             userPreferencesRepo.clearAllPreferences()
+            // The profile picture is a file in the app's own storage, not a row in the database,
+            // so the database wipe does not touch it. It has to go explicitly, or "delete all app
+            // data" would leave a copy of the athlete's photo behind.
+            ProfileMediaStore.delete(getApplication())
             // Hand the coach a brand new, empty session so the chat stays usable after the wipe.
             val freshSession = ensureDefaultChatSession()
             withContext(Dispatchers.Main) {
@@ -1809,12 +2066,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 ?: ExerciseType.STANDARD_WEIGHT
             val summaryUnit = weightUnit.value
 
-            // Body weight comes from the athlete profile stat (always present), never from a
-            // weigh-in: the athlete may have none recorded at all.
-            fun bodyWeightAt(timestamp: Long): Double? =
-                BodyWeightTimeline.currentWeightOrNull(userProfile.value.currentWeightKg)
-
             val allSets = repository.getSetsForExerciseList(exerciseName)
+
+            // Each set carries the body weight it was done at. The analyzer only has a timestamp to
+            // work with, so the snapshot is looked up by it: sets logged in the same session share
+            // a timestamp and therefore a body weight. A set logged before the snapshot existed has
+            // none, and falls back to the profile weight, which is the best guess available.
+            val bodyWeightByTimestamp = allSets.associate { it.timestamp to it.bodyWeightKg }
+            fun bodyWeightAt(timestamp: Long): Double? =
+                bodyWeightByTimestamp[timestamp]?.takeIf { it > 0.0 }
+                    ?: BodyWeightTimeline.currentWeightOrNull(userProfile.value.currentWeightKg)
+
             val summary = MonthlyExerciseAnalyzer.build(
                 exerciseName = exerciseName,
                 exerciseType = exerciseType,
@@ -2279,6 +2541,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _activeRoutineWorkout = MutableStateFlow<ActiveRoutineWorkoutState?>(null)
     val activeRoutineWorkout: StateFlow<ActiveRoutineWorkoutState?> = _activeRoutineWorkout.asStateFlow()
 
+    /**
+     * Applies the routine item's default added weight to the exercise.
+     *
+     * An added weight is a property of the routine, not of the movement: the same single leg squat
+     * can be done at +20 kg in one split and at bodyweight in another. The exercise is therefore
+     * turned into an added weight exercise, which is the type that makes the app ask for the added
+     * weight and add it to the body weight in the volume maths.
+     *
+     * The catalog row is left alone. This is a copy, and only for the session.
+     */
+    private fun withRoutineAddedWeight(exercise: Exercise, item: RoutineExerciseItem): Exercise {
+        if (item.targetAddedWeightKg <= 0.0) return exercise
+        return exercise.copy(exerciseType = ExerciseType.ADDED_WEIGHT)
+    }
+
     fun startRoutineWorkout(routine: SavedRoutine, targetDayNumber: Int? = null) {
         // Dismiss any lingering quick workout tray so only the dedicated routine workout runs
         _activeSession.value = null
@@ -2313,7 +2590,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val byName = exByName[item.exerciseName.trim().lowercase()]
             val found = byId ?: byName ?: RoutineParser.findMatchingExercise(item.exerciseName, exByName.values)
             if (found != null && !resolvedExercises.contains(found)) {
-                resolvedExercises.add(found)
+                resolvedExercises.add(withRoutineAddedWeight(found, item))
             } else if (found == null && item.exerciseName.isNotBlank()) {
                 val tempEx = Exercise(
                     id = if (item.exerciseId > 0) item.exerciseId else ((System.currentTimeMillis() % 1000000) + resolvedExercises.size),
@@ -2323,7 +2600,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     equipment = item.equipment.ifBlank { "Bodyweight" },
                     description = "Prescribed routine exercise"
                 )
-                resolvedExercises.add(tempEx)
+                resolvedExercises.add(withRoutineAddedWeight(tempEx, item))
             }
         }
 
@@ -2347,6 +2624,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val reps = item?.targetReps ?: 8
             val hold = item?.targetHoldSeconds ?: 0
             val weight = item?.targetWeight ?: 0.0
+            // The default added weight the routine prescribes for this exercise, 0 for none.
+            val addedTarget = item?.targetAddedWeightKg ?: 0.0
 
             for (setNum in 1..numSets) {
                 initialSets.add(
@@ -2357,13 +2636,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         exerciseType = ex.exerciseType,
                         setNumber = setNum,
                         weight = if (ex.exerciseType == ExerciseType.STANDARD_WEIGHT) weight else 0.0,
-                        addedWeight = if (ex.exerciseType == ExerciseType.ADDED_WEIGHT) weight else 0.0,
+                        // The added weight the routine prescribes, when it prescribes one. The
+                        // exercise has already been turned into an added weight exercise by
+                        // withRoutineAddedWeight, so this is the number the athlete lifts on top
+                        // of their own body weight.
+                        addedWeight = if (ex.exerciseType == ExerciseType.ADDED_WEIGHT) {
+                            if (addedTarget > 0.0) addedTarget else weight
+                        } else 0.0,
                         // Reps and hold seconds are independent: a prescribed hold never erases the prescribed
                         // reps (an explosive pull-up is 3 reps, a plank is 30 seconds).
                         reps = reps,
                         holdDurationSeconds = hold,
                         isCompleted = false,
-                        timestamp = now
+                        timestamp = now,
+                        // The body weight that applies to this day, taken now so a later weigh-in
+                        // does not rewrite what these sets weighed.
+                        bodyWeightKg = currentBodyWeightKg()
                     )
                 )
             }
@@ -2399,7 +2687,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             reps = lastSet?.reps ?: 8,
             holdDurationSeconds = lastSet?.holdDurationSeconds ?: 0,
             isCompleted = false,
-            timestamp = System.currentTimeMillis()
+            timestamp = System.currentTimeMillis(),
+            // The body weight that applies to this set, taken now so a later weigh-in does not
+            // rewrite it.
+            bodyWeightKg = currentBodyWeightKg()
         )
         _activeRoutineWorkout.value = current.copy(sets = current.sets + newSet)
     }
@@ -2437,6 +2728,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _activeSession.value = null
         _activeSets.value = emptyList()
         _activeSessionExercises.value = emptyList()
+        // The athlete left the workout on purpose, so it must not be offered back on the next launch.
+        clearWorkoutDraft()
     }
 
     fun finishRoutineWorkout(notes: String) {
@@ -2475,6 +2768,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _activeSets.value = emptyList()
                 _activeSessionExercises.value = emptyList()
             }
+            // The workout is saved, so there is nothing left to offer back on the next launch.
+            clearWorkoutDraft()
         }
     }
 
@@ -2763,8 +3058,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 append("- \"name\" MUST be copied character for character from the catalog. Never write a sentence there.\n")
                 append("- \"holdSeconds\": use a value > 0 ONLY for isometric holds (plank, hollow hold). For a rep based movement such as an explosive pull-up it MUST be 0 and \"reps\" MUST carry the rep count.\n")
                 append("- \"reps\": use 0 ONLY when \"holdSeconds\" > 0. Never leave both at 0.\n")
-                append("- \"prescription\" MUST only contain sets, reps, duration/hold and optional load (e.g. '4 sets x 8 reps', '3 sets x 30s', '4 sets x 6 reps @ 80kg').\n")
+                append("- \"prescription\" MUST be exactly '<sets> sets x <reps> reps' and NOTHING else (e.g. '4 sets x 8 reps'). For an isometric hold use '<sets> sets x <seconds>s' (e.g. '3 sets x 30s').\n")
+                append("- NEVER put a load in \"prescription\" (no '80kg', no '@ 80kg', no 'bodyweight'). The load is set separately by the athlete.\n")
+                append("- \"weight\" is the external load in kg for the movement. Use 0.0 for every bodyweight movement and NEVER the athlete's body weight there. Only put a number for a movement that is genuinely loaded with weight.\n")
                 append("- NEVER put equipment ('Barbell', 'Dumbbells', 'with Barbell', ...) in \"prescription\".\n")
+                append("- NEVER add any commentary, notes, tempo, rest or technique hints to \"prescription\".\n")
                 append("- Order the exercises day by day, exactly as the athlete should perform them.\n")
             }
 
@@ -2845,14 +3143,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             val matched = exByName[rawName.lowercase()]
                 ?: RoutineParser.findMatchingExercise(rawName, exByName.values)
-            val prescription = RoutineParser.cleanPrescription(
+            val prescription = RoutineParser.shortPrescription(
                 obj.optString("prescription", ""),
                 matched?.equipment.orEmpty()
             ).ifBlank {
                 when {
                     hold > 0 && reps > 0 -> "$sets sets x $reps reps / ${hold}s"
                     hold > 0 -> "$sets sets x ${hold}s"
-                    weight > 0.0 -> "$sets sets x $reps reps @ ${weight}kg"
                     else -> "$sets sets x $reps reps"
                 }
             }
@@ -3020,8 +3317,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                      - "holdSeconds": Int (isometric hold in seconds, otherwise 0)
                      - "prescription": String (e.g. "4 sets x 8 reps" or "3 sets x 30s")
                        CRITICAL PRESCRIPTION RULES:
-                       * "prescription" MUST ONLY contain sets, reps, duration/hold, and optional load (e.g. "4 sets x 8 reps", "3 sets x 10 reps", "3 sets x 30s", "4 sets x 6 reps @ 80kg").
+                       * "prescription" MUST be exactly "<sets> sets x <reps> reps" and NOTHING else (e.g. "4 sets x 8 reps"). For an isometric hold use "<sets> sets x <seconds>s" (e.g. "3 sets x 30s").
+                       * NEVER put a load inside "prescription" (no "80kg", no "@ 80kg", no "bodyweight"). The load is set separately by the athlete.
                        * NEVER include equipment (e.g. do NOT write "Barbell", "Dumbbell", "Cable", "Machine", "with Barbell", "using Dumbbells", "(Barbell)") inside "prescription"! Equipment belongs strictly in the "equipment" field, NOT in "prescription".
+                       * NEVER add commentary, notes, tempo, rest or technique hints to "prescription".
                      - "day": Int (training day number starting at 1, e.g. 1 for Day 1, 2 for Day 2)
                      - "dayTitle": String (title of the training day, e.g. "Day 1: Lower Body" or "Day 1")
 
@@ -3154,9 +3453,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 existingByName[name.lowercase()] = matched
                             }
 
-                            val cleanPrescription = RoutineParser.cleanPrescription(rawPrescription, matched.equipment).ifBlank {
+                            val cleanPrescription = RoutineParser.shortPrescription(rawPrescription, matched.equipment).ifBlank {
                                 if (hold > 0) "$sets sets x ${hold}s"
-                                else if (weight > 0.0) "$sets sets x $reps reps @ ${weight}kg"
                                 else "$sets sets x $reps reps"
                             }
 
@@ -3326,8 +3624,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                      - "holdSeconds": Int (isometric hold in seconds, otherwise 0)
                      - "prescription": String (e.g. "4 sets x 8 reps" or "3 sets x 30s")
                        CRITICAL PRESCRIPTION RULES:
-                       * "prescription" MUST ONLY contain sets, reps, duration/hold, and optional load (e.g. "4 sets x 8 reps", "3 sets x 10 reps", "3 sets x 30s", "4 sets x 6 reps @ 80kg").
+                       * "prescription" MUST be exactly "<sets> sets x <reps> reps" and NOTHING else (e.g. "4 sets x 8 reps"). For an isometric hold use "<sets> sets x <seconds>s" (e.g. "3 sets x 30s").
+                       * NEVER put a load inside "prescription" (no "80kg", no "@ 80kg", no "bodyweight"). The load is set separately by the athlete.
                        * NEVER include equipment (e.g. do NOT write "Barbell", "Dumbbell", "Cable", "Machine", "with Barbell", "using Dumbbells", "(Barbell)") inside "prescription"! Equipment belongs strictly in the "equipment" field, NOT in "prescription".
+                       * NEVER add commentary, notes, tempo, rest or technique hints to "prescription".
                      - "day": Int (training day number starting at 1: 1 for Day 1, 2 for Day 2)
                      - "dayTitle": String (e.g. "Day 1: Upper Body Push" or "Day 1: Full Body A")
 
@@ -3446,9 +3746,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 existingByName[name.lowercase()] = matched
                             }
 
-                            val cleanPrescription = RoutineParser.cleanPrescription(rawPrescription, matched.equipment).ifBlank {
+                            val cleanPrescription = RoutineParser.shortPrescription(rawPrescription, matched.equipment).ifBlank {
                                 if (hold > 0) "$sets sets x ${hold}s"
-                                else if (weight > 0.0) "$sets sets x $reps reps @ ${weight}kg"
                                 else "$sets sets x $reps reps"
                             }
 
@@ -3519,6 +3818,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         /** Longest athlete name the profile accepts. */
         const val MAX_NAME_LENGTH = 15
+
+        /** Longest name a workout in progress can be given. */
+        const val MAX_WORKOUT_NAME_LENGTH = 60
+
+        /**
+         * How often the workout in progress is written to disk.
+         *
+         * Ten seconds is short enough that a closed app costs at most ten seconds of work, and long
+         * enough that a phone in a pocket is not writing to storage the whole time.
+         */
+        const val AUTO_SAVE_INTERVAL_MS = 10_000L
 
         /** Timeline note used for a body weight the athlete entered through "Log Today". */
         const val WEIGH_IN_NOTE_MORNING = "Morning weigh-in"

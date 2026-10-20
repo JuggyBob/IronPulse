@@ -417,13 +417,18 @@ class ExampleRobolectricTest {
     val exercises = parsedDays.first().exercises
     assertEquals(3, exercises.size)
 
-    assertEquals("4x8", exercises[0].prescription)
+    // The prescription is always reduced to "<sets> sets x <reps> reps" and nothing else.
+    //
+    // A tag that carries the load as well ("4 sets x 6 reps @ +10kg") is too wide for the pill it
+    // is shown in and wraps onto its own line, and the load is the athlete's to set, not the
+    // program's. The load is kept in the structured fields, not in the text.
+    assertEquals("4 sets x 8 reps", exercises[0].prescription)
     org.junit.Assert.assertFalse(exercises[0].prescription.contains("Barbell", ignoreCase = true))
 
     assertEquals("3 sets x 10 reps", exercises[1].prescription)
     org.junit.Assert.assertFalse(exercises[1].prescription.contains("Dumbbell", ignoreCase = true))
 
-    assertEquals("4 sets x 6 reps @ +10kg", exercises[2].prescription)
+    assertEquals("4 sets x 6 reps", exercises[2].prescription)
     org.junit.Assert.assertFalse(exercises[2].prescription.contains("Weighted", ignoreCase = true))
   }
 }

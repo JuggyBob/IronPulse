@@ -1,5 +1,9 @@
 package com.example.ui.components
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,14 +43,17 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -125,6 +132,11 @@ fun ExerciseEditorDialog(
 
 
     var confirmLibraryEdit by remember { mutableStateOf(false) }
+
+    // Set once the change has been written. The dialog stays open and says so, instead of
+    // vanishing the instant the athlete presses Save: a dialog that disappears gives no proof the
+    // change landed, and this one holds fields the athlete typed.
+    var saved by remember { mutableStateOf(false) }
 
     // The fields that follow from the type, so the athlete sees the consequence of the change while
     // they are making it rather than after they have saved.
@@ -395,35 +407,40 @@ fun ExerciseEditorDialog(
             }
         },
         confirmButton = {
-            Button(
-                onClick = {
-                    // Editing the shipped library is a deliberate act, so it asks first. Everything
-                    // else saves straight away: the athlete owns those rows already.
-                    if (isLibrary) {
-                        confirmLibraryEdit = true
-                    } else {
-                        onSave(buildEditedExercise(exercise, name, category, type, equipment, bodyPart, target, secondary, guidance))
-                    }
-                },
-                enabled = name.trim().length >= 2,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isLibrary) FireRed else MintGreen,
-                    disabledContainerColor = DarkSurfaceVariant,
-                    disabledContentColor = TextMuted
-                ),
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.testTag("exercise_editor_save_button")
-            ) {
-                Text(
-                    text = "Save",
-                    color = if (name.trim().length >= 2) DarkBg else TextMuted,
-                    fontWeight = FontWeight.Bold
-                )
+            if (saved) {
+                SaveConfirmation(modifier = Modifier.testTag("exercise_editor_saved_confirmation"))
+            } else {
+                Button(
+                    onClick = {
+                        // Editing the shipped library is a deliberate act, so it asks first. Everything
+                        // else saves straight away: the athlete owns those rows already.
+                        if (isLibrary) {
+                            confirmLibraryEdit = true
+                        } else {
+                            onSave(buildEditedExercise(exercise, name, category, type, equipment, bodyPart, target, secondary, guidance))
+                            saved = true
+                        }
+                    },
+                    enabled = name.trim().length >= 2,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isLibrary) FireRed else MintGreen,
+                        disabledContainerColor = DarkSurfaceVariant,
+                        disabledContentColor = TextMuted
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.testTag("exercise_editor_save_button")
+                ) {
+                    Text(
+                        text = "Save",
+                        color = if (name.trim().length >= 2) DarkBg else TextMuted,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = TextMuted)
+                Text(if (saved) "Close" else "Cancel", color = TextMuted)
             }
         }
     )
@@ -438,8 +455,67 @@ fun ExerciseEditorDialog(
                         exercise, name, category, type, equipment, bodyPart, target, secondary, guidance
                     )
                 )
+                saved = true
             },
             onDismiss = { confirmLibraryEdit = false }
+        )
+    }
+}
+
+/**
+ * The confirmation that the exercise was saved.
+ *
+ * A circle springs in and the checkmark lands in it a moment later, so the athlete sees the change
+ * land rather than being told it did. The dialog stays open underneath it: the fields they typed
+ * are still there, and closing is their call.
+ */
+@Composable
+private fun SaveConfirmation(modifier: Modifier = Modifier) {
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+
+    val circleScale by animateFloatAsState(
+        targetValue = if (shown) 1f else 0.25f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessLow
+        ),
+        label = "saved_circle_scale"
+    )
+    val checkAlpha by animateFloatAsState(
+        targetValue = if (shown) 1f else 0f,
+        animationSpec = tween(durationMillis = 200, delayMillis = 130),
+        label = "saved_check_alpha"
+    )
+
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .graphicsLayer {
+                    scaleX = circleScale
+                    scaleY = circleScale
+                }
+                .background(MintGreen, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = null,
+                tint = DarkBg,
+                modifier = Modifier
+                    .size(15.dp)
+                    .alpha(checkAlpha)
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = "Saved",
+            color = MintGreen,
+            fontWeight = FontWeight.Bold
         )
     }
 }

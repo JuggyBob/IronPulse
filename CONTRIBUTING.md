@@ -89,7 +89,11 @@ These are load-bearing. Breaking them causes real bugs:
   dataset reseed. Do not clear that set outside an explicit revert.
 - **Exercise animations are streamable URLs**, never bundled assets.
 - **A gallery pick must be copied into app storage**, never persisted as the `content://` uri the
-  picker returned. That grant is revoked as soon as the picker closes.
+  picker returned. That grant is revoked as soon as the picker closes. This covers the profile
+  picture as well as the exercise media, and both go through `MediaStore`.
+- **A set keeps the body weight it was done at.** `LoggedSet.bodyWeightKg` is a snapshot taken when
+  the set is created. Never read the athlete's current weight for a historical set, or a weigh-in
+  today rewrites the history of everything logged before it.
 
 ---
 
@@ -200,7 +204,7 @@ the body — the diff already shows what changed.
 | Check | What it does |
 |---|---|
 | **Build** | Compiles debug and release variants |
-| **Unit tests** | Runs all 275 JVM tests; fails the PR on any failure |
+| **Unit tests** | Runs all 293 JVM tests; fails the PR on any failure |
 | **Lint** | Android Lint; fails on errors, warns are reported |
 | **Secret scan** | Fails if a key, token or `.env` file was committed |
 | **APK size** | Reports the debug and release APK sizes as a build artifact |

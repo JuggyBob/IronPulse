@@ -18,8 +18,8 @@ android {
     applicationId = "com.aistudio.fitness.ironpulse"
     minSdk = 24
     targetSdk = 36
-    versionCode = 2
-    versionName = "1.0.1-release"
+    versionCode = 3
+    versionName = "1.1.0-release"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -73,9 +73,9 @@ android {
 
   // Lint gates the build.
   //
-  // It used to be advisory, because four errors — an API 28 Coil decoder registered
+  // It used to be advisory, because four errors - an API 28 Coil decoder registered
   // against minSdk 24, an API 26 Vibrator overload reachable on 24, and two Media3
-  // @UnstableApi members — aborted lintDebug before it had analysed anything. Those four
+  // @UnstableApi members - aborted lintDebug before it had analysed anything. Those four
   // are now fixed in the code, so the errors are gone and lint is a real gate again.
   // Warnings remain non-fatal: there are roughly forty, mostly obsolete-dependency and
   // unused-resource findings, and none is worth blocking a build over.

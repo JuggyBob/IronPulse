@@ -887,12 +887,12 @@ fun WorkoutDayDetailView(
     val setsForSession: List<LoggedSet> by viewModel.getSetsForSession(session.id)
         .collectAsStateWithLifecycle(initialValue = emptyList())
 
-    // Body weight for the set rows: taken from the athlete profile stat, which is always present.
-    // Weigh-ins are optional and unrelated to what the athlete actually lifted.
+    // The body weight for the set rows.
+    //
+    // Each set carries the body weight it was done at, so a set from last month keeps its own
+    // weight after a weigh-in today. Reading the current profile weight instead is what made a
+    // new weigh-in rewrite the history of everything logged before it.
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
-    val bodyWeightAt = remember(userProfile.currentWeightKg) {
-        { _: Long -> BodyWeightTimeline.currentWeightOrNull(userProfile.currentWeightKg) }
-    }
     val weightUnit = WeightUnit.fromLabel(userProfile.preferredUnit)
     val unit = weightUnit.suffix
 
@@ -1185,7 +1185,9 @@ fun WorkoutDayDetailView(
                                     // this column for its distance and time instead, which keeps the
                                     // run's numbers in the history list rather than only in the
                                     // Progress tab.
-                                    val bodyweightAtSet = bodyWeightAt(set.timestamp)
+                                    // The body weight the set was done at, not today's.
+                                    val bodyweightAtSet =
+                                        BodyWeightTimeline.bodyWeightForSet(set, userProfile.currentWeightKg)
                                     val weightText = if (set.exerciseType == ExerciseType.CARDIO) {
                                         describeCardioSet(set, weightUnit)
                                     } else when {

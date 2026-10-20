@@ -13,6 +13,70 @@ Nothing yet. See [CONTRIBUTING.md](CONTRIBUTING.md) to propose a change.
 
 ---
 
+## [1.1.0] — 2026-10-20
+
+### Added
+
+#### The workout in progress is saved while you do it
+- The session is written to disk every few seconds, and a small indicator says when. If the app is
+  closed by accident, the next launch offers the workout back — every set, every number, the
+  exercise count and the elapsed time — to continue or to discard.
+- A quick workout can be named by tapping its title, so a session is easy to find in the history.
+- A routine exercise can carry a **default added weight**. Tap the exercise name in the routine
+  editor and the panel opens; the split starts with that load already filled in.
+
+#### Profile picture
+- Tap the avatar on the Profile tab and pick one from your gallery. The copy is kept in the app's own
+  storage, so it keeps working even after you delete the original from your gallery.
+
+### Fixed
+- **The keyboard came back on its own.** A text field kept its focus after the keyboard was
+  dismissed, so the field stayed selected and the keyboard reappeared every time the app was opened
+  from the recents, with nothing left to dismiss. The focus is now dropped with the keyboard, and
+  a focus restored with the saved state is dropped on the first frame.
+- **AI generated exercises were labelled "Created by you"** on the exercise card and in the details
+  dialog. An AI registered exercise is custom too, so the AI flag now wins.
+- **Logging a new weight rewrote the isolated weight tag.** A body weight set carried no weight of
+  its own, so the app read your *current* weight and weighing in today changed what last month's
+  pull-ups weighed. Every set now keeps the body weight it was done at.
+- **The green prescription tag was too long.** It now shows only `4 sets x 8 reps`, and the AI is
+  asked for exactly that.
+
+### Changed
+- Saving an exercise now shows a tick that confirms the change landed, and the editor stays open
+  until you close it, instead of vanishing the instant you press Save.
+- **Lint is a hard gate again.** Four errors that predated CI are fixed, so `lintDebug`
+  fails the build on an error rather than only reporting one:
+  - The Coil `ImageDecoderDecoder` is now registered only on API 28+, matching what its
+    comment always claimed; below 28 the GIF decoder remains the only one.
+  - The API 26 `Vibrator.vibrate(effect, attributes)` overload is now explicitly
+    suppressed as `NewApi`, because the only callers sit behind an API 26 check that lint
+    cannot see through a separate function.
+  - The two Media3 `@UnstableApi` members (`controllerAutoShow`,
+    `setShutterBackgroundColor`) are opted into in a single isolated helper.
+
+  No user-visible behaviour changed. Roughly forty warnings remain (obsolete dependencies,
+  unused resources) and stay non-fatal.
+
+---
+
+## [1.0.1] — 2026-10-11
+
+### Fixed
+- **Choosing "lb" during onboarding had no effect.** The unit chips on the "About you" page wrote to
+  the live preference key but the screen read a different, profile-only key that nothing writes
+  until the form is submitted — so selecting "lb" appeared to do nothing at all. The two keys now
+  agree, and the profile edit dialog's own unit selector writes the live key too, so changing the
+  unit there no longer appears to be ignored.
+- Weights already typed into the onboarding form are converted in place when the unit changes, so
+  switching from lb to kg re-reads the number correctly instead of keeping the stale figure.
+
+### Changed
+- Entering a unit in the "About you" page now also updates the live setting, so the app never ships
+  a profile whose stored unit disagrees with the one the athlete picked.
+
+---
+
 ## [1.0.0] — 2026-10-11
 
 First public release.
@@ -92,47 +156,13 @@ First public release.
 
 ---
 
-## [1.0.1] — 2026-10-11
-
-### Fixed
-- **Choosing "lb" during onboarding had no effect.** The unit chips on the "About you" page wrote to
-  the live preference key but the screen read a different, profile-only key that nothing writes
-  until the form is submitted — so selecting "lb" appeared to do nothing at all. The two keys now
-  agree, and the profile edit dialog's own unit selector writes the live key too, so changing the
-  unit there no longer appears to be ignored.
-- Weights already typed into the onboarding form are converted in place when the unit changes, so
-  switching from lb to kg re-reads the number correctly instead of keeping the stale figure.
-
-### Changed
-- Entering a unit in the "About you" page now also updates the live setting, so the app never ships
-  a profile whose stored unit disagrees with the one the athlete picked.
-
----
-
-## [Unreleased]
-
-### Changed
-- **Lint is a hard gate again.** Four errors that predated CI are fixed, so `lintDebug`
-  fails the build on an error rather than only reporting one:
-  - The Coil `ImageDecoderDecoder` is now registered only on API 28+, matching what its
-    comment always claimed; below 28 the GIF decoder remains the only one.
-  - The API 26 `Vibrator.vibrate(effect, attributes)` overload is now explicitly
-    suppressed as `NewApi`, because the only callers sit behind an API 26 check that lint
-    cannot see through a separate function.
-  - The two Media3 `@UnstableApi` members (`controllerAutoShow`,
-    `setShutterBackgroundColor`) are opted into in a single isolated helper.
-
-  No user-visible behaviour changed. Roughly forty warnings remain (obsolete dependencies,
-  unused resources) and stay non-fatal.
-
----
-
 ## [Unreleased Format]
 
 Entries are grouped under **Added**, **Changed**, **Deprecated**, **Removed**, **Fixed** and
 **Security**, each newest first. Versions follow [SemVer](https://semver.org/): bump the patch for a
 fix, the minor for a feature, the major for a breaking change.
 
-[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/JuggyBob/IronPulse/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/JuggyBob/IronPulse/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/JuggyBob/IronPulse/releases/tag/v1.0.0

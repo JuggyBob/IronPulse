@@ -75,6 +75,7 @@ import com.example.data.model.ExerciseType
 import com.example.data.model.WeightUnit
 import com.example.data.model.WeightConversion
 import com.example.data.model.LoggedSet
+import com.example.data.model.RoutineParser
 import com.example.ui.components.RestTimerDockedButton
 import com.example.ui.components.RestTimerDialog
 import com.example.ui.theme.CoralOrange
@@ -90,6 +91,7 @@ import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import com.example.ui.components.ExerciseDetailDialog
 import com.example.ui.components.ExerciseEditorDialog
+import com.example.ui.components.AutoSaveIndicator
 import kotlinx.coroutines.flow.map
 import com.example.ui.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
@@ -109,6 +111,8 @@ fun RoutineWorkoutScreen(
     val autoplayExerciseDemos by viewModel.appSettings
         .map { it.autoplayExerciseDemos }
         .collectAsStateWithLifecycle(initialValue = true)
+    // When the workout in progress was last written to disk, for the "auto saved" indicator.
+    val lastAutoSaveAt by viewModel.lastAutoSaveAt.collectAsStateWithLifecycle()
 
     if (activeWorkout == null) {
         Box(
@@ -221,6 +225,12 @@ fun RoutineWorkoutScreen(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = TextMuted,
                                 maxLines = 1
+                            )
+                            // Says that the session is being written down, so closing the app by
+                            // accident costs nothing.
+                            AutoSaveIndicator(
+                                lastAutoSaveAt = lastAutoSaveAt,
+                                modifier = Modifier.padding(top = 3.dp)
                             )
                         }
 
@@ -344,7 +354,9 @@ fun RoutineWorkoutScreen(
                         RoutineExerciseExecutionCard(
                             orderIndex = index + 1,
                             exercise = exercise,
-                            prescription = routineItem?.prescription ?: "",
+                            prescription = routineItem?.let {
+                                RoutineParser.shortPrescription(it.prescription, it.equipment)
+                            } ?: "",
                             sets = exerciseSets,
                             unit = weightUnit,
                             onAddSet = { viewModel.addSetToRoutineWorkout(exercise) },

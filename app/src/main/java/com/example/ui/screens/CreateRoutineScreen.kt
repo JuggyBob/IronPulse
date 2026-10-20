@@ -1,8 +1,10 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
@@ -71,6 +73,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -83,10 +86,13 @@ import com.example.data.model.RoutineExerciseItem
 import com.example.data.model.RoutineDayClamp
 import com.example.data.model.RoutineParser
 import com.example.data.model.SavedRoutine
+import com.example.data.model.WeightConversion
+import com.example.data.model.WeightUnit
 import com.example.ui.components.AiUnavailableDialog
 import com.example.ui.components.AnimatedDropdownField
 import com.example.ui.components.DayDropdown
 import com.example.ui.components.CustomExerciseDialog
+import com.example.ui.components.WeightInputField
 import com.example.ui.theme.CoralOrange
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
@@ -127,6 +133,8 @@ fun CreateRoutineScreen(
     val aiCreationState by viewModel.aiExerciseCreationState.collectAsStateWithLifecycle()
     val aiErrorDialog by viewModel.aiErrorDialog.collectAsStateWithLifecycle()
     val customExerciseResult by viewModel.customExerciseResult.collectAsStateWithLifecycle()
+    // Weights live in kilograms; this is the unit the athlete reads and types in.
+    val unit by viewModel.weightUnit.collectAsStateWithLifecycle()
 
     val isEditing = editingRoutine != null
 
@@ -210,6 +218,10 @@ fun CreateRoutineScreen(
 
     // Ordered list of routine exercises
     val selectedRoutineExercises = remember { mutableStateListOf<RoutineExerciseItem>() }
+
+    // Which exercise has its added weight panel open, if any. Tapping the name of an exercise
+    // opens it, and only one is open at a time.
+    var expandedAddedWeightIndex by remember { mutableStateOf<Int?>(null) }
 
     // Prefill with the exercises of the routine being edited. This waits for the exercise catalog
     // so every item keeps its real database id (otherwise the routine would only keep names).
@@ -806,6 +818,8 @@ fun CreateRoutineScreen(
                         SelectedRoutineExerciseRow(
                             index = visibleIndex,
                             item = item,
+                            unit = unit,
+                            expanded = expandedAddedWeightIndex == visibleIndex,
                             canMoveUp = visibleIndex > 0,
                             canMoveDown = visibleIndex < visibleRoutineEntries.size - 1,
                             onMoveUp = {
@@ -821,6 +835,12 @@ fun CreateRoutineScreen(
                                     selectedRoutineExercises[index] = selectedRoutineExercises[index + 1]
                                     selectedRoutineExercises[index + 1] = temp
                                 }
+                            },
+                            onToggleExpanded = {
+                                // One panel at a time: the athlete is editing one exercise, and
+                                // two open panels on a phone screen is one too many.
+                                expandedAddedWeightIndex =
+                                    if (expandedAddedWeightIndex == visibleIndex) null else visibleIndex
                             },
                             onUpdate = { updated ->
                                 selectedRoutineExercises[index] = updated
@@ -1157,10 +1177,13 @@ private fun NoExerciseFoundCard(
 fun SelectedRoutineExerciseRow(
     index: Int,
     item: RoutineExerciseItem,
+    unit: WeightUnit,
+    expanded: Boolean,
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
+    onToggleExpanded: () -> Unit,
     onUpdate: (RoutineExerciseItem) -> Unit,
     onDelete: () -> Unit
 ) {
@@ -1198,13 +1221,49 @@ fun SelectedRoutineExerciseRow(
                     Spacer(modifier = Modifier.width(10.dp))
 
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = item.exerciseName,
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                            color = TextWhite,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            // Tapping the name opens the settings for this exercise. It is the
+                            // only affordance on the row, so a routine with twenty exercises does
+                            // not carry twenty visible weight fields.
+                            //
+                            // The name takes the leftover space rather than what it wants, so the
+                            // badge beside it always has room and never wraps onto two lines.
+                            Text(
+                                text = item.exerciseName,
+                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                color = TextWhite,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .weight(1f, fill = false)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { onToggleExpanded() }
+                                    .testTag("routine_exercise_name_$index")
+                            )
+                            // The default added weight, when there is one. A small badge rather
+                            // than a field, so the setting is visible without opening anything.
+                            if (item.targetAddedWeightKg > 0.0) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    color = CoralOrange.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(4.dp),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp, CoralOrange.copy(alpha = 0.4f)
+                                    )
+                                ) {
+                                    Text(
+                                        text = "+${formatRoutineWeight(item.targetAddedWeightKg, unit)} ${unit.suffix}",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = CoralOrange,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        modifier = Modifier
+                                            .padding(horizontal = 5.dp, vertical = 2.dp)
+                                            .testTag("routine_added_weight_badge_$index")
+                                    )
+                                }
+                            }
+                        }
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1365,6 +1424,55 @@ fun SelectedRoutineExerciseRow(
                     }
                 }
             }
+
+            // The default added weight, opened by tapping the exercise name.
+            //
+            // It animates in and out rather than snapping, so the row does not jump: the athlete
+            // asked for the panel, they should see where it came from and where it went.
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(top = 10.dp)
+                        .fillMaxWidth()
+                        .background(DarkBg, RoundedCornerShape(8.dp))
+                        .padding(10.dp)
+                ) {
+                    Text(
+                        text = "Default added weight",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = TextWhite
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Filled in when you start this split. Leave it empty for bodyweight.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    WeightInputField(
+                        label = "Added weight (${unit.suffix})",
+                        kgValue = item.targetAddedWeightKg,
+                        unit = unit,
+                        onKgChanged = { onUpdate(item.copy(targetAddedWeightKg = it)) },
+                        modifier = Modifier.testTag("routine_added_weight_field_$index")
+                    )
+                }
+            }
         }
     }
+}
+
+/**
+ * Formats a weight for the small badge on a routine row.
+ *
+ * In the unit the athlete reads, like everywhere else, and without a trailing zero so the badge
+ * stays narrow enough for the name next to it.
+ */
+private fun formatRoutineWeight(kg: Double, unit: WeightUnit): String {
+    val value = WeightConversion.fromKg(kg, unit)
+    return if (value % 1.0 == 0.0) "${value.toInt()}" else "%.1f".format(value)
 }

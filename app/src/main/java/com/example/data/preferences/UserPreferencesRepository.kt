@@ -27,6 +27,15 @@ class UserPreferencesRepository(private val context: Context) {
         val PROFILE_AGE = intPreferencesKey("profile_age")
         val PROFILE_PREFERRED_UNIT = stringPreferencesKey("profile_preferred_unit")
         val PROFILE_FITNESS_LEVEL = stringPreferencesKey("profile_fitness_level")
+
+        /**
+         * The path of the athlete's profile picture inside the app's own storage.
+         *
+         * A path and not a `content://` uri on purpose: the picker's grant is revoked as soon as the
+         * picker closes, so only a copy the app owns keeps working, and keeps working even after
+         * the athlete deletes the picture from their gallery.
+         */
+        val PROFILE_AVATAR_PATH = stringPreferencesKey("profile_avatar_path")
         val SAVED_REST_TIMERS_JSON = stringPreferencesKey("saved_rest_timers_json")
 
         /**
@@ -68,6 +77,14 @@ class UserPreferencesRepository(private val context: Context) {
          * to a new install and never again.
          */
         val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
+
+        /**
+         * The workout in progress, as a JSON blob.
+         *
+         * One key, overwritten on every auto save. A log of saves would grow without bound for a
+         * workout that can run for hours, and only the latest state is ever worth restoring.
+         */
+        val ACTIVE_WORKOUT_DRAFT = stringPreferencesKey("active_workout_draft")
     }
 
     // === APP SETTINGS (settings page) ===
@@ -248,6 +265,52 @@ class UserPreferencesRepository(private val context: Context) {
             prefs.remove(PROFILE_AGE)
             prefs.remove(PROFILE_PREFERRED_UNIT)
             prefs.remove(PROFILE_FITNESS_LEVEL)
+            prefs.remove(PROFILE_AVATAR_PATH)
+        }
+    }
+
+    /**
+     * The auto saved workout in progress, or null when there is none.
+     *
+     * Non-null on startup means the athlete closed the app mid workout and the session can be
+     * offered back to them.
+     */
+    val activeWorkoutDraftFlow: Flow<String?> = context.userDataStore.data.map { prefs ->
+        prefs[ACTIVE_WORKOUT_DRAFT]?.takeIf { it.isNotBlank() }
+    }
+
+    /** Writes the workout in progress, replacing whatever was saved before. */
+    suspend fun saveWorkoutDraft(json: String) {
+        context.userDataStore.edit { prefs ->
+            prefs[ACTIVE_WORKOUT_DRAFT] = json
+        }
+    }
+
+    /** Forgets the workout in progress. Called when the workout is finished, saved or discarded. */
+    suspend fun clearWorkoutDraft() {
+        context.userDataStore.edit { prefs ->
+            prefs.remove(ACTIVE_WORKOUT_DRAFT)
+        }
+    }
+
+    /**
+     * The path of the athlete's profile picture, or "" when they have not chosen one.
+     *
+     * Kept beside the profile rather than inside it because the picture is a file on disk, not a
+     * field of the athlete.
+     */
+    val profileAvatarPathFlow: Flow<String> = context.userDataStore.data.map { prefs ->
+        prefs[PROFILE_AVATAR_PATH].orEmpty()
+    }
+
+    /** Records the profile picture, or clears it when [path] is blank. */
+    suspend fun setProfileAvatarPath(path: String) {
+        context.userDataStore.edit { prefs ->
+            if (path.isBlank()) {
+                prefs.remove(PROFILE_AVATAR_PATH)
+            } else {
+                prefs[PROFILE_AVATAR_PATH] = path
+            }
         }
     }
 

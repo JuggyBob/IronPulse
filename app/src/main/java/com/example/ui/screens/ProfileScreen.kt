@@ -2,6 +2,9 @@ package com.example.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -37,6 +40,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -56,6 +60,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import coil.compose.SubcomposeAsyncImage
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -87,6 +92,7 @@ import com.example.ui.components.AppVersionFooter
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
@@ -116,6 +122,8 @@ import com.example.ui.theme.TextDim
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import com.example.ui.viewmodel.MainViewModel
+import com.example.util.ProfileMediaStore
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -148,6 +156,28 @@ fun ProfileScreen(
 
     // Weights are stored in kilograms; this is the unit the athlete reads and types in
     val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
+
+    // The profile picture, as a path inside the app's own storage.
+    val avatarPath by viewModel.profileAvatarPath.collectAsStateWithLifecycle()
+    var showRemoveAvatarDialog by remember { mutableStateOf(false) }
+    var avatarImportFailed by remember { mutableStateOf(false) }
+
+    val context = LocalContext.current
+    val avatarPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+        onResult = { uri ->
+            if (uri == null) return@rememberLauncherForActivityResult
+            // The bytes are copied into the app's own storage straight away: the picker's grant
+            // is revoked as soon as the picker closes, so a stored uri would be dead on arrival.
+            val mimeType = context.contentResolver.getType(uri)
+            val localPath = ProfileMediaStore.import(context, uri, mimeType)
+            if (localPath != null) {
+                viewModel.setProfileAvatar(localPath)
+            } else {
+                avatarImportFailed = true
+            }
+        }
+    )
 
     var showEditProfileDialog by remember { mutableStateOf(false) }
     var showAiDataInfoDialog by remember { mutableStateOf(false) }
@@ -224,19 +254,56 @@ fun ProfileScreen(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // The avatar. Tapping it opens the gallery so the athlete can pick a
+                        // picture; the copy is kept in the app's own storage, so it survives both
+                        // an app restart and the athlete deleting the original from their gallery.
                         Box(
                             modifier = Modifier
                                 .size(56.dp)
+                                .clip(CircleShape)
                                 .background(ElectricCyan.copy(alpha = 0.15f), CircleShape)
-                                .border(1.5.dp, ElectricCyan, CircleShape),
+                                .border(1.5.dp, ElectricCyan, CircleShape)
+                                .clickable { avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+                                .testTag("profile_avatar_button"),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Person,
-                                contentDescription = null,
-                                tint = ElectricCyan,
-                                modifier = Modifier.size(32.dp)
-                            )
+                            if (avatarPath.isNotBlank()) {
+                                SubcomposeAsyncImage(
+                                    model = File(avatarPath),
+                                    contentDescription = "Profile picture",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clip(CircleShape)
+                                )
+                                // A small cross in the corner, so the picture can be taken away
+                                // again without a long press nobody would find.
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .size(20.dp)
+                                        .clip(CircleShape)
+                                        .background(DarkBg.copy(alpha = 0.85f))
+                                        .border(1.dp, DarkBorder, CircleShape)
+                                        .clickable { showRemoveAvatarDialog = true }
+                                        .testTag("profile_avatar_remove_button"),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Remove profile picture",
+                                        tint = TextWhite,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                }
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = null,
+                                    tint = ElectricCyan,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                            }
                         }
 
                         Spacer(modifier = Modifier.width(14.dp))
@@ -737,6 +804,68 @@ fun ProfileScreen(
     // Explains the athlete data and the AI privacy warning
     if (showAiDataInfoDialog) {
         AthleteAiDataInfoDialog(onDismiss = { showAiDataInfoDialog = false })
+    }
+
+    // Takes the profile picture away again.
+    if (showRemoveAvatarDialog) {
+        AlertDialog(
+            onDismissRequest = { showRemoveAvatarDialog = false },
+            containerColor = DarkSurface,
+            title = { Text("Remove profile picture?", color = TextWhite, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "The copy in this app is deleted. The original in your gallery is not touched.",
+                    color = TextMuted,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showRemoveAvatarDialog = false
+                        viewModel.clearProfileAvatar()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = FireRed),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.testTag("confirm_remove_avatar_button")
+                ) {
+                    Text("Remove", color = TextWhite, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRemoveAvatarDialog = false }) {
+                    Text("Keep", color = ElectricCyan)
+                }
+            }
+        )
+    }
+
+    // The picture could not be copied out of the gallery.
+    if (avatarImportFailed) {
+        AlertDialog(
+            onDismissRequest = { avatarImportFailed = false },
+            containerColor = DarkSurface,
+            title = {
+                Text(
+                    "Could not use that picture",
+                    color = TextWhite,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.testTag("avatar_import_failed_title")
+                )
+            },
+            text = {
+                Text(
+                    "The file could not be copied into the app. Pick another one.",
+                    color = TextMuted,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { avatarImportFailed = false }) {
+                    Text("OK", color = ElectricCyan)
+                }
+            }
+        )
     }
 
     // Log Today Weight Dialog

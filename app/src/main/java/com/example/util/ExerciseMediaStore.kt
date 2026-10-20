@@ -2,11 +2,7 @@ package com.example.util
 
 import android.content.Context
 import android.net.Uri
-import android.util.Log
 import java.io.File
-import java.io.FileOutputStream
-import java.io.IOException
-import java.util.UUID
 
 /**
  * Where media the athlete attaches to one of their own exercises is kept.
@@ -20,14 +16,13 @@ import java.util.UUID
  * over, and what gets persisted is a path the app owns and can read forever — no grant, no expiry,
  * and it survives restarts and updates. The copy has to happen while the picker's result is still
  * warm, so [import] is deliberately synchronous and takes the uri directly.
+ *
+ * The copying itself lives in [MediaStore], shared with the profile picture.
  */
 object ExerciseMediaStore {
 
     private const val TAG = "ExerciseMediaStore"
     private const val DIR_NAME = "exercise_media"
-
-    /** Hard ceiling on what one pick may be. Guard against a user selecting a 2 GB home video. */
-    private const val MAX_BYTES = 64L * 1024L * 1024L
 
     private fun dir(context: Context): File =
         File(context.filesDir, DIR_NAME).apply { mkdirs() }
@@ -47,57 +42,9 @@ object ExerciseMediaStore {
      * @return an absolute path, or null when the bytes could not be copied.
      */
     fun import(context: Context, exerciseId: Long, source: Uri, mimeType: String?): String? {
-        val extension = extensionFor(mimeType)
+        val extension = MediaStore.extensionFor(mimeType)
         val target = fileFor(context, exerciseId, extension)
-        // Written to a sibling first: a half copied file would otherwise replace a working one and
-        // leave the exercise with a permanently broken media slot.
-        val staging = File(target.parentFile, "${target.name}.part")
-
-        return try {
-            context.contentResolver.openInputStream(source)?.use { input ->
-                FileOutputStream(staging).use { output ->
-                    val buffer = ByteArray(64 * 1024)
-                    var written = 0L
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read == -1) break
-                        written += read
-                        if (written > MAX_BYTES) {
-                            staging.delete()
-                            Log.w(TAG, "picker media for $exerciseId exceeded ${MAX_BYTES} bytes")
-                            return null
-                        }
-                        output.write(buffer, 0, read)
-                    }
-                }
-            } ?: run {
-                staging.delete()
-                Log.w(TAG, "picker media for $exerciseId had no readable stream")
-                return null
-            }
-
-            if (staging.length() == 0L) {
-                staging.delete()
-                Log.w(TAG, "picker media for $exerciseId came back empty")
-                return null
-            }
-
-            target.delete()
-            if (!staging.renameTo(target)) {
-                staging.delete()
-                Log.w(TAG, "could not move picker media for $exerciseId into place")
-                return null
-            }
-            target.absolutePath
-        } catch (e: IOException) {
-            staging.delete()
-            Log.w(TAG, "picker media for $exerciseId could not be copied", e)
-            null
-        } catch (e: SecurityException) {
-            staging.delete()
-            Log.w(TAG, "picker media for $exerciseId was no longer readable", e)
-            null
-        }
+        return MediaStore.copy(context, target, source, mimeType)
     }
 
     /**
@@ -111,20 +58,5 @@ object ExerciseMediaStore {
             file.isFile && (file.name == "exercise_$exerciseId.part" ||
                 file.name.startsWith("exercise_${exerciseId}."))
         }?.forEach { it.delete() }
-    }
-
-    /**
-     * A file extension for a picker mime type.
-     *
-     * The video branch is the one that matters: the extension is the only hint the player is given
-     * when the model is a plain path, and `.mp4` is what every phone records.
-     */
-    private fun extensionFor(mimeType: String?): String = when {
-        mimeType == null -> "bin"
-        mimeType.startsWith("video/") -> "mp4"
-        mimeType.startsWith("image/gif") -> "gif"
-        mimeType.startsWith("image/png") -> "png"
-        mimeType.startsWith("image/webp") -> "webp"
-        else -> "jpg"
     }
 }

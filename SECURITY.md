@@ -62,6 +62,7 @@ system, and no analytics. This shapes what can realistically be a vulnerability:
 | Gemini API key | DataStore, entered by the user | Leaking to a third party; committing it to a repo |
 | Athlete profile | SQLite + DataStore | Exfiltration through an AI request the user did not consent to |
 | Gallery media | Copied into `filesDir/exercise_media/` | Leaving a user's photo on disk after they remove it |
+| Profile picture | Copied into `filesDir/profile_media/` | A copy of the user's photo outliving the app data wipe |
 | Routines and chat history | SQLite | Loss or corruption; unintended deletion |
 
 **Out of scope**, because there is nothing to attack:
@@ -84,6 +85,8 @@ Worth knowing, because they are deliberate and should stay that way:
 - **Gallery picks are copied into app-private storage.** The picker's own `content://` grant is
   short-lived and cannot be persisted, so the bytes are copied at the moment of the pick and only
   that path is stored. Removing media deletes the file.
+- **The profile picture is deleted with the rest of the app data.** It is a file on disk, not a row
+  in the database, so "erase all app data" deletes it explicitly rather than leaving a copy behind.
 - **The shipped catalog is not a trust boundary for user data.** Editing a library row writes through
   the same path as any other edit; it cannot read anything the app cannot already read.
 - **Backups are excluded.** Android backup rules keep app data out of cloud backup and device

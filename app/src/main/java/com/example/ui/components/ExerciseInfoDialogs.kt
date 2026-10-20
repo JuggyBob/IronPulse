@@ -404,10 +404,12 @@ fun ExerciseDetailDialog(
                     )
                     DetailTag(text = exercise.category, color = VioletPurple)
                     DetailTag(text = exercise.equipment, color = GoldenAmber)
-                    if (exercise.isCustom) {
-                        DetailTag(text = "Created by you", color = MintGreen)
-                    } else if (exercise.isAiGenerated) {
+                    // An AI registered exercise is custom as well, so the AI flag has to be tested
+                    // first: it is the more specific fact about who made it.
+                    if (exercise.isAiCreated) {
                         DetailTag(text = "AI generated", color = AiBlue)
+                    } else if (exercise.isUserCreated) {
+                        DetailTag(text = "Created by you", color = MintGreen)
                     }
                     // Only when it says something the category does not already say
                     if (muscle != null && !muscle.label.equals(exercise.category, ignoreCase = true)) {

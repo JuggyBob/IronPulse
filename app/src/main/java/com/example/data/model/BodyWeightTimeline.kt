@@ -57,4 +57,26 @@ object BodyWeightTimeline {
         }
         return best?.weightKg
     }
+
+    /**
+     * The body weight that applied to a logged set.
+     *
+     * The snapshot the set carries wins: it is the weight the athlete had when they did the work,
+     * and reading today's number instead would rewrite the history every time they weigh in. That
+     * was the bug this fixed: the isolated weight tag of a set logged last month changed as soon
+     * as a new weight was logged today.
+     *
+     * A set logged before the snapshot existed carries 0 and falls back to the current profile
+     * weight, which is the best guess available for it.
+     */
+    fun bodyWeightForSet(set: LoggedSet, profileWeightKg: Double): Double? =
+        set.bodyWeightKg.takeIf { it > 0.0 } ?: currentWeightOrNull(profileWeightKg)
+
+    /**
+     * The same value, but with the fallback applied so a number is always returned.
+     *
+     * For the paths that cannot report "no body weight" and would otherwise have to invent one.
+     */
+    fun bodyWeightForSetOrFallback(set: LoggedSet, profileWeightKg: Double): Double =
+        bodyWeightForSet(set, profileWeightKg) ?: FALLBACK_KG
 }

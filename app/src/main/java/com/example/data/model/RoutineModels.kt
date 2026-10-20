@@ -12,6 +12,16 @@ data class RoutineExerciseItem(
     val targetSets: Int = 3,
     val targetReps: Int = 8,
     val targetWeight: Double = 0.0,
+    /**
+     * The default *added* weight for this exercise in the routine, in kilograms.
+     *
+     * Separate from [targetWeight] because the two mean different things: a target weight is the
+     * barbell the athlete lifts, an added weight is what they hang on top of their own body weight.
+     * A routine that says "single leg squat, 3 sets x 10 reps, +20 kg" wants the second one.
+     *
+     * 0 means no added weight, which is the normal case.
+     */
+    val targetAddedWeightKg: Double = 0.0,
     val targetHoldSeconds: Int = 0,
     val prescription: String = "",
     val dayNumber: Int = 1,
@@ -259,6 +269,8 @@ object RoutineParser {
                 put("sets", item.targetSets)
                 put("reps", item.targetReps)
                 put("weight", item.targetWeight)
+                // Backward compatible: routines saved before this field simply have no added weight
+                put("addedWeight", item.targetAddedWeightKg)
                 put("holdSeconds", item.targetHoldSeconds)
                 put("prescription", item.prescription)
                 put("day", item.dayNumber)
@@ -484,6 +496,54 @@ object RoutineParser {
         return s
     }
 
+    /**
+     * The short form of a prescription: "<sets> sets x <reps> reps", or "<sets> sets x <seconds>s"
+     * for an isometric hold. Nothing else.
+     *
+     * The AI is asked for exactly this shape, but a routine saved before that rule existed still
+     * carries the longer form it used to write ("4 sets x 6 reps @ 80kg", "3 sets x 30s, rest 60s")
+     * and the tag that shows it is far too narrow for that. Reducing it here keeps every saved
+     * routine readable without rewriting the athlete's data.
+     *
+     * Rep ranges are kept as written ("2 sets x 12-15 reps"): the range is the prescription.
+     */
+    fun shortPrescription(rawPrescription: String, equipment: String = ""): String {
+        val cleaned = cleanPrescription(rawPrescription, equipment)
+        if (cleaned.isBlank()) return ""
+
+        val core = SHORT_PRESCRIPTION.find(cleaned)
+        if (core != null) {
+            val sets = core.groupValues[1]
+            val count = core.groupValues[2].replace(" ", "")
+            val unit = core.groupValues[3].lowercase()
+            // "s" means seconds. Everything else (including a missing unit) is reps.
+            return if (unit.startsWith("s")) "$sets sets x ${count}s" else "$sets sets x $count reps"
+        }
+
+        // No sets x reps core: fall back to dropping the load and any trailing commentary.
+        return stripLoadAndCommentary(cleaned)
+    }
+
+    /** "4 sets x 8 reps", "3 sets x 12-15 reps", "3 sets x 30s", "4x8". */
+    private val SHORT_PRESCRIPTION = Regex(
+        """(\d+)\s*(?:sets|set)?\s*(?:x|×|\*)\s*(\d+(?:\s*[-–]\s*\d+)?)\s*(reps?|seconds?|secs?|s)?""",
+        RegexOption.IGNORE_CASE
+    )
+
+    /**
+     * Removes a load and any trailing commentary from a prescription that has no sets x reps core.
+     * A last resort for shapes like "80kg for 10 reps", which the core regex cannot read.
+     */
+    private fun stripLoadAndCommentary(text: String): String {
+        var s = text
+        s = s.replace(Regex("""(?i)(@\s*)?\b\d+(?:[.,]\d+)?\s*(?:kg|kgs|kilograms?|lb|lbs|pounds?)\b"""), "")
+        s = s.replace(Regex("""(?i)\b(?:body\s*weight|bodyweight|bw)\b"""), "")
+        s = s.substringBefore(",")
+        s = s.replace(Regex("""\s+"""), " ").trim()
+        s = s.replace(Regex("""^[\s\-–—:•|,\.]+|[\s\-–—:•|,\.]+$"""), "")
+        return s
+    }
+
     private fun parseJsonExerciseItem(
         obj: JSONObject,
         exByName: Map<String, Exercise>,
@@ -497,12 +557,15 @@ object RoutineParser {
         val sets = obj.optInt("sets", 3)
         val reps = obj.optInt("reps", 8)
         val weight = obj.optDouble("weight", 0.0)
+        // The default added weight, read from the JSON in both branches below. It is a setting the
+        // athlete made on the routine, not a property of the catalog exercise, so it must never be
+        // taken from the matched exercise.
+        val addedWeight = obj.optDouble("addedWeight", 0.0)
         val hold = obj.optInt("holdSeconds", 0)
         val rawPrescription = obj.optString("prescription", "")
         val matchedEquipment = matched?.equipment ?: obj.optString("equipment", "")
-        val prescription = cleanPrescription(rawPrescription, matchedEquipment).ifBlank {
+        val prescription = shortPrescription(rawPrescription, matchedEquipment).ifBlank {
             if (hold > 0) "$sets sets x ${hold}s"
-            else if (weight > 0.0) "$sets sets x $reps reps @ ${weight}kg"
             else "$sets sets x $reps reps"
         }
         val dayNum = overrideDay ?: obj.optInt("day", obj.optInt("dayNumber", 1))
@@ -519,6 +582,7 @@ object RoutineParser {
                 targetSets = sets,
                 targetReps = reps,
                 targetWeight = weight,
+                targetAddedWeightKg = addedWeight,
                 targetHoldSeconds = hold,
                 prescription = prescription,
                 dayNumber = dayNum,
@@ -535,6 +599,7 @@ object RoutineParser {
                 targetSets = sets,
                 targetReps = reps,
                 targetWeight = weight,
+                targetAddedWeightKg = addedWeight,
                 targetHoldSeconds = hold,
                 prescription = prescription,
                 dayNumber = dayNum,
@@ -713,7 +778,7 @@ object RoutineParser {
                 if (secMatch != null) hold = secMatch.groupValues[1].toIntOrNull() ?: 0
             }
 
-            val cleanedPrescription = cleanPrescription(prescriptionCandidate, matchedEquipment)
+            val cleanedPrescription = shortPrescription(prescriptionCandidate, matchedEquipment)
             val finalPrescription = cleanedPrescription.ifBlank {
                 if (hold > 0) "$sets sets x ${hold}s"
                 else "$sets sets x $reps reps"
@@ -778,7 +843,7 @@ object RoutineParser {
                 }
                 for (ex in day.exercises) {
                     val detail = if (ex.category.isNotBlank()) " (${ex.category})" else ""
-                    val cleanPresc = cleanPrescription(ex.prescription, ex.equipment).ifBlank { ex.prescription }
+                    val cleanPresc = shortPrescription(ex.prescription, ex.equipment).ifBlank { ex.prescription }
                     sb.append("• **${ex.exerciseName}** — $cleanPresc$detail\n")
                 }
                 sb.append("\n")
