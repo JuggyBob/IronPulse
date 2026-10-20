@@ -18,8 +18,8 @@ android {
     applicationId = "com.aistudio.fitness.ironpulse"
     minSdk = 24
     targetSdk = 36
-    versionCode = 3
-    versionName = "1.1.0-release"
+    versionCode = 4
+    versionName = "1.1.1-release"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -37,7 +37,11 @@ android {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
       storeFile = file(keystorePath)
       storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = "upload"
+      // The alias the release key stores its entry under. Overridable, because a keystore can be
+      // re-issued with a different alias, but the default matches the key that signed every
+      // published release: the same certificate, so a new build is an upgrade and not a
+      // side-by-side install.
+      keyAlias = System.getenv("KEY_ALIAS") ?: "ironpulsekey"
       keyPassword = System.getenv("KEY_PASSWORD")
     }
     create("debugConfig") {

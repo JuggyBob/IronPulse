@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import android.graphics.Bitmap
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -89,6 +90,7 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import com.example.ui.components.AppVersionFooter
+import com.example.ui.components.AvatarCropper
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -122,6 +124,7 @@ import com.example.ui.theme.TextDim
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import com.example.ui.viewmodel.MainViewModel
+import com.example.util.ImageCropper
 import com.example.util.ProfileMediaStore
 import java.io.File
 import java.text.SimpleDateFormat
@@ -159,25 +162,40 @@ fun ProfileScreen(
 
     // The profile picture, as a path inside the app's own storage.
     val avatarPath by viewModel.profileAvatarPath.collectAsStateWithLifecycle()
-    var showRemoveAvatarDialog by remember { mutableStateOf(false) }
+    // The dialog that asks whether to change or remove the picture, shown only when there is one.
+    var showAvatarActionsDialog by remember { mutableStateOf(false) }
     var avatarImportFailed by remember { mutableStateOf(false) }
+    // The picture the athlete picked, waiting to be framed.
+    var pendingAvatarCrop by remember { mutableStateOf<Bitmap?>(null) }
 
     val context = LocalContext.current
     val avatarPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
         onResult = { uri ->
             if (uri == null) return@rememberLauncherForActivityResult
-            // The bytes are copied into the app's own storage straight away: the picker's grant
-            // is revoked as soon as the picker closes, so a stored uri would be dead on arrival.
-            val mimeType = context.contentResolver.getType(uri)
-            val localPath = ProfileMediaStore.import(context, uri, mimeType)
-            if (localPath != null) {
-                viewModel.setProfileAvatar(localPath)
+            // The picture is read into memory and framed before anything is stored: the avatar is
+            // shown in a circle, so what is kept is the square the athlete chose, not the whole
+            // photo. The bytes are copied into the app's own storage afterwards, because the
+            // picker's grant is revoked as soon as the picker closes.
+            val decoded = ImageCropper.decode(context, uri)
+            if (decoded != null) {
+                pendingAvatarCrop = decoded
             } else {
                 avatarImportFailed = true
             }
         }
     )
+
+    // Takes the framed picture and stores it.
+    fun acceptCrop(bitmap: Bitmap) {
+        val localPath = ProfileMediaStore.write(context, bitmap)
+        pendingAvatarCrop = null
+        if (localPath != null) {
+            viewModel.setProfileAvatar(localPath)
+        } else {
+            avatarImportFailed = true
+        }
+    }
 
     var showEditProfileDialog by remember { mutableStateOf(false) }
     var showAiDataInfoDialog by remember { mutableStateOf(false) }
@@ -254,16 +272,25 @@ fun ProfileScreen(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // The avatar. Tapping it opens the gallery so the athlete can pick a
-                        // picture; the copy is kept in the app's own storage, so it survives both
-                        // an app restart and the athlete deleting the original from their gallery.
+                        // The avatar. Tapping it picks a picture, or asks what to do with the one
+                        // that is already there. The copy is kept in the app's own storage, so it
+                        // survives both an app restart and the athlete deleting the original from
+                        // their gallery.
                         Box(
                             modifier = Modifier
                                 .size(56.dp)
                                 .clip(CircleShape)
                                 .background(ElectricCyan.copy(alpha = 0.15f), CircleShape)
                                 .border(1.5.dp, ElectricCyan, CircleShape)
-                                .clickable { avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+                                .clickable {
+                                    if (avatarPath.isBlank()) {
+                                        avatarPicker.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                        )
+                                    } else {
+                                        showAvatarActionsDialog = true
+                                    }
+                                }
                                 .testTag("profile_avatar_button"),
                             contentAlignment = Alignment.Center
                         ) {
@@ -276,26 +303,6 @@ fun ProfileScreen(
                                         .fillMaxSize()
                                         .clip(CircleShape)
                                 )
-                                // A small cross in the corner, so the picture can be taken away
-                                // again without a long press nobody would find.
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .size(20.dp)
-                                        .clip(CircleShape)
-                                        .background(DarkBg.copy(alpha = 0.85f))
-                                        .border(1.dp, DarkBorder, CircleShape)
-                                        .clickable { showRemoveAvatarDialog = true }
-                                        .testTag("profile_avatar_remove_button"),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Remove profile picture",
-                                        tint = TextWhite,
-                                        modifier = Modifier.size(12.dp)
-                                    )
-                                }
                             } else {
                                 Icon(
                                     imageVector = Icons.Default.Person,
@@ -806,15 +813,20 @@ fun ProfileScreen(
         AthleteAiDataInfoDialog(onDismiss = { showAiDataInfoDialog = false })
     }
 
-    // Takes the profile picture away again.
-    if (showRemoveAvatarDialog) {
+    // What to do with the picture that is already there.
+    //
+    // The picture used to carry a small cross in its corner, which was too small to see and too
+    // easy to miss. Tapping the picture itself is the way in, and it asks what the athlete wants
+    // to do rather than guessing.
+    if (showAvatarActionsDialog) {
         AlertDialog(
-            onDismissRequest = { showRemoveAvatarDialog = false },
+            onDismissRequest = { showAvatarActionsDialog = false },
             containerColor = DarkSurface,
-            title = { Text("Remove profile picture?", color = TextWhite, fontWeight = FontWeight.Bold) },
+            title = { Text("Profile picture", color = TextWhite, fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    "The copy in this app is deleted. The original in your gallery is not touched.",
+                    "You can pick a different picture, or take this one away. The copy in this app " +
+                        "is deleted when you remove it; the original in your gallery is not touched.",
                     color = TextMuted,
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -822,21 +834,43 @@ fun ProfileScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        showRemoveAvatarDialog = false
-                        viewModel.clearProfileAvatar()
+                        showAvatarActionsDialog = false
+                        avatarPicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = FireRed),
+                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
                     shape = RoundedCornerShape(8.dp),
-                    modifier = Modifier.testTag("confirm_remove_avatar_button")
+                    modifier = Modifier.testTag("change_avatar_button")
                 ) {
-                    Text("Remove", color = TextWhite, fontWeight = FontWeight.Bold)
+                    Text("Change picture", color = DarkBg, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showRemoveAvatarDialog = false }) {
-                    Text("Keep", color = ElectricCyan)
+                Row {
+                    TextButton(
+                        onClick = {
+                            showAvatarActionsDialog = false
+                            viewModel.clearProfileAvatar()
+                        },
+                        modifier = Modifier.testTag("remove_avatar_button")
+                    ) {
+                        Text("Remove", color = FireRed)
+                    }
+                    TextButton(onClick = { showAvatarActionsDialog = false }) {
+                        Text("Cancel", color = TextMuted)
+                    }
                 }
             }
+        )
+    }
+
+    // The picture the athlete picked, waiting to be framed.
+    pendingAvatarCrop?.let { bitmap ->
+        AvatarCropper(
+            source = bitmap,
+            onCrop = { cropped -> acceptCrop(cropped) },
+            onCancel = { pendingAvatarCrop = null }
         )
     }
 
