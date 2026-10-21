@@ -9,6 +9,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Nothing yet. See [CONTRIBUTING.md](CONTRIBUTING.md) to propose a change.
+
+---
+
+## [2.0.0] — 2026-10-21
+
 ### Added
 
 #### Home dashboard
