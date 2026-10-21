@@ -29,7 +29,13 @@ data class WorkoutDraft(
     /** The routine a routine workout came from. Null for a quick workout. */
     val routineId: Long = 0L,
     val routineGoal: String = "",
-    val dayNumber: Int = 1,
+    /**
+     * The weekday this workout belongs to: 1 = Monday ... 7 = Sunday.
+     *
+     * A draft written before the seven day model existed carries the old "dayNumber" key, which is
+     * read as a position in the routine and resolved against the athlete's week start.
+     */
+    val weekday: Int = Weekday.MONDAY,
     val dayTitle: String = "",
     val dayNote: String = "",
     /** The prescribed targets of the day, so the routine workout can be rebuilt exactly. */
@@ -62,7 +68,7 @@ object WorkoutDraftCodec {
             if (draft.isRoutine) {
                 put("routineId", draft.routineId)
                 put("routineGoal", draft.routineGoal)
-                put("dayNumber", draft.dayNumber)
+                put("weekday", draft.weekday)
                 put("dayTitle", draft.dayTitle)
                 put("dayNote", draft.dayNote)
                 put("routineItems", RoutineParser.serializeExercises(draft.routineItems))
@@ -110,7 +116,14 @@ object WorkoutDraftCodec {
                 sets = sets,
                 routineId = root.optLong("routineId", 0L),
                 routineGoal = root.optString("routineGoal", ""),
-                dayNumber = root.optInt("dayNumber", 1),
+                // A draft written before the seven day model existed carries "dayNumber", which was
+                // a position in the routine rather than a day of the week. It is resolved against
+                // the athlete's week start so the workout comes back on a real day.
+                weekday = root.optInt("weekday", 0).takeIf { it in 1..Weekday.COUNT }
+                    ?: RoutineSchedule.weekdayForSlot(
+                        root.optInt("dayNumber", 1).coerceAtLeast(1),
+                        true
+                    ),
                 dayTitle = root.optString("dayTitle", ""),
                 dayNote = root.optString("dayNote", ""),
                 routineItems = routineItems
@@ -134,6 +147,10 @@ object WorkoutDraftCodec {
         put("distanceKm", set.distanceKm)
         put("isCompleted", set.isCompleted)
         put("timestamp", set.timestamp)
+        // The body weight the set was done at. It has to survive the round trip: a restored
+        // workout whose sets lost their body weight would be measured against whatever the
+        // athlete weighs today, which is not what they lifted.
+        put("bodyWeightKg", set.bodyWeightKg)
     }
 
     private fun decodeSet(obj: JSONObject): LoggedSet = LoggedSet(
@@ -149,6 +166,9 @@ object WorkoutDraftCodec {
         holdDurationSeconds = obj.optInt("holdDurationSeconds", 0),
         distanceKm = obj.optDouble("distanceKm", 0.0),
         isCompleted = obj.optBoolean("isCompleted", true),
-        timestamp = obj.optLong("timestamp", System.currentTimeMillis())
+        timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
+        // A draft written before the snapshot existed has no body weight: 0 means "not recorded",
+        // which is the same thing a set logged back then meant.
+        bodyWeightKg = obj.optDouble("bodyWeightKg", 0.0)
     )
 }

@@ -49,7 +49,7 @@ class MonthlyExerciseAnalyzerTest {
 
     @Test
     fun `effective weight follows the exercise type rules`() {
-        val bodyWeight = { _: Long -> 80.0 }
+        val bodyWeight = { _: LoggedSet -> 80.0 }
 
         val standard = benchSet(1, 1, 100.0, 5, 1)
         assertEquals(100.0, MonthlyExerciseAnalyzer.effectiveWeightOf(standard, bodyWeight)!!, 0.001)
@@ -69,8 +69,8 @@ class MonthlyExerciseAnalyzerTest {
 
     @Test
     fun `a body weight set with no recorded body weight is unknown, never the current one`() {
-        val unknownBodyWeight = { _: Long -> null }
-        val bodyWeight = { _: Long -> 80.0 }
+        val unknownBodyWeight = { _: LoggedSet -> null }
+        val bodyWeight = { _: LoggedSet -> 80.0 }
 
         val added = LoggedSet(
             id = 2, sessionId = 1, exerciseId = 3, exerciseName = "Weighted Pull-up",
@@ -105,7 +105,7 @@ class MonthlyExerciseAnalyzerTest {
             exerciseType = ExerciseType.STANDARD_WEIGHT,
             weightUnit = WeightUnit.KG,
             sets = sets,
-            bodyWeightAt = { 80.0 },
+            bodyWeightForSet = { 80.0 },
             nowMillis = now
         )
 
@@ -136,7 +136,7 @@ class MonthlyExerciseAnalyzerTest {
             exerciseType = ExerciseType.STANDARD_WEIGHT,
             weightUnit = WeightUnit.KG,
             sets = sets,
-            bodyWeightAt = { 80.0 },
+            bodyWeightForSet = { 80.0 },
             nowMillis = now
         )
 
@@ -151,8 +151,8 @@ class MonthlyExerciseAnalyzerTest {
             now - 20 * dayMs to 78.0,
             now - 2 * dayMs to 80.0
         )
-        fun bodyWeightAt(timestamp: Long): Double =
-            bodyLogs.filter { it.first <= timestamp }.maxByOrNull { it.first }?.second ?: 75.0
+        fun bodyWeightForSet(set: LoggedSet): Double =
+            bodyLogs.filter { it.first <= set.timestamp }.maxByOrNull { it.first }?.second ?: 75.0
 
         val sets = listOf(
             LoggedSet(
@@ -170,7 +170,7 @@ class MonthlyExerciseAnalyzerTest {
             exerciseType = ExerciseType.PURE_BODYWEIGHT,
             weightUnit = WeightUnit.KG,
             sets = sets,
-            bodyWeightAt = ::bodyWeightAt,
+            bodyWeightForSet = ::bodyWeightForSet,
             nowMillis = now
         )
 
@@ -189,7 +189,7 @@ class MonthlyExerciseAnalyzerTest {
             exerciseType = ExerciseType.STANDARD_WEIGHT,
             weightUnit = WeightUnit.KG,
             sets = listOf(benchSet(1, 1, 100.0, 5, 90)),
-            bodyWeightAt = { 80.0 },
+            bodyWeightForSet = { 80.0 },
             nowMillis = now
         )
 
@@ -210,7 +210,7 @@ class MonthlyExerciseAnalyzerTest {
                 benchSet(1, 1, 80.0, 8, 10),
                 benchSet(2, 1, 90.0, 5, 2)
             ),
-            bodyWeightAt = { 80.0 },
+            bodyWeightForSet = { 80.0 },
             nowMillis = now
         )
 

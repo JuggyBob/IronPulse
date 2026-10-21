@@ -107,7 +107,7 @@ class WeightConversionTest {
             exerciseType = "STANDARD_WEIGHT",
             weightUnit = WeightUnit.LB,
             sets = kgSets,
-            bodyWeightAt = { 80.0 },
+            bodyWeightForSet = { 80.0 },
             nowMillis = now()
         )
 
@@ -131,7 +131,7 @@ class WeightConversionTest {
             exerciseType = "STANDARD_WEIGHT",
             weightUnit = WeightUnit.KG,
             sets = listOf(loggedSet(1, weight = 100.0, reps = 5, daysAgo = 1)),
-            bodyWeightAt = { 80.0 },
+            bodyWeightForSet = { 80.0 },
             nowMillis = now()
         )
 
@@ -148,7 +148,7 @@ class WeightConversionTest {
             exerciseType = "PURE_BODYWEIGHT",
             weightUnit = WeightUnit.LB,
             sets = listOf(loggedSet(2, weight = 0.0, reps = 10, daysAgo = 1)),
-            bodyWeightAt = { 80.0 },
+            bodyWeightForSet = { 80.0 },
             nowMillis = now()
         )
 

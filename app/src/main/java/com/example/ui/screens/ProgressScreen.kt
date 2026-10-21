@@ -94,7 +94,9 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.WeightUnit
 import com.example.data.model.WeightConversion
+import com.example.data.model.BodyWeightTimeline
 import com.example.data.model.ExerciseType
+import com.example.data.model.WorkoutMetrics
 import com.example.data.model.GeminiSummary
 import com.example.data.model.LoggedSetNumbering
 import com.example.data.model.MonthlyExerciseAnalyzer
@@ -198,14 +200,21 @@ fun ProgressScreen(
         exerciseHistorySets.any { it.addedWeight > 0.0 || (it.exerciseType == ExerciseType.ADDED_WEIGHT && it.addedWeight == 0.0) }
     }
 
-    val displayedHistorySets = remember(exerciseHistorySets, selectedAddedWeightFilter) {
+    val displayedHistorySets = remember(exerciseHistorySets, selectedAddedWeightFilter, userProfile.currentWeightKg) {
         if (selectedAddedWeightFilter == null) {
             exerciseHistorySets
         } else {
+            // The same rule the chart uses: a set belongs to the tag when its external load, its
+            // added load or the body weight it was done at is the one that was picked.
+            //
+            // The body weight has to be the one the set carries, not the one the athlete has
+            // today. A set done at 80 kg and a set done at 84 kg are two different bodyweight
+            // entries, and the "BW: 80 kg" tag has to show only the first one.
             exerciseHistorySets.filter { set ->
                 set.weight == selectedAddedWeightFilter ||
-                set.addedWeight == selectedAddedWeightFilter ||
-                (set.weight == 0.0 && set.addedWeight == 0.0)
+                    set.addedWeight == selectedAddedWeightFilter ||
+                    (set.weight == 0.0 && set.addedWeight == 0.0 &&
+                        BodyWeightTimeline.bodyWeightForSet(set, userProfile.currentWeightKg) == selectedAddedWeightFilter)
             }
         }
     }
@@ -969,15 +978,18 @@ fun ProgressScreen(
                                         modifier = Modifier.width(48.dp)
                                     )
 
-                                    // Reps and hold seconds are independent: list both so a hold never
-                                    // hides the reps. Cardio shows a distance, because a run has no
-                                    // load to show and a "0 kg x no reps logged" row tells the athlete
-                                    // nothing about the session they just did.
+                                    // The load the set actually moved, and the work done with it.
+                                    //
+                                    // The load is the same text the workout history shows, so the
+                                    // same set is never described two different ways. A bodyweight
+                                    // set says the body weight it was done at: an empty weight field
+                                    // used to read as "+0 kg", which is the opposite of what the
+                                    // athlete did.
+                                    val bodyweightAtSet =
+                                        BodyWeightTimeline.bodyWeightForSet(set, userProfile.currentWeightKg)
                                     val descriptor = when (set.exerciseType) {
-                                        ExerciseType.ADDED_WEIGHT -> "+${formatWeightDisplay(WeightConversion.fromKg(set.addedWeight, weightUnit))} $unit x ${describeLoggedSetEffort(set)}"
-                                        ExerciseType.STANDARD_WEIGHT -> "${formatWeightDisplay(WeightConversion.fromKg(set.weight, weightUnit))} $unit x ${describeLoggedSetEffort(set)}"
                                         ExerciseType.CARDIO -> describeCardioSet(set, weightUnit)
-                                        else -> describeLoggedSetEffort(set)
+                                        else -> "${WorkoutMetrics.loadLabel(set, bodyweightAtSet, weightUnit)} x ${describeLoggedSetEffort(set)}"
                                     }
                                     Text(
                                         text = descriptor,

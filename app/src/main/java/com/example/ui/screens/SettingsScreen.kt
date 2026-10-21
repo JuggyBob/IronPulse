@@ -310,6 +310,57 @@ fun SettingsScreen(
                     HorizontalDivider(color = DarkBorder)
                     Spacer(modifier = Modifier.height(2.dp))
 
+                    // Where the week begins. It decides the order the seven days are shown in and
+                    // where a sequence of workouts with no day of its own starts. It never moves a
+                    // workout that already sits on a weekday.
+                    Text(
+                        text = "Week starts on",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = TextWhite
+                    )
+                    Text(
+                        text = "Used by the week planner, the weekly summaries and the Home schedule. " +
+                            "A workout already on a day stays on that day.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(DarkBg, RoundedCornerShape(10.dp))
+                            .padding(3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        listOf(true to "Monday", false to "Sunday").forEach { (option, label) ->
+                            val isSelected = appSettings.weekStartsOnMonday == option
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .background(
+                                        if (isSelected) ElectricCyan else Color.Transparent,
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable { viewModel.setWeekStartsOnMonday(option) }
+                                    .padding(vertical = 10.dp)
+                                    .testTag("settings_week_start_${label.lowercase()}"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    ),
+                                    color = if (isSelected) DarkBg else TextMuted
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    HorizontalDivider(color = DarkBorder)
+                    Spacer(modifier = Modifier.height(2.dp))
+
                     SettingSwitchRow(
                         title = "Rest timer vibration",
                         subtitle = "Vibrate when a rest period finishes.",

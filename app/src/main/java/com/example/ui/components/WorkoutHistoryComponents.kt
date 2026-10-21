@@ -84,6 +84,7 @@ import com.example.data.model.describeLoggedSetEffort
 import com.example.data.model.WeightUnit
 import com.example.data.model.WeightConversion
 import com.example.data.model.LoggedSet
+import com.example.data.model.WorkoutMetrics
 import com.example.data.model.WorkoutSession
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
@@ -907,10 +908,19 @@ fun WorkoutDayDetailView(
         map
     }
 
-    val totalVolumeKg = remember(setsForSession) {
-        setsForSession.sumOf { set ->
-            val totalWeight = set.weight + set.addedWeight
-            set.reps * totalWeight
+    // The volume of the session, in kilogram-reps.
+    //
+    // The load a set actually moved is what counts: the external load for a barbell set, the body
+    // weight plus the added load for a weighted bodyweight set, and the body weight for a plain
+    // bodyweight set. Counting only the external load made every bodyweight session read as zero
+    // volume, which is the opposite of what the athlete did.
+    //
+    // The body weight is the one the set carries, so it is the weight the athlete had at the time
+    // of that set. Reading today's weight instead would rewrite the volume of every session ever
+    // logged the moment the athlete weighs in.
+    val totalVolumeKg = remember(setsForSession, userProfile.currentWeightKg) {
+        WorkoutMetrics.sessionVolume(setsForSession) { set ->
+            BodyWeightTimeline.bodyWeightForSet(set, userProfile.currentWeightKg)
         }
     }
 
@@ -1045,10 +1055,20 @@ fun WorkoutDayDetailView(
                         ) {
                             Column(modifier = Modifier.padding(10.dp)) {
                                 Text("VOLUME", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp)
+                                // The number on its own line and the unit under it: "1280 kg-reps"
+                                // does not fit on one line in a tile this narrow.
                                 Text(
-                                    text = "${formatWeightDisplay(WeightConversion.fromKg(totalVolumeKg, weightUnit))} $unit",
+                                    text = formatWeightDisplay(WeightConversion.fromKg(totalVolumeKg, weightUnit)),
                                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = GoldenAmber
+                                    color = GoldenAmber,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "$unit-reps",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextMuted
                                 )
                             }
                         }
@@ -1188,23 +1208,7 @@ fun WorkoutDayDetailView(
                                     // The body weight the set was done at, not today's.
                                     val bodyweightAtSet =
                                         BodyWeightTimeline.bodyWeightForSet(set, userProfile.currentWeightKg)
-                                    val weightText = if (set.exerciseType == ExerciseType.CARDIO) {
-                                        describeCardioSet(set, weightUnit)
-                                    } else when {
-                                        set.addedWeight > 0.0 -> {
-                                            // +X kg, plus the body weight that applied back then
-                                            val bwText = if (bodyweightAtSet != null) {
-                                                " (+${formatWeightDisplay(WeightConversion.fromKg(bodyweightAtSet, weightUnit))} $unit BW)"
-                                            } else {
-                                                ""
-                                            }
-                                            "+${formatWeightDisplay(WeightConversion.fromKg(set.addedWeight, weightUnit))} $unit$bwText"
-                                        }
-                                        set.weight > 0.0 -> "${formatWeightDisplay(WeightConversion.fromKg(set.weight, weightUnit))} $unit"
-                                        bodyweightAtSet != null -> "${formatWeightDisplay(WeightConversion.fromKg(bodyweightAtSet, weightUnit))} $unit BW"
-                                        // No weigh-in existed on that day: never borrow today's weight
-                                        else -> "Own body weight"
-                                    }
+                                    val weightText = WorkoutMetrics.loadLabel(set, bodyweightAtSet, weightUnit)
                                     Text(
                                         text = weightText,
                                         style = MaterialTheme.typography.bodySmall.copy(

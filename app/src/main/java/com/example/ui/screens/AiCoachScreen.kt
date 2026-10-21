@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
@@ -134,6 +135,13 @@ fun AiCoachScreen(
 ) {
     var selectedSubTab by remember { mutableIntStateOf(0) }
     val subTabs = listOf("AI Coach Chat", "Routine Generator", "Saved Routines")
+
+    // A request from elsewhere in the app, e.g. the Saved Routines shortcut on the Home screen.
+    // The counter is what is watched, so asking twice opens the tab twice.
+    val savedRoutinesTabRequest by viewModel.savedRoutinesTabRequest.collectAsStateWithLifecycle()
+    LaunchedEffect(savedRoutinesTabRequest) {
+        if (savedRoutinesTabRequest > 0) selectedSubTab = 2
+    }
 
     Column(
         modifier = modifier
@@ -939,14 +947,14 @@ fun AiRoutineGeneratorView(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Days per week selector
+                    // How many days of the week the generated routine trains on.
                     Text("TRAINING DAYS PER WEEK", style = MaterialTheme.typography.labelSmall, color = TextMuted)
                     Spacer(modifier = Modifier.height(6.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        listOf(3, 4, 5, 6).forEach { d ->
+                        listOf(3, 4, 5, 6, 7).forEach { d ->
                             FilterChip(
                                 selected = days == d,
                                 onClick = { viewModel.routineDaysPerWeek.value = d },
@@ -1130,7 +1138,7 @@ fun AiRoutineGeneratorView(
                                 } else {
                                     safeStartRoutine {
                                         viewModel.saveRoutine(routine)
-                                        viewModel.startRoutineWorkout(routine, targetDayNumber = 1)
+                                        viewModel.startRoutineWorkout(routine)
                                         onStartRoutine()
                                     }
                                 }
@@ -1167,7 +1175,7 @@ fun AiRoutineGeneratorView(
                     generatedRoutineForDayPicker = null
                     safeStartRoutine {
                         viewModel.saveRoutine(r)
-                        viewModel.startRoutineWorkout(r, targetDayNumber = day.dayNumber)
+                        viewModel.startRoutineWorkout(r, targetWeekday = day.weekday)
                         onStartRoutine()
                     }
                 },
@@ -1302,6 +1310,8 @@ fun SavedRoutinesView(
 ) {
     val routines by viewModel.savedRoutines.collectAsStateWithLifecycle()
     val allExercises by viewModel.allExercises.collectAsStateWithLifecycle()
+    // The routine the athlete is following this week, so the card can say so.
+    val activeRoutineId by viewModel.activeRoutineId.collectAsStateWithLifecycle()
     var showCreateRoutineDialog by remember { mutableStateOf(false) }
     var routineBeingEdited by remember { mutableStateOf<SavedRoutine?>(null) }
     var routinePendingDeletion by remember { mutableStateOf<SavedRoutine?>(null) }
@@ -1406,11 +1416,11 @@ fun SavedRoutinesView(
                         allExercises = allExercises,
                         onStartWorkout = {
                             val days = RoutineParser.parseDays(routine.exercisesJson, allExercises)
-                            if (days.size > 1) {
+                            if (days.count { !it.isRestDay } > 1) {
                                 routineForDayPicker = routine
                             } else {
                                 safeStartRoutine {
-                                    viewModel.startRoutineWorkout(routine, targetDayNumber = 1)
+                                    viewModel.startRoutineWorkout(routine)
                                     onLaunchRoutine(routine)
                                 }
                             }
@@ -1420,7 +1430,9 @@ fun SavedRoutinesView(
                         onEdit = {
                             routineBeingEdited = routine
                             showCreateRoutineDialog = true
-                        }
+                        },
+                        isScheduledWeek = activeRoutineId == routine.id,
+                        onScheduleWeek = { viewModel.setActiveRoutine(routine.id) }
                     )
                 }
             }
@@ -1521,7 +1533,7 @@ fun SavedRoutinesView(
                     val r = routineForDayPicker!!
                     routineForDayPicker = null
                     safeStartRoutine {
-                        viewModel.startRoutineWorkout(r, targetDayNumber = day.dayNumber)
+                        viewModel.startRoutineWorkout(r, targetWeekday = day.weekday)
                         onLaunchRoutine(r)
                     }
                 },
@@ -1674,7 +1686,9 @@ private fun SavedRoutineCard(
     onStartWorkout: () -> Unit,
     onDuplicate: () -> Unit,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    isScheduledWeek: Boolean = false,
+    onScheduleWeek: () -> Unit = {}
 ) {
     var isExpanded by remember { mutableStateOf(false) }
 
@@ -1736,6 +1750,42 @@ private fun SavedRoutineCard(
             )
 
             Spacer(modifier = Modifier.height(14.dp))
+
+            // Which routine the athlete is following this week.
+            //
+            // Only one routine can be the plan, and it is never picked for them: the Home screen
+            // asks before it schedules anything, and this is where the answer is given.
+            OutlinedButton(
+                onClick = onScheduleWeek,
+                enabled = !isScheduledWeek,
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = if (isScheduledWeek) MintGreen else ElectricCyan
+                ),
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (isScheduledWeek) MintGreen else ElectricCyan
+                ),
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("schedule_week_button_${routine.id}")
+            ) {
+                Icon(
+                    imageVector = if (isScheduledWeek) Icons.Default.Check else Icons.Default.CalendarToday,
+                    contentDescription = null,
+                    tint = if (isScheduledWeek) MintGreen else ElectricCyan,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = if (isScheduledWeek) "Scheduled for this week" else "Schedule this week",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = if (isScheduledWeek) MintGreen else ElectricCyan
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
 
             // Start Workout + Copy + Edit
             Row(

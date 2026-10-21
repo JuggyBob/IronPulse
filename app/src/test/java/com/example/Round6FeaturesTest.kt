@@ -176,8 +176,8 @@ class Round6FeaturesTest {
             sets = emptyList(),
             routineId = 12L,
             routineGoal = "Strength",
-            dayNumber = 2,
-            dayTitle = "Day 2: Legs",
+            weekday = 2,
+            dayTitle = "Legs",
             dayNote = "Focus on depth",
             routineItems = listOf(
                 RoutineExerciseItem(
@@ -192,8 +192,8 @@ class Round6FeaturesTest {
         val decoded = WorkoutDraftCodec.decode(WorkoutDraftCodec.encode(draft))
         assertTrue(decoded?.isRoutine ?: false)
         assertEquals(12L, decoded?.routineId)
-        assertEquals(2, decoded?.dayNumber)
-        assertEquals("Day 2: Legs", decoded?.dayTitle)
+        assertEquals(2, decoded?.weekday)
+        assertEquals("Legs", decoded?.dayTitle)
         assertEquals("Focus on depth", decoded?.dayNote)
         assertEquals(1, decoded?.routineItems?.size)
         assertEquals(20.0, decoded?.routineItems?.get(0)?.targetAddedWeightKg ?: 0.0, 0.0001)

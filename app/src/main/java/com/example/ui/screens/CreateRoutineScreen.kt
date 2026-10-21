@@ -34,6 +34,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -88,6 +89,7 @@ import com.example.data.model.RoutineParser
 import com.example.data.model.SavedRoutine
 import com.example.data.model.WeightConversion
 import com.example.data.model.WeightUnit
+import com.example.data.model.Weekday
 import com.example.ui.components.AiUnavailableDialog
 import com.example.ui.components.AnimatedDropdownField
 import com.example.ui.components.DayDropdown
@@ -135,17 +137,20 @@ fun CreateRoutineScreen(
     val customExerciseResult by viewModel.customExerciseResult.collectAsStateWithLifecycle()
     // Weights live in kilograms; this is the unit the athlete reads and types in.
     val unit by viewModel.weightUnit.collectAsStateWithLifecycle()
+    // Where the athlete's week begins. It decides the order the seven days are shown in, and where
+    // a sequence of workouts with no weekday of its own starts.
+    val weekStartsOnMonday by viewModel.weekStartFlow.collectAsStateWithLifecycle()
 
     val isEditing = editingRoutine != null
 
     var routineName by remember { mutableStateOf(editingRoutine?.name.orEmpty()) }
     var routineDescription by remember { mutableStateOf(editingRoutine?.description.orEmpty()) }
     var selectedGoal by remember { mutableStateOf(editingRoutine?.goal ?: "Strength & Muscle Growth") }
-    var daysPerWeek by remember { mutableIntStateOf(editingRoutine?.daysPerWeek ?: 4) }
 
     // Search query with auto-completion
     var searchQuery by remember { mutableStateOf("") }
-    var activeDayForAdding by remember { mutableIntStateOf(1) }
+    // The weekday the athlete is editing, and the one new exercises land on.
+    var activeDayForAdding by remember { mutableIntStateOf(Weekday.MONDAY) }
     var goalMenuExpanded by remember { mutableStateOf(false) }
 
     // "The exercise does not exist yet" flow
@@ -230,8 +235,9 @@ fun CreateRoutineScreen(
         val routine = editingRoutine ?: return@LaunchedEffect
         if (didSeedEditedRoutine || allExercises.isEmpty()) return@LaunchedEffect
         val existing = routine.exercisesJson.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        val parsed = RoutineParser.parseExercises(existing, allExercises, weekStartsOnMonday)
         selectedRoutineExercises.clear()
-        selectedRoutineExercises.addAll(RoutineParser.parseExercises(existing, allExercises))
+        selectedRoutineExercises.addAll(parsed)
         didSeedEditedRoutine = true
     }
 
@@ -247,25 +253,30 @@ fun CreateRoutineScreen(
 
     val canSave = routineName.isNotBlank() && selectedRoutineExercises.isNotEmpty()
 
-    // Shrinking the routine must not leave exercises stranded on a day that no longer exists.
-    //
-    // Without this, an athlete who put "Weighted Dips" on day 5 and then dropped to a 4 day split
-    // saved a routine that still contained it: the row stayed in the list, just never visible on any
-    // day, and it came back the moment the routine was widened again. Clamping to the last surviving
-    // day is the only reading that keeps every exercise both visible and logged.
-    LaunchedEffect(daysPerWeek) {
-        val clamped = RoutineDayClamp.clampExercises(selectedRoutineExercises.toList(), daysPerWeek)
+    // How many exercises each weekday holds, so the planner shows the shape of the week at a
+    // glance and a day with nothing in it reads as a rest day.
+    val exercisesPerWeekday = remember(selectedRoutineExercises.toList()) {
+        selectedRoutineExercises.groupingBy { it.weekday }.eachCount()
+    }
+
+    // The days of the week, in the order the athlete's week runs in.
+    val weekdayOrder = remember(weekStartsOnMonday) { Weekday.ordered(weekStartsOnMonday) }
+
+    // An exercise must always sit on a day of the week. Only data written before the seven day
+    // model existed can break that, and it is repaired here rather than left invisible.
+    LaunchedEffect(selectedRoutineExercises.toList()) {
+        val clamped = RoutineDayClamp.clampExercises(selectedRoutineExercises.toList())
         clamped.forEachIndexed { index, item ->
             if (selectedRoutineExercises[index] != item) {
                 selectedRoutineExercises[index] = item
             }
         }
-        activeDayForAdding = RoutineDayClamp.clampSelectedDay(activeDayForAdding, daysPerWeek)
+        activeDayForAdding = RoutineDayClamp.clampDay(activeDayForAdding)
     }
 
-    // The added exercises are shown one training day at a time, chosen with the dropdown in the
-    // "Assign added exercises to" box. Each entry keeps its real index in the whole list, so
-    // reordering and deleting still address the right element.
+    // The added exercises are shown one day of the week at a time, chosen in the week planner.
+    // Each entry keeps its real index in the whole list, so reordering and deleting still address
+    // the right element.
     //
     // Deliberately not `remember`ed off the list itself: a SnapshotStateList is mutable in place,
     // so a remembered key list does not change identity when an exercise is added and the view
@@ -273,15 +284,14 @@ fun CreateRoutineScreen(
     // appeared after switching days away and back.
     val visibleRoutineEntries = selectedRoutineExercises
         .mapIndexed { index, item -> index to item }
-        .filter { (_, item) -> daysPerWeek <= 1 || item.dayNumber == activeDayForAdding }
+        .filter { (_, item) -> item.weekday == activeDayForAdding }
 
     fun persistRoutine() {
         if (!canSave) return
 
-        // Last line of defence for the stranded-day bug: never persist a day number the routine does
-        // not have. The LaunchedEffect above already clamps the live list, so this is a guard against
-        // a save racing a shrink, not the primary fix.
-        val clamped = RoutineDayClamp.clampExercises(selectedRoutineExercises.toList(), daysPerWeek)
+        // Last line of defence: never persist an exercise on a day that is not part of the week.
+        val clamped = RoutineDayClamp.clampExercises(selectedRoutineExercises.toList())
+        val trainingDays = clamped.map { it.weekday }.distinct().size.coerceAtLeast(1)
 
         if (isEditing) {
             viewModel.saveEditedRoutine(
@@ -289,7 +299,7 @@ fun CreateRoutineScreen(
                     id = editingRoutine.id,
                     name = routineName.trim(),
                     description = routineDescription.trim(),
-                    daysPerWeek = daysPerWeek,
+                    daysPerWeek = trainingDays,
                     goal = selectedGoal,
                     exercisesJson = RoutineParser.serializeExercises(clamped),
                     createdAt = editingRoutine.createdAt
@@ -299,7 +309,7 @@ fun CreateRoutineScreen(
             viewModel.saveCustomRoutine(
                 name = routineName,
                 description = routineDescription,
-                daysPerWeek = daysPerWeek,
+                daysPerWeek = trainingDays,
                 goal = selectedGoal,
                 exercises = clamped
             )
@@ -471,45 +481,77 @@ fun CreateRoutineScreen(
                                 optionTestTagPrefix = "create_routine_goal_option"
                             )
 
-                            // Days per week
+                            // The week planner: the seven days of the week, always.
+                            //
+                            // A routine is a week. Every weekday has a slot, a day with nothing in
+                            // it is a rest day, and tapping a day is how the athlete moves between
+                            // them. The days are shown in the order the athlete's week runs in.
                             Column(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text(
-                                    text = "Days Per Week: $daysPerWeek",
-                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                                    color = TextWhite
-                                )
                                 Row(
-                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    (1..7).forEach { d ->
-                                        Box(
+                                    Icon(
+                                        imageVector = Icons.Default.CalendarToday,
+                                        contentDescription = null,
+                                        tint = ElectricCyan,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = "WEEK SCHEDULE",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = ElectricCyan
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    weekdayOrder.forEach { day ->
+                                        val count = exercisesPerWeekday[day] ?: 0
+                                        val isSelected = day == activeDayForAdding
+                                        Column(
                                             modifier = Modifier
                                                 .weight(1f)
-                                                .height(36.dp)
                                                 .background(
-                                                    if (daysPerWeek == d) ElectricCyan else DarkBg,
+                                                    if (isSelected) ElectricCyan else DarkBg,
                                                     RoundedCornerShape(8.dp)
                                                 )
-                                                .border(1.dp, if (daysPerWeek == d) ElectricCyan else DarkBorder, RoundedCornerShape(8.dp))
-                                                .clickable {
-                                                    daysPerWeek = d
-                                                    activeDayForAdding =
-                                                        RoutineDayClamp.clampSelectedDay(activeDayForAdding, d)
-                                                },
-                                            contentAlignment = Alignment.Center
+                                                .border(
+                                                    1.dp,
+                                                    if (isSelected) ElectricCyan else DarkBorder,
+                                                    RoundedCornerShape(8.dp)
+                                                )
+                                                .clickable { activeDayForAdding = day }
+                                                .padding(vertical = 6.dp)
+                                                .testTag("routine_day_chip_$day"),
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(1.dp)
                                         ) {
                                             Text(
-                                                text = "$d",
+                                                text = Weekday.shortName(day),
                                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                                color = if (daysPerWeek == d) DarkBg else TextWhite
+                                                color = if (isSelected) DarkBg else TextWhite,
+                                                maxLines = 1
+                                            )
+                                            Text(
+                                                text = if (count > 0) "$count" else "Rest",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (isSelected) DarkBg else TextMuted,
+                                                maxLines = 1
                                             )
                                         }
                                     }
                                 }
+                                Text(
+                                    text = "A day with no exercise is a rest day. Tap a day to open it, " +
+                                        "and new exercises land on the day you tap.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextMuted
+                                )
                             }
 
                             // Description
@@ -582,13 +624,14 @@ fun CreateRoutineScreen(
                                         color = TextWhite
                                     )
 
-                                    // One dropdown instead of a row of "Day X" chips: the number of
-                                    // entries always matches the routine, so a 2 day routine never
-                                    // offers a 5th day.
+                                    // The day new exercises land on, and the day the list below
+                                    // shows. The week planner above does the same job, but the
+                                    // dropdown names the day in full.
                                     DayDropdown(
-                                        daysPerWeek = daysPerWeek,
                                         selectedDay = activeDayForAdding,
-                                        onSelect = { activeDayForAdding = it }
+                                        onSelect = { activeDayForAdding = it },
+                                        weekStartsOnMonday = weekStartsOnMonday,
+                                        exerciseCount = exercisesPerWeekday
                                     )
                                 }
                             }
@@ -693,8 +736,7 @@ fun CreateRoutineScreen(
                                                                 targetSets = 3,
                                                                 targetReps = 8,
                                                                 prescription = "3 sets x 8 reps",
-                                                                dayNumber = if (daysPerWeek > 1) activeDayForAdding else 1,
-                                                                dayTitle = "Day ${if (daysPerWeek > 1) activeDayForAdding else 1}"
+                                                                weekday = activeDayForAdding
                                                             )
                                                         )
                                                         searchQuery = "" // Clear after adding
@@ -852,10 +894,11 @@ fun CreateRoutineScreen(
                     }
 
                     // A day with nothing on it yet, so the view is never silently blank
-                    if (visibleRoutineEntries.isEmpty() && daysPerWeek > 1) {
+                    if (visibleRoutineEntries.isEmpty()) {
                         item {
                             Text(
-                                text = "Nothing on this day yet. Add an exercise above and it lands here.",
+                                text = "${Weekday.name(activeDayForAdding)} is a rest day in this routine. " +
+                                    "Add an exercise above and it lands here.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextMuted,
                                 modifier = Modifier
@@ -921,8 +964,7 @@ fun CreateRoutineScreen(
                             targetSets = 3,
                             targetReps = 8,
                             prescription = "3 sets x 8 reps",
-                            dayNumber = if (daysPerWeek > 1) activeDayForAdding else 1,
-                            dayTitle = "Day ${if (daysPerWeek > 1) activeDayForAdding else 1}"
+                            weekday = activeDayForAdding
                         )
                     )
                     viewModel.resetAiExerciseCreationState()
@@ -1024,8 +1066,7 @@ fun CreateRoutineScreen(
                                 targetSets = 3,
                                 targetReps = 8,
                                 prescription = "3 sets x 8 reps",
-                                dayNumber = if (daysPerWeek > 1) activeDayForAdding else 1,
-                                dayTitle = "Day ${if (daysPerWeek > 1) activeDayForAdding else 1}"
+                                weekday = activeDayForAdding
                             )
                         )
                     }

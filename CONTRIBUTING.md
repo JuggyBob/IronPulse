@@ -296,16 +296,16 @@ To cut a release:
 2. **Tag it.** The tag drives the version:
 
    ```bash
-   git tag -a v1.0.2 -m "IronPulse v1.0.2"
-   git push origin v1.0.2
+   git tag -a v2.0.0 -m "IronPulse 2.0.0"
+   git push origin v2.0.0
    ```
 
 3. **Build the release APK** locally with the upload key and record its checksum.
 4. **Attach both to the release**, writing the notes from ``CHANGELOG.md``:
 
    ```bash
-   gh release create v1.0.2 IronPulse-v1.0.2.apk IronPulse-v1.0.2.apk.sha256 \
-     --title "IronPulse v1.0.2" \
+   gh release create v2.0.0 IronPulse2.0.0-release.apk IronPulse2.0.0-release.apk.sha256 \
+     --title "IronPulse 2.0.0" \
      --notes-file CHANGELOG.md \
      --verify-tag
    ```

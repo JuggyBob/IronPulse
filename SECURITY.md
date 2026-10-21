@@ -10,6 +10,8 @@ else finds them.
 
 | Version | Supported |
 |---|---|
+| 2.0.x | ✅ |
+| 1.1.x | ✅ |
 | 1.0.x | ✅ |
 | < 1.0.0 | ❌ |
 
@@ -101,7 +103,7 @@ Release APKs are attached to the
 checksums.
 
 ```bash
-sha256sum IronPulse-v1.0.0.apk
+sha256sum IronPulse2.0.0-release.apk
 ```
 
 Compare against the checksum in the release notes before installing an APK you did not build

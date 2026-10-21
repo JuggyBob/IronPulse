@@ -5,6 +5,7 @@ import com.example.data.model.ExerciseType
 import com.example.data.model.MuscleCategory
 import com.example.data.model.PredefinedRoutines
 import com.example.data.model.RoutineParser
+import com.example.data.model.Weekday
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -79,15 +80,15 @@ class PredefinedRoutinesTest {
                 template.daysPerWeek,
                 template.days.size
             )
-            // This is the bug the app had: a routine claiming four days with a stray day 5.
+            // Every day of a template is a real weekday, and no weekday is used twice.
             assertTrue(
-                "${template.id} defines a day beyond its own week",
-                template.days.all { it.dayNumber in 1..template.daysPerWeek }
+                "${template.id} defines a day outside the week",
+                template.days.all { it.weekday in 1..7 }
             )
             assertEquals(
-                "${template.id} day numbers must be 1..n with no gaps",
-                (1..template.daysPerWeek).toList(),
-                template.days.map { it.dayNumber }.sorted()
+                "${template.id} uses the same weekday twice",
+                template.days.size,
+                template.days.map { it.weekday }.distinct().size
             )
         }
     }
@@ -101,7 +102,7 @@ class PredefinedRoutinesTest {
                 for (entry in day.entries) {
                     val name = entry.substringBefore(" (")
                     assertNotNull(
-                        "${template.id} day ${day.dayNumber} names \"$name\", which is not in the catalog",
+                        "${template.id} day ${day.weekday} names \"$name\", which is not in the catalog",
                         RoutineParser.findMatchingExercise(name, catalog)
                     )
                 }
@@ -146,11 +147,11 @@ class PredefinedRoutinesTest {
             catalog
         )
 
-        // Every parsed exercise must sit on a day the routine actually has, and keep its name.
-        assertTrue(parsed.all { it.dayNumber in 1..template.daysPerWeek })
+        // Every parsed exercise must sit on a real weekday, and keep the weekday of its day.
+        assertTrue(parsed.all { it.weekday in 1..7 })
         assertEquals(
-            setOf(1, 2, 3),
-            parsed.map { it.dayNumber }.toSet()
+            template.days.map { it.weekday }.toSet(),
+            parsed.map { it.weekday }.toSet()
         )
         assertTrue(parsed.none { it.exerciseName.isBlank() })
     }
@@ -173,11 +174,11 @@ class PredefinedRoutinesTest {
 
     @Test
     fun `the calisthenics template is barbell free on its pulling and pressing days`() {
-        // The promise its description makes is "no equipment beyond a pull-up bar". Day 3 uses a
-        // barbell single leg split squat as a progression, so the check is scoped to the days that
-        // have to work with bodyweight alone.
+        // The promise its description makes is "no equipment beyond a pull-up bar". The third day
+        // uses a barbell single leg split squat as a progression, so the check is scoped to the
+        // days that have to work with bodyweight alone.
         val template = PredefinedRoutines.byId("calisthenics_base")!!
-        val bodyweightDays = template.days.filter { it.dayNumber in 1..2 }
+        val bodyweightDays = template.days.filter { it.weekday in listOf(Weekday.MONDAY, Weekday.WEDNESDAY) }
         val names = bodyweightDays.flatMap { it.entries }.map { it.substringBefore(" (") }
 
         assertTrue(

@@ -28,7 +28,9 @@ import com.example.data.model.Exercise
 import com.example.data.model.RoutineDay
 import com.example.data.model.RoutineExerciseItem
 import com.example.data.model.RoutineParser
+import com.example.data.model.RoutineSchedule
 import com.example.data.model.SavedRoutine
+import com.example.data.model.Weekday
 import com.example.ui.theme.*
 
 /**
@@ -86,7 +88,7 @@ fun SelectRoutineDayDialog(
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    text = "This routine contains ${days.size} distinct training days. Select which workout you want to perform today:",
+                    text = "This routine trains on ${days.size} day${if (days.size == 1) "" else "s"} a week. Select which workout you want to perform today:",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextMuted
                 )
@@ -97,12 +99,12 @@ fun SelectRoutineDayDialog(
                         .heightIn(max = 380.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    items(days, key = { it.dayNumber }) { day ->
+                    items(days, key = { it.weekday }) { day ->
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { onSelectDay(day) }
-                                .testTag("select_day_item_${day.dayNumber}"),
+                                .testTag("select_day_item_${day.weekday}"),
                             colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
                             shape = RoundedCornerShape(12.dp),
                             border = BorderStroke(1.dp, DarkBorder)
@@ -126,14 +128,14 @@ fun SelectRoutineDayDialog(
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Text(
-                                                text = "${day.dayNumber}",
+                                                text = Weekday.initial(day.weekday),
                                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                                 color = ElectricCyan
                                             )
                                         }
                                         Column {
                                             Text(
-                                                text = day.dayTitle,
+                                                text = RoutineSchedule.dayLabel(day),
                                                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                                 color = TextWhite
                                             )
@@ -208,24 +210,27 @@ fun RoutineExerciseListDisplay(
     val days = remember(routine.exercisesJson, allExercises) {
         RoutineParser.parseDays(routine.exercisesJson, allExercises)
     }
+    // Only the days that hold a workout. A rest day has nothing to show and would only take up
+    // room that the training days need.
+    val trainingDays = remember(days) { days.filter { !it.isRestDay } }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        if (days.isNotEmpty()) {
+        if (trainingDays.isNotEmpty()) {
             if (!isExpanded) {
                 // Collapsed Preview
-                if (days.size > 1) {
+                if (trainingDays.size > 1) {
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.padding(bottom = 6.dp)
                     ) {
-                        items(days) { day ->
+                        items(trainingDays) { day ->
                             Surface(
                                 color = DarkSurfaceVariant,
                                 shape = RoundedCornerShape(6.dp),
                                 border = BorderStroke(1.dp, DarkBorder)
                             ) {
                                 Text(
-                                    text = "${day.dayTitle} (${day.exercises.size} ex)",
+                                    text = "${Weekday.shortName(day.weekday)} (${day.exercises.size} ex)",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = ElectricCyan,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
@@ -233,18 +238,18 @@ fun RoutineExerciseListDisplay(
                             }
                         }
                     }
-                    val firstDayPreview = days.first().exercises.take(3).joinToString(", ") { "${it.exerciseName} (${RoutineParser.shortPrescription(it.prescription, it.equipment).ifBlank { "${it.targetSets}x${it.targetReps}" }})" }
+                    val firstDayPreview = trainingDays.first().exercises.take(3).joinToString(", ") { "${it.exerciseName} (${RoutineParser.shortPrescription(it.prescription, it.equipment).ifBlank { "${it.targetSets}x${it.targetReps}" }})" }
                     Text(
-                        text = "Day 1 Preview: $firstDayPreview" + if (days.first().exercises.size > 3 || days.size > 1) " ..." else "",
+                        text = "${Weekday.name(trainingDays.first().weekday)} Preview: $firstDayPreview" + if (trainingDays.first().exercises.size > 3 || trainingDays.size > 1) " ..." else "",
                         style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
                         color = TextWhite,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                 } else {
-                    val preview = days[0].exercises.take(4).joinToString(", ") { "${it.exerciseName} (${RoutineParser.shortPrescription(it.prescription, it.equipment).ifBlank { "${it.targetSets}x${it.targetReps}" }})" }
+                    val preview = trainingDays[0].exercises.take(4).joinToString(", ") { "${it.exerciseName} (${RoutineParser.shortPrescription(it.prescription, it.equipment).ifBlank { "${it.targetSets}x${it.targetReps}" }})" }
                     Text(
-                        text = "${days[0].exercises.size} prescribed exercises: $preview" + if (days[0].exercises.size > 4) " ..." else "",
+                        text = "${trainingDays[0].exercises.size} prescribed exercises: $preview" + if (trainingDays[0].exercises.size > 4) " ..." else "",
                         style = MaterialTheme.typography.bodySmall.copy(lineHeight = 18.sp),
                         color = TextWhite,
                         maxLines = 3,
@@ -257,7 +262,7 @@ fun RoutineExerciseListDisplay(
                     modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    days.forEach { day ->
+                    trainingDays.forEach { day ->
                         Surface(
                             color = DarkSurfaceVariant,
                             shape = RoundedCornerShape(10.dp),
@@ -277,7 +282,7 @@ fun RoutineExerciseListDisplay(
                                         modifier = Modifier.size(16.dp)
                                     )
                                     Text(
-                                        text = day.dayTitle,
+                                        text = RoutineSchedule.dayLabel(day),
                                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
                                         color = TextWhite,
                                         maxLines = 1,

@@ -3,16 +3,16 @@
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](LICENSE)
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9-7F52FF.svg)](https://kotlinlang.org)
 [![Android](https://img.shields.io/badge/Android-7.1%2B-3DDC84.svg)](https://developer.android.com)
-[![Release](https://img.shields.io/badge/release-v1.1.0-blue.svg)](https://github.com/JuggyBob/IronPulse/releases)
+[![Release](https://img.shields.io/badge/release-v2.0.0-blue.svg)](https://github.com/JuggyBob/IronPulse/releases)
 
 A dark-themed workout logger for strength training and calisthenics, built for the gym:
 offline by default, no account, no tracking, and a 1,300+ movement catalog that streams its
 animations on demand instead of shipping them in the APK.
 
 <p align="center">
-  <img src="docs/screenshots/03-progress-analytics.png" width="30%" alt="Progress analytics" />
+  <img src="docs/screenshots/01-home-dashboard.png" width="30%" alt="The Home dashboard" />
+  <img src="docs/screenshots/08-routine-week-planner.png" width="30%" alt="The routine week planner" />
   <img src="docs/screenshots/02-exercise-detail.png" width="30%" alt="Exercise detail" />
-  <img src="docs/screenshots/06-logging-quick-workout.png" width="30%" alt="Logging a quick workout" />
 </p>
 
 ### What IronPulse is for
@@ -20,9 +20,9 @@ animations on demand instead of shipping them in the APK.
 | You want to... | How IronPulse handles it |
 |---|---|
 | Log a workout fast | Quick workout from the Exercises tab, with rest timer and automatic set numbering |
-| Run a routine | Saved routines with any number of training days; pick which day you are on |
+| Run a routine | Saved routines are a week: every weekday has its own workout, and a day with nothing on it is a rest day |
 | Start somewhere | Three pre-built routines with a full preview before you adopt one |
-| See progress | Volume, estimated one-rep max, training streak, weigh-ins plotted over time |
+| See progress | Volume, estimated one-rep max, training days, weigh-ins plotted over time |
 | Check a movement | An animation for nearly every exercise, and full instructions |
 | Ask a coach | Optional Gemini chat, routine generator and monthly summary |
 | Fix something the app got wrong | A low-level editor for any exercise, plus a revert to the shipped catalog |
@@ -30,6 +30,47 @@ animations on demand instead of shipping them in the APK.
 ---
 
 ## What it does
+
+### Home
+- **Home is where the app opens.** It is the first screen after the onboarding and the first screen
+  on every later launch, and it has a button of its own in the bottom navigation, between Progress
+  and Profile.
+- It answers the questions you have when you open a workout logger: what day it is, what is planned
+  for today, whether you can start right now, what you have been doing, when you last weighed in,
+  and how the week is going.
+- **Today's workout** is the workout your scheduled routine assigns to today, with a **Start Workout**
+  button that opens the real workout session. A rest day says so and offers another workout; a
+  routine you never scheduled asks which one is the week you are following; a workout that is
+  already running offers to resume it rather than starting a second one.
+- **Your week** shows all seven days of the scheduled routine, with the date under each one, what is
+  trained on it, and which days are rest days. Tap a training day to start it.
+- **Last 7 days** as a heat map, with a **Volume / Duration** switch. Both cover the same seven
+  dates, and tapping a day tells you exactly what was done on it.
+- **Training days** is a lifetime count of the days you completed a qualifying workout. It is not a
+  streak: a week off costs you nothing. Tap it to read exactly what counts.
+- **This week** in three numbers: workouts, time and volume.
+- **Body weight**: the latest weigh-in, the change since the one before it, and a **Log Weight**
+  button that saves through the same weigh-in the Profile page uses.
+- **Last workout** with its time and its set count, and a line for the day.
+
+<p align="center">
+  <img src="docs/screenshots/01-home-dashboard.png" width="45%" alt="The Home dashboard: today's workout, the week, the last seven days and the numbers" />
+</p>
+
+### Routines
+- A routine is a **week of seven days**, one slot per weekday. A day with no exercise in it is a
+  **rest day** — there is no separate rest flag to keep in step with the exercises.
+- The routine editor is a **week planner**: all seven weekdays are shown with how many exercises
+  each one holds, and tapping a day opens it. New exercises land on the day that is open.
+- **The week can start on Monday or on Sunday**, in Settings. It decides where a week is displayed
+  and where a sequence of workouts with no day of its own begins. It never moves a workout that
+  already sits on a weekday.
+- You are never limited to the plan. Any saved workout can be started on any day, and the week is
+  a recommendation rather than a restriction.
+
+<p align="center">
+  <img src="docs/screenshots/08-routine-week-planner.png" width="45%" alt="The routine week planner: seven weekdays, with the rest days marked" />
+</p>
 
 ### Exercise library
 1,333 movements seeded into a local SQLite database — every exercise with its equipment, muscle
@@ -74,13 +115,15 @@ cached**, not bundled, so the app stays small and an exercise you never open cos
 </p>
 
 ### Progress
-- Volume, estimated one-rep max, max reps, training streak and a 12-month activity heatmap.
+- Volume, estimated one-rep max, max reps, training days and a 12-month activity heatmap.
 - Per-exercise analysis with an interactive graph you can tap to inspect any point.
 - Weigh-ins on the Profile tab, plotted over time, feeding every body-weight calculation in the app.
 - Units follow your preference everywhere; the storage unit never changes and no history is ever
   rewritten when you switch.
 - **A set keeps the body weight it was done at.** Weighing in today does not rewrite what last
   month's pull-ups weighed, so the isolated weight tags and the history stay true.
+- **One definition of volume.** The heat map and the Progress chart count the load actually lifted,
+  so two screens never disagree about the same week.
 
 <p align="center">
   <img src="docs/screenshots/03-progress-analytics.png" width="45%" alt="Analytics and progress" />
@@ -90,6 +133,9 @@ cached**, not bundled, so the app stays small and an exercise you never open cos
 The app is fully usable without Gemini. Add a key and you get:
 - Paste any workout in any format and get a structured routine back.
 - Describe a goal and get a plan built from movements the app actually has.
+- **The AI plans a week.** The generated routine is scheduled onto the days of the week: a weekday
+  the answer named is kept, and a workout with no weekday named is laid out from the start of your
+  week. The app applies those rules itself, so the schedule is the same whatever the model returns.
 - A coach chat that answers questions about the session you just logged.
 - Automatic creation of missing movements, including target muscles, secondary muscles and
   short coaching-cue instructions.
@@ -183,7 +229,7 @@ The app works fully without one. To enable the AI features, add your key in
 
 ### Running the tests
 ```bash
-./gradlew testDebugUnitTest      # 293 JVM unit tests across 42 classes
+./gradlew testDebugUnitTest      # 385 JVM unit tests across 47 classes
 ./gradlew recordRoborazziDebug   # regenerate reference screenshots
 ```
 
@@ -196,9 +242,15 @@ Prebuilt APKs are attached to the
 
 | Version | File |
 |---|---|
-| **v1.1.0** | [`IronPulse1.1.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v1.1.0/IronPulse1.1.0-release.apk) |
+| **v2.0.0** | [`IronPulse2.0.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v2.0.0/IronPulse2.0.0-release.apk) |
+| v1.1.1 | [`IronPulse1.1.1-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v1.1.1/IronPulse1.1.1-release.apk) |
+| v1.1.0 | [`IronPulse1.1.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v1.1.0/IronPulse1.1.0-release.apk) |
 | v1.0.1 | [`IronPulse-v1.0.1.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v1.0.1/IronPulse-v1.0.1.apk) |
 | v1.0.0 | [`IronPulse-v1.0.0.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v1.0.0/IronPulse-v1.0.0.apk) |
+
+Every release is signed with the same key, so installing a newer version is an upgrade in place and
+your history stays where it is. Each release also carries a `.sha256` file next to the APK, so you
+can check that what you downloaded is what was published.
 
 Requires Android 7.1 (API 24) or newer.
 
@@ -215,12 +267,12 @@ IronPulse/
 │   │   │   ├── data/                 # Room entities, DAOs, repository, seeders
 │   │   │   ├── ui/
 │   │   │   │   ├── components/       # Dialogs, editors, charts, sheets
-│   │   │   │   ├── screens/          # The six tabs + onboarding
+│   │   │   │   ├── screens/          # Home, the other tabs and onboarding
 │   │   │   │   ├── theme/            # Colours, type, Material 3 theme
 │   │   │   │   └── viewmodel/        # MainViewModel — the single source of truth
 │   │   │   └── util/                 # Coil loaders, media store, timers
 │   │   └── res/                      # Icons, strings, themes, backup rules
-│   └── src/test/                     # 275 JVM tests (Robolectric + JUnit)
+│   └── src/test/                     # 364 JVM tests (Robolectric + JUnit)
 ├── docs/screenshots/                 # Images used by this README
 ├── gradle/wrapper/                   # Pinned Gradle distribution
 ├── .github/                          # Issue & PR templates, CI workflows

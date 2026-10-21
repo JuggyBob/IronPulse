@@ -159,31 +159,29 @@ object MonthlyExerciseAnalyzer {
     }
 
     /** Epley formula, matching ProgressScreen's MAX_REPS / ESTIMATED_1RM metrics. */
-    fun estimateOneRepMax(effectiveWeight: Double, reps: Int): Double = when {
-        effectiveWeight <= 0.0 -> 0.0
-        reps <= 1 -> effectiveWeight
-        else -> effectiveWeight * (36.0 / (37.0 - reps.coerceAtMost(36).toDouble()))
-    }
+    fun estimateOneRepMax(effectiveWeight: Double, reps: Int): Double =
+        WorkoutMetrics.estimateOneRepMax(effectiveWeight, reps)
 
     /**
      * Load actually lifted: external weight, bodyweight + added weight, or bodyweight.
      *
-     * @return null when the set needs a body weight that was never recorded. Such a set cannot be
-     * expressed in kg, and substituting today's weight would fabricate progress.
+     * The same rule every other screen measures with, so the report the coach writes and the
+     * numbers on the Progress tab can never quote two different figures for the same set.
+     *
+     * @param bodyWeightForSet resolves the body weight that applied to a given set, or null when
+     *        it is unknown. The body weight has to be the one the set carries, which is the weight
+     *        the athlete had at the time of that set, not the weight they have today.
+     * @return null when the set cannot be expressed in kg. Such a set is left out rather than
+     *         given a made up number.
      */
-    fun effectiveWeightOf(set: LoggedSet, bodyWeightAt: (Long) -> Double?): Double? {
-        val bodyWeight = bodyWeightAt(set.timestamp)
-        return when (set.exerciseType) {
-            ExerciseType.STANDARD_WEIGHT -> set.weight
-            ExerciseType.ADDED_WEIGHT -> bodyWeight?.let { it + set.addedWeight }
-            else -> bodyWeight
-        }
-    }
+    fun effectiveWeightOf(set: LoggedSet, bodyWeightForSet: (LoggedSet) -> Double?): Double? =
+        WorkoutMetrics.effectiveWeightKg(set, bodyWeightForSet(set))
 
 /**
      * @param sets every set ever logged for the exercise; only those inside the window are used.
-     * @param bodyWeightAt resolves the body weight that applied at a given timestamp, or null when
-     * it is unknown (never the current weight).
+     * @param bodyWeightForSet resolves the body weight that applied to a given set, or null when
+     * it is unknown. The body weight is the one the set carries, so it is the weight the
+     * athlete had at the time of that set.
      * @param weightUnit the unit the labels built for the AI are expressed in. The returned numbers
      * stay in kilograms and are converted by [MonthlyExerciseSummary.toPromptPayload].
      * @param nowMillis reference point for the rolling window.
@@ -193,7 +191,7 @@ object MonthlyExerciseAnalyzer {
         exerciseType: String,
         weightUnit: WeightUnit,
         sets: List<LoggedSet>,
-        bodyWeightAt: (Long) -> Double?,
+        bodyWeightForSet: (LoggedSet) -> Double?,
         nowMillis: Long = System.currentTimeMillis()
     ): MonthlyExerciseSummary {
         val windowStart = nowMillis - (WINDOW_DAYS * 24L * 60L * 60L * 1000L)
@@ -207,26 +205,26 @@ object MonthlyExerciseAnalyzer {
             .groupBy { formatter.format(Date(it.timestamp)) }
             .map { (dateLabel, daySets) ->
                 // Only the sets whose load is actually known can be expressed as a weight
-                val measurable = daySets.filter { effectiveWeightOf(it, bodyWeightAt) != null }
+                val measurable = daySets.filter { effectiveWeightOf(it, bodyWeightForSet) != null }
                 // The day's "best set" is the one with the highest estimated 1RM
-                val dayBest = measurable.maxByOrNull { estimateOneRepMax(effectiveWeightOf(it, bodyWeightAt) ?: 0.0, it.reps) }
+                val dayBest = measurable.maxByOrNull { estimateOneRepMax(effectiveWeightOf(it, bodyWeightForSet) ?: 0.0, it.reps) }
                 MonthlySetEntry(
                     dateLabel = dateLabel,
                     setCount = daySets.size,
-                    topSetLabel = describeSet(dayBest, weightUnit, bodyWeightAt) { "${it.reps} reps" },
-                    volume = measurable.sumOf { (effectiveWeightOf(it, bodyWeightAt) ?: 0.0) * it.reps },
-                    estimatedOneRm = dayBest?.let { estimateOneRepMax(effectiveWeightOf(it, bodyWeightAt) ?: 0.0, it.reps) } ?: 0.0
+                    topSetLabel = describeSet(dayBest, weightUnit, bodyWeightForSet) { "${it.reps} reps" },
+                    volume = measurable.sumOf { (effectiveWeightOf(it, bodyWeightForSet) ?: 0.0) * it.reps },
+                    estimatedOneRm = dayBest?.let { estimateOneRepMax(effectiveWeightOf(it, bodyWeightForSet) ?: 0.0, it.reps) } ?: 0.0
                 )
             }
 
         val bestOverall = windowSets
-            .filter { effectiveWeightOf(it, bodyWeightAt) != null }
-            .maxByOrNull { estimateOneRepMax(effectiveWeightOf(it, bodyWeightAt) ?: 0.0, it.reps) }
-        val bestOneRm = bestOverall?.let { estimateOneRepMax(effectiveWeightOf(it, bodyWeightAt) ?: 0.0, it.reps) } ?: 0.0
-        val bestLoadLabel = bestOverall?.let { describeSet(it, weightUnit, bodyWeightAt) { "${it.reps} reps" } } ?: "n/a"
+            .filter { effectiveWeightOf(it, bodyWeightForSet) != null }
+            .maxByOrNull { estimateOneRepMax(effectiveWeightOf(it, bodyWeightForSet) ?: 0.0, it.reps) }
+        val bestOneRm = bestOverall?.let { estimateOneRepMax(effectiveWeightOf(it, bodyWeightForSet) ?: 0.0, it.reps) } ?: 0.0
+        val bestLoadLabel = bestOverall?.let { describeSet(it, weightUnit, bodyWeightForSet) { "${it.reps} reps" } } ?: "n/a"
         val bestSource = bestOverall?.let { set ->
             buildString {
-                append(loadLabel(set, weightUnit, bodyWeightAt))
+                append(loadLabel(set, weightUnit, bodyWeightForSet))
                 append(" x ")
                 append(if (set.holdDurationSeconds > 0 && set.reps > 0) {
                     "${set.reps} reps • ${set.holdDurationSeconds}s hold"
@@ -242,7 +240,7 @@ object MonthlyExerciseAnalyzer {
             weightUnit = weightUnit,
             daysLogged = dailyEntries.size,
             setCount = windowSets.size,
-            totalVolume = windowSets.sumOf { (effectiveWeightOf(it, bodyWeightAt) ?: 0.0) * it.reps },
+            totalVolume = windowSets.sumOf { (effectiveWeightOf(it, bodyWeightForSet) ?: 0.0) * it.reps },
             bestOneRm = bestOneRm,
             bestOneRmSource = bestSource,
             bestLoadLabel = bestLoadLabel,
@@ -253,26 +251,37 @@ object MonthlyExerciseAnalyzer {
         )
     }
 
-    private fun loadLabel(set: LoggedSet, weightUnit: WeightUnit, bodyWeightAt: (Long) -> Double?): String {
+    /**
+     * The load of a set, in the words the AI report uses.
+     *
+     * The same load the rest of the app measures, so a report never describes a set differently
+     * from the screen the athlete logged it on. Never invents a body weight: a set with none
+     * recorded says so plainly.
+     */
+    private fun loadLabel(set: LoggedSet, weightUnit: WeightUnit, bodyWeightForSet: (LoggedSet) -> Double?): String {
         val unit = weightUnit.suffix
+        val bodyWeight = bodyWeightForSet(set)
         return when {
-            set.exerciseType == ExerciseType.ADDED_WEIGHT && set.addedWeight > 0.0 ->
-                "+${trim(set.addedWeight, weightUnit)}$unit"
+            set.exerciseType == ExerciseType.CARDIO -> describeCardioSet(set, weightUnit)
+            // The added load, plus the body weight that applied back then: the one rep max this
+            // set produces counts both, so the label has to show both.
+            set.addedWeight > 0.0 -> "+${trim(set.addedWeight, weightUnit)}$unit" +
+                (bodyWeight?.let { " (bodyweight ${trim(it, weightUnit)}$unit)" } ?: "")
             set.weight > 0.0 -> "${trim(set.weight, weightUnit)}$unit"
             // Never invent a body weight: say plainly that none was recorded for that day
-            else -> bodyWeightAt(set.timestamp)?.let { "bodyweight ${trim(it, weightUnit)}$unit" }
-                ?: "bodyweight not recorded"
+            bodyWeight != null -> "bodyweight ${trim(bodyWeight, weightUnit)}$unit"
+            else -> "bodyweight not recorded"
         }
     }
 
     private fun describeSet(
         set: LoggedSet?,
         weightUnit: WeightUnit,
-        bodyWeightAt: (Long) -> Double?,
+        bodyWeightForSet: (LoggedSet) -> Double?,
         detail: (LoggedSet) -> String
     ): String {
         if (set == null) return "n/a"
-        return "${loadLabel(set, weightUnit, bodyWeightAt)} x ${detail(set)}"
+        return "${loadLabel(set, weightUnit, bodyWeightForSet)} x ${detail(set)}"
     }
 
     /** Formats a stored kilogram value in the athlete's unit, without a trailing ".0". */

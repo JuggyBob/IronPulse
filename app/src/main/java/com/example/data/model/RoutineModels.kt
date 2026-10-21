@@ -24,8 +24,24 @@ data class RoutineExerciseItem(
     val targetAddedWeightKg: Double = 0.0,
     val targetHoldSeconds: Int = 0,
     val prescription: String = "",
-    val dayNumber: Int = 1,
-    val dayTitle: String = "Day 1",
+    /**
+     * The weekday this exercise belongs to: 1 = Monday ... 7 = Sunday.
+     *
+     * The identity of a day is its real weekday, never its position in a list. The athlete's week
+     * may start on Monday or on Sunday and the editor may show the days in either order, but
+     * "Wednesday" is Wednesday whatever is displayed first.
+     *
+     * 0 means the exercise has not been assigned to a weekday yet, which is what a routine that was
+     * written before the seven day model existed looks like.
+     */
+    val weekday: Int = 0,
+    /**
+     * A short label for the day, e.g. "Upper Body Push".
+     *
+     * The weekday name itself is derived, never stored: storing it would be a second source of
+     * truth that could disagree with [weekday].
+     */
+    val dayTitle: String = "",
     /**
      * Coach note written for this training day. Stored on every item of the day so the day level
      * note survives the flat JSON array format, and never turned into a fake exercise.
@@ -34,11 +50,30 @@ data class RoutineExerciseItem(
 )
 
 data class RoutineDay(
-    val dayNumber: Int,
-    val dayTitle: String,
-    val exercises: List<RoutineExerciseItem>,
+    /**
+     * The weekday this slot stands for: 1 = Monday ... 7 = Sunday.
+     */
+    val weekday: Int,
+    /**
+     * A short label for the day, e.g. "Upper Body Push". Empty for a plain day.
+     */
+    val dayTitle: String = "",
+    /**
+     * The exercises of this day.
+     *
+     * A day with no exercises is a rest day. There is no separate rest flag: an empty list IS the
+     * rest day, so a day can never claim to be a workout day while holding nothing.
+     */
+    val exercises: List<RoutineExerciseItem> = emptyList(),
     val note: String = ""
-)
+) {
+    /** Whether this day is a planned rest day. */
+    val isRestDay: Boolean get() = exercises.isEmpty()
+
+    /** The name of the weekday, e.g. "Monday". */
+    val dayName: String get() = Weekday.name(weekday)
+}
+
 
 data class ActiveRoutineWorkoutState(
     val routineId: Long,
@@ -48,7 +83,10 @@ data class ActiveRoutineWorkoutState(
     val exercises: List<Exercise>,
     val routineItems: List<RoutineExerciseItem> = emptyList(),
     val sets: List<LoggedSet> = emptyList(),
-    val dayNumber: Int? = null,
+    /**
+     * The weekday this workout belongs to: 1 = Monday ... 7 = Sunday.
+     */
+    val weekday: Int? = null,
     val dayTitle: String? = null,
     val dayNote: String = ""
 )
@@ -273,7 +311,9 @@ object RoutineParser {
                 put("addedWeight", item.targetAddedWeightKg)
                 put("holdSeconds", item.targetHoldSeconds)
                 put("prescription", item.prescription)
-                put("day", item.dayNumber)
+                // The weekday this exercise belongs to. A routine saved before the seven day model
+                // existed has no "weekday" key, and the parser reads the old "day" slot instead.
+                put("weekday", item.weekday)
                 put("dayTitle", item.dayTitle)
                 // Backward compatible: routines saved before this field simply have no note
                 if (item.dayNote.isNotBlank()) put("dayNote", item.dayNote)
@@ -363,7 +403,36 @@ object RoutineParser {
         .replace(Regex("\\s{2,}"), " ")
         .trim()
 
-    fun parseDays(rawText: String, allExercises: List<Exercise>): List<RoutineDay> {
+    /**
+     * The days of a routine that hold a workout.
+     *
+     * A rest day holds no exercise, so it is not one of the training days. Use [parseWeek] to see
+     * the seven slots of the week, rest days included.
+     *
+     * @param weekStartsOnMonday where the athlete's week begins. It decides where a day that was
+     *        written as a position rather than a name lands.
+     */
+    fun parseDays(
+        rawText: String,
+        allExercises: List<Exercise>,
+        weekStartsOnMonday: Boolean = true
+    ): List<RoutineDay> =
+        parseWeek(rawText, allExercises, weekStartsOnMonday).filter { !it.isRestDay }
+
+    /**
+     * The seven slots of the week a routine describes, one per weekday.
+     *
+     * The result always has seven days, whether the source named them or not. A day with no
+     * exercises in it is a rest day.
+     *
+     * @param weekStartsOnMonday where the athlete's week begins. It decides where a day that was
+     *        written as a position rather than a name lands.
+     */
+    fun parseWeek(
+        rawText: String,
+        allExercises: List<Exercise>,
+        weekStartsOnMonday: Boolean = true
+    ): List<RoutineDay> {
         val trimmed = rawText.trim()
         if (trimmed.isEmpty()) return emptyList()
 
@@ -371,88 +440,121 @@ object RoutineParser {
 
         // 1. Try JSON
         if ((trimmed.startsWith("[") && trimmed.endsWith("]")) || (trimmed.startsWith("{") && trimmed.endsWith("}"))) {
-            val jsonDays = parseJsonDays(trimmed, exByName)
+            val jsonDays = parseJsonDays(trimmed, exByName, weekStartsOnMonday)
             if (jsonDays.isNotEmpty()) return jsonDays
+            // A well formed JSON answer that holds no routine in it is an answer with no routine in
+            // it. Reading it as prose would turn the brackets themselves into an exercise.
+            if (isJsonStructure(trimmed)) return emptyList()
         }
 
         // 2. Try structured text / markdown with day headers
-        return parseTextDays(trimmed, exByName)
+        return parseTextDays(trimmed, exByName, weekStartsOnMonday)
     }
 
-    fun parseExercises(rawText: String, allExercises: List<Exercise>): List<RoutineExerciseItem> {
-        return parseDays(rawText, allExercises).flatMap { it.exercises }
+    /**
+     * Whether the text is a well formed JSON array or object.
+     *
+     * Used to tell an answer that really is JSON apart from text that merely starts with a
+     * bracket.
+     */
+    fun isJsonStructure(text: String): Boolean = try {
+        val trimmed = text.trim()
+        if (trimmed.startsWith("[")) {
+            JSONArray(trimmed)
+        } else {
+            JSONObject(trimmed)
+        }
+        true
+    } catch (_: Exception) {
+        false
     }
 
-    private fun parseJsonDays(trimmed: String, exByName: Map<String, Exercise>): List<RoutineDay> {
+    fun parseExercises(
+        rawText: String,
+        allExercises: List<Exercise>,
+        weekStartsOnMonday: Boolean = true
+    ): List<RoutineExerciseItem> {
+        return parseWeek(rawText, allExercises, weekStartsOnMonday).flatMap { it.exercises }
+    }
+
+    private fun parseJsonDays(
+        trimmed: String,
+        exByName: Map<String, Exercise>,
+        weekStartsOnMonday: Boolean
+    ): List<RoutineDay> {
         try {
-            val items = mutableListOf<RoutineExerciseItem>()
+            val items = mutableListOf<ScheduledWorkout>()
             if (trimmed.startsWith("[")) {
                 val array = JSONArray(trimmed)
+                var slot = 1
                 for (i in 0 until array.length()) {
                     val obj = array.optJSONObject(i) ?: continue
-                    val item = parseJsonExerciseItem(obj, exByName)
-                    if (item != null) items.add(item)
+                    val workout = parseJsonExerciseItem(obj, exByName, fallbackSlot = slot)
+                    if (workout != null) {
+                        items.add(workout)
+                        // A workout with no day of its own is a day of its own.
+                        if (workout.weekday == 0 && obj.opt("day") == null) slot++
+                    }
                 }
             } else {
                 val rootObj = JSONObject(trimmed)
-                // Check if it has "days" array
+                // The seven day form: a "days" array with one entry per weekday. A day with no
+                // exercises in it is a rest day, and it is kept rather than dropped, so the
+                // schedule the source described survives.
                 val daysArray = rootObj.optJSONArray("days")
                 if (daysArray != null && daysArray.length() > 0) {
-                    val daysList = mutableListOf<RoutineDay>()
+                    val dayWorkouts = mutableListOf<ScheduledWorkout>()
                     for (d in 0 until daysArray.length()) {
                         val dayObj = daysArray.optJSONObject(d) ?: continue
-                        val dayNum = dayObj.optInt("day", d + 1)
-                        val dayTitle = dayObj.optString("dayTitle", dayObj.optString("title", "Day $dayNum"))
+                        val dayTitle = cleanDayTitle(
+                            dayObj.optString("dayTitle", dayObj.optString("title", dayObj.optString("focus", "")))
+                        )
+                        val note = dayObj.optString("note", "")
+                        // A day may name its weekday, or be a rest day with nothing in it.
+                        val weekday = readScheduleHint(dayObj, d + 1).weekday
                         val dayExArray = dayObj.optJSONArray("exercises") ?: JSONArray()
-                        val dayItems = mutableListOf<RoutineExerciseItem>()
                         for (j in 0 until dayExArray.length()) {
                             val exObj = dayExArray.optJSONObject(j) ?: continue
-                            val item = parseJsonExerciseItem(exObj, exByName, dayNum, dayTitle)
-                            if (item != null) dayItems.add(item)
-                        }
-                        if (dayItems.isNotEmpty()) {
-                            daysList.add(
-                                RoutineDay(
-                                    dayNum,
-                                    dayTitle,
-                                    dayItems,
-                                    dayItems.firstOrNull()?.dayNote.orEmpty()
-                                )
+                            val workout = parseJsonExerciseItem(
+                                exObj,
+                                exByName,
+                                overrideWeekday = weekday,
+                                overrideDayTitle = dayTitle,
+                                fallbackSlot = d + 1
                             )
+                            if (workout != null) {
+                                dayWorkouts.add(
+                                    workout.copy(
+                                        item = workout.item.copy(dayNote = workout.item.dayNote.ifBlank { note })
+                                    )
+                                )
+                            }
                         }
                     }
-                    if (daysList.isNotEmpty()) return daysList
+                    if (dayWorkouts.isNotEmpty()) {
+                        return RoutineSchedule.buildDays(dayWorkouts, weekStartsOnMonday)
+                    }
                 }
 
                 // Check if it has "exercises" array
                 val exArray = rootObj.optJSONArray("exercises")
                 if (exArray != null) {
+                    var slot = 1
                     for (i in 0 until exArray.length()) {
                         val obj = exArray.optJSONObject(i) ?: continue
-                        val item = parseJsonExerciseItem(obj, exByName)
-                        if (item != null) items.add(item)
+                        val workout = parseJsonExerciseItem(obj, exByName, fallbackSlot = slot)
+                        if (workout != null) {
+                            items.add(workout)
+                            if (workout.weekday == 0 && obj.opt("day") == null) slot++
+                        }
                     }
                 }
             }
 
             if (items.isEmpty()) return emptyList()
 
-            // Group items by day number preserving insertion order
-            val grouped = LinkedHashMap<Int, MutableList<RoutineExerciseItem>>()
-            val dayTitles = mutableMapOf<Int, String>()
-            for (item in items) {
-                grouped.getOrPut(item.dayNumber) { mutableListOf() }.add(item)
-                if (!dayTitles.containsKey(item.dayNumber) && item.dayTitle.isNotBlank()) {
-                    dayTitles[item.dayNumber] = item.dayTitle
-                }
-            }
-
-            return grouped.map { (dayNum, dayItems) ->
-                val title = dayTitles[dayNum] ?: "Day $dayNum"
-                // The note travels on every item of the day, so take it from any of them
-                val note = dayItems.firstOrNull { it.dayNote.isNotBlank() }?.dayNote.orEmpty()
-                RoutineDay(dayNum, title, dayItems, note)
-            }
+            // The seven slots, built from what the source gave.
+            return RoutineSchedule.buildDays(items, weekStartsOnMonday)
         } catch (_: Exception) {
             return emptyList()
         }
@@ -547,9 +649,10 @@ object RoutineParser {
     private fun parseJsonExerciseItem(
         obj: JSONObject,
         exByName: Map<String, Exercise>,
-        overrideDay: Int? = null,
-        overrideDayTitle: String? = null
-    ): RoutineExerciseItem? {
+        overrideWeekday: Int? = null,
+        overrideDayTitle: String? = null,
+        fallbackSlot: Int = 1
+    ): ScheduledWorkout? {
         val name = obj.optString("name").trim()
         if (name.isBlank()) return null
 
@@ -568,11 +671,20 @@ object RoutineParser {
             if (hold > 0) "$sets sets x ${hold}s"
             else "$sets sets x $reps reps"
         }
-        val dayNum = overrideDay ?: obj.optInt("day", obj.optInt("dayNumber", 1))
-        val dayTitle = overrideDayTitle ?: obj.optString("dayTitle", "Day $dayNum")
         val dayNote = obj.optString("dayNote", "")
 
-        return if (matched != null) {
+        // Where this exercise sits in the week.
+        //
+        // A source may name the weekday ("Monday"), or it may only carry the old numbered slot
+        // ("day": 2), which is a position in the routine rather than a day of the week. The schedule
+        // resolves the slots afterwards, so a routine written before the seven day model existed
+        // lands on real weekdays instead of nowhere.
+        val hint = readScheduleHint(obj, fallbackSlot)
+        val weekday = overrideWeekday ?: hint.weekday
+        val slot = if (overrideWeekday != null) fallbackSlot else hint.slot
+        val dayTitle = overrideDayTitle ?: cleanDayTitle(obj.optString("dayTitle", ""))
+
+        val item = if (matched != null) {
             RoutineExerciseItem(
                 exerciseId = matched.id,
                 exerciseName = matched.name,
@@ -585,7 +697,7 @@ object RoutineParser {
                 targetAddedWeightKg = addedWeight,
                 targetHoldSeconds = hold,
                 prescription = prescription,
-                dayNumber = dayNum,
+                weekday = weekday,
                 dayTitle = dayTitle,
                 dayNote = dayNote
             )
@@ -602,54 +714,152 @@ object RoutineParser {
                 targetAddedWeightKg = addedWeight,
                 targetHoldSeconds = hold,
                 prescription = prescription,
-                dayNumber = dayNum,
+                weekday = weekday,
                 dayTitle = dayTitle,
                 dayNote = dayNote
             )
         }
+        return ScheduledWorkout(item = item, weekday = weekday, slot = slot)
     }
 
-    private fun isDayHeader(line: String): Pair<Int, String>? {
+    /**
+     * Where a JSON entry sits in the week.
+     *
+     * @param weekday the weekday the entry named, or 0 when it named none.
+     * @param slot the position of the workout within the routine, for an entry that named no weekday.
+     */
+    private data class ScheduleHint(val weekday: Int, val slot: Int)
+
+    private fun readScheduleHint(obj: JSONObject, fallbackSlot: Int): ScheduleHint {
+        // The weekday key: a name, or the ISO weekday number.
+        val weekdayRaw = obj.opt("weekday")
+        if (weekdayRaw != null && weekdayRaw != JSONObject.NULL) {
+            val text = weekdayRaw.toString().trim()
+            if (text.isNotEmpty() && text != "null") {
+                Weekday.fromName(text)?.let { return ScheduleHint(it, fallbackSlot) }
+            }
+        }
+
+        // The day key: a name is a weekday, a number is a position in the routine.
+        val dayRaw = obj.opt("day")
+        if (dayRaw != null && dayRaw != JSONObject.NULL) {
+            if (dayRaw is String) {
+                val text = dayRaw.trim()
+                if (text.isNotEmpty()) {
+                    val asNumber = text.toIntOrNull()
+                    if (asNumber != null) {
+                        return ScheduleHint(0, asNumber.coerceAtLeast(1))
+                    }
+                    Weekday.fromName(text)?.let { return ScheduleHint(it, fallbackSlot) }
+                }
+            } else {
+                val slot = obj.optInt("day", 0)
+                if (slot > 0) return ScheduleHint(0, slot)
+            }
+        }
+        return ScheduleHint(0, fallbackSlot)
+    }
+
+    /**
+     * The focus of a day, without the day number or the weekday name in it.
+     *
+     * A routine written before the seven day model existed called its days "Day 1: Upper Body
+     * Push". The weekday is derived now, so only the focus is kept.
+     */
+    fun cleanDayTitle(raw: String): String {
+        var title = raw.trim()
+        val legacy = Regex("""(?i)^day\s*\d+\s*[:\-–—]?\s*""").find(title)
+        if (legacy != null) title = title.removeRange(legacy.range).trim()
+        val named = Regex(
+            """(?i)^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s*[:\-–—]\s*"""
+        ).find(title)
+        if (named != null) title = title.removeRange(named.range).trim()
+        return title
+    }
+
+    /**
+     * A day header found in a routine that was written as text.
+     *
+     * @param weekday the weekday the header named, or 0 when it was a numbered slot instead.
+     * @param slot the one based position of the day, for a routine written as "Day 1, Day 2".
+     * @param title the focus of the day, e.g. "Upper Body Push".
+     */
+    private data class DayHeader(
+        val weekday: Int,
+        val slot: Int,
+        val title: String
+    )
+
+    private fun isDayHeader(line: String): DayHeader? {
         val stripped = line.trim()
             .replace(Regex("""^#{1,6}\s*"""), "")
             .replace(Regex("""^\*+\s*"""), "")
             .replace(Regex("""\s*\*+$"""), "")
             .trim()
 
+        // A header that names the weekday itself: "Monday: Upper Body Push" or just "Monday".
+        // The title is what comes after it, never the weekday name, so the name is derived from
+        // the weekday rather than stored twice.
+        val namedWeekday = Weekday.fromName(stripped.substringBefore(":").substringBefore("-").trim())
+        if (namedWeekday != null) {
+            val title = stripped
+                .substringBefore(":").substringBefore("-").trim()
+                .let { head ->
+                    // Drop the weekday name from the head, keeping what followed it.
+                    if (head.length >= stripped.length) "" else stripped.substring(head.length).trim()
+                }
+                .removePrefix(":").removePrefix("-").trim()
+            return DayHeader(weekday = namedWeekday, slot = 0, title = title)
+        }
+
         val regex = Regex("""(?i)^(?:Day|Workout)\s*(\d+|[A-Za-z])(?:\s*[:\-–—]\s*(.*)|\s+(.*)|$)""")
         val match = regex.find(stripped)
         if (match != null) {
             val token = match.groupValues[1]
             val num = token.toIntOrNull() ?: (token.firstOrNull()?.let { (it.uppercaseChar() - 'A' + 1) } ?: 1)
-            val title = stripped.ifBlank { "Day $num" }
-            return Pair(num, title)
+            // The focus of the day, with the "Day N" prefix taken off.
+            val title = match.groupValues[2].ifBlank { match.groupValues[3] }.trim()
+            return DayHeader(weekday = 0, slot = num, title = title)
         }
         return null
     }
 
-    private fun parseTextDays(rawText: String, exByName: Map<String, Exercise>): List<RoutineDay> {
+    private fun parseTextDays(
+        rawText: String,
+        exByName: Map<String, Exercise>,
+        weekStartsOnMonday: Boolean
+    ): List<RoutineDay> {
         val lines = rawText.lines()
-        val daysMap = LinkedHashMap<Int, MutableList<RoutineExerciseItem>>()
+        val daysMap = LinkedHashMap<Int, MutableList<ScheduledWorkout>>()
         val titlesMap = mutableMapOf<Int, String>()
         val notesMap = mutableMapOf<Int, MutableList<String>>()
 
-        var currentDayNum = 1
-        var currentDayTitle = "Day 1"
-        var hasExplicitDayHeader = false
+        // The day the exercises below this point belong to.
+        //
+        // A header that names a weekday is taken literally. A header that is a position ("Day 1")
+        // is the first day of the athlete's week, so a routine written before the seven day model
+        // existed lands on real weekdays rather than on nothing.
+        var currentWeekday = RoutineSchedule.weekdayForSlot(1, weekStartsOnMonday)
+        var currentSlot = 1
+        var currentDayTitle = ""
 
         for (line in lines) {
             val lineTrimmed = line.trim()
             if (lineTrimmed.isBlank()) continue
 
             // Check if this line is a day header
-            val headerMatch = isDayHeader(lineTrimmed)
-            if (headerMatch != null) {
-                hasExplicitDayHeader = true
-                currentDayNum = headerMatch.first
-                currentDayTitle = headerMatch.second
-                titlesMap[currentDayNum] = currentDayTitle
-                if (!daysMap.containsKey(currentDayNum)) {
-                    daysMap[currentDayNum] = mutableListOf()
+            val header = isDayHeader(lineTrimmed)
+            if (header != null) {
+                currentSlot = header.slot.coerceAtLeast(1)
+                currentWeekday = if (header.weekday > 0) {
+                    header.weekday
+                } else {
+                    RoutineSchedule.weekdayForSlot(currentSlot, weekStartsOnMonday)
+                }
+                currentDayTitle = header.title
+                titlesMap[currentWeekday] = currentDayTitle
+                if (!daysMap.containsKey(currentWeekday)) {
+                    daysMap[currentWeekday] = mutableListOf()
                 }
                 continue
             }
@@ -659,7 +869,7 @@ object RoutineParser {
                 val cleanedNote = cleanNoteText(lineTrimmed)
                 // A bare label such as "**Coach's Note:**" carries no information on its own
                 if (cleanedNote.isNotBlank() && !NOTE_LABEL_ONLY.matches(cleanedNote)) {
-                    notesMap.getOrPut(currentDayNum) { mutableListOf() }.add(cleanedNote)
+                    notesMap.getOrPut(currentWeekday) { mutableListOf() }.add(cleanedNote)
                 }
                 continue
             }
@@ -678,7 +888,7 @@ object RoutineParser {
             if (looksLikeProseNotExercise(proseCandidate)) {
                 val cleanedNote = cleanNoteText(lineTrimmed)
                 if (cleanedNote.isNotBlank() && !NOTE_LABEL_ONLY.matches(cleanedNote)) {
-                    notesMap.getOrPut(currentDayNum) { mutableListOf() }.add(cleanedNote)
+                    notesMap.getOrPut(currentWeekday) { mutableListOf() }.add(cleanedNote)
                 }
                 continue
             }
@@ -796,7 +1006,7 @@ object RoutineParser {
                     targetWeight = 0.0,
                     targetHoldSeconds = hold,
                     prescription = finalPrescription,
-                    dayNumber = currentDayNum,
+                    weekday = currentWeekday,
                     dayTitle = currentDayTitle
                 )
             } else {
@@ -811,22 +1021,25 @@ object RoutineParser {
                     targetWeight = 0.0,
                     targetHoldSeconds = hold,
                     prescription = finalPrescription,
-                    dayNumber = currentDayNum,
+                    weekday = currentWeekday,
                     dayTitle = currentDayTitle
                 )
             }
-            daysMap.getOrPut(currentDayNum) { mutableListOf() }.add(item)
+            daysMap.getOrPut(currentWeekday) { mutableListOf() }
+                .add(ScheduledWorkout(item = item, weekday = currentWeekday, slot = currentSlot))
         }
 
         val nonNullDays = daysMap.filter { it.value.isNotEmpty() }
         if (nonNullDays.isEmpty()) return emptyList()
 
-        return nonNullDays.map { (dayNum, items) ->
-            val title = titlesMap[dayNum] ?: if (hasExplicitDayHeader) "Day $dayNum" else "Full Workout"
-            val note = notesMap[dayNum]?.joinToString(" ").orEmpty()
+        // The seven slots, so a day nothing was written for shows as a rest day.
+        val allWorkouts = nonNullDays.values.flatten()
+        val days = RoutineSchedule.buildDays(allWorkouts, weekStartsOnMonday)
+        return days.map { day ->
+            val note = notesMap[day.weekday]?.joinToString(" ").orEmpty()
             // The note is stored on every item so it survives the flat JSON round trip
-            val itemsWithNote = if (note.isBlank()) items else items.map { it.copy(dayNote = note) }
-            RoutineDay(dayNum, title, itemsWithNote, note)
+            val itemsWithNote = if (note.isBlank()) day.exercises else day.exercises.map { it.copy(dayNote = note) }
+            day.copy(exercises = itemsWithNote, note = note)
         }
     }
 

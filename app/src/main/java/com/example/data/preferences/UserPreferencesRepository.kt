@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.data.model.UserProfile
@@ -85,6 +86,24 @@ class UserPreferencesRepository(private val context: Context) {
          * workout that can run for hours, and only the latest state is ever worth restoring.
          */
         val ACTIVE_WORKOUT_DRAFT = stringPreferencesKey("active_workout_draft")
+
+        /**
+         * Whether the week starts on Monday.
+         *
+         * True means Monday, false means Sunday. The setting decides where a seven day week
+         * *starts* when it is displayed and where an unspecified sequence of workouts begins. It
+         * never moves a workout that already sits on a weekday: Monday stays Monday either way.
+         */
+        val WEEK_STARTS_ON_MONDAY = booleanPreferencesKey("week_starts_on_monday")
+
+        /**
+         * The routine the athlete has scheduled their week with.
+         *
+         * A saved routine is not automatically the athlete's plan: they may keep several, and
+         * only one of them is the week they are actually following. The Home dashboard shows the
+         * plan of this routine, and nothing is scheduled until the athlete picks one.
+         */
+        val ACTIVE_ROUTINE_ID = longPreferencesKey("active_routine_id")
     }
 
     // === APP SETTINGS (settings page) ===
@@ -97,7 +116,14 @@ class UserPreferencesRepository(private val context: Context) {
         // default (true) made the claim plain wrong: nothing was opt-in about data sharing, and an
         // athlete who never opened Settings had their profile sent with every AI request.
         val shareAthleteDataWithAi: Boolean = false,
-        val autoplayExerciseDemos: Boolean = true
+        val autoplayExerciseDemos: Boolean = true,
+        /**
+         * Whether a week is displayed starting on Monday. False means it starts on Sunday.
+         *
+         * Monday is the default because it is the convention most training plans are written in,
+         * and it is the one the seven day schedules are seeded from.
+         */
+        val weekStartsOnMonday: Boolean = true
     )
 
     val appSettingsFlow: Flow<AppSettings> = context.userDataStore.data.map { prefs ->
@@ -106,7 +132,8 @@ class UserPreferencesRepository(private val context: Context) {
             restTimerVibration = prefs[REST_TIMER_VIBRATION_ENABLED] ?: true,
             restTimerSound = prefs[REST_TIMER_SOUND_ENABLED] ?: true,
             shareAthleteDataWithAi = prefs[SHARE_ATHLETE_DATA_WITH_AI] ?: false,
-            autoplayExerciseDemos = prefs[AUTOPLAY_EXERCISE_DEMOS] ?: true
+            autoplayExerciseDemos = prefs[AUTOPLAY_EXERCISE_DEMOS] ?: true,
+            weekStartsOnMonday = prefs[WEEK_STARTS_ON_MONDAY] ?: true
         )
     }
 
@@ -141,6 +168,24 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setAutoplayExerciseDemos(enabled: Boolean) {
         context.userDataStore.edit { it[AUTOPLAY_EXERCISE_DEMOS] = enabled }
+    }
+
+    /**
+     * Whether the week starts on Monday. False means it starts on Sunday.
+     */
+    suspend fun setWeekStartsOnMonday(enabled: Boolean) {
+        context.userDataStore.edit { it[WEEK_STARTS_ON_MONDAY] = enabled }
+    }
+
+    /**
+     * The routine the athlete has scheduled their week with, or 0 when none has been picked.
+     */
+    val activeRoutineIdFlow: Flow<Long> = context.userDataStore.data.map { prefs ->
+        prefs[ACTIVE_ROUTINE_ID] ?: 0L
+    }
+
+    suspend fun setActiveRoutineId(id: Long) {
+        context.userDataStore.edit { it[ACTIVE_ROUTINE_ID] = id }
     }
 
     /** False until the athlete finishes the first run onboarding. */
