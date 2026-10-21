@@ -1679,12 +1679,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         fun effectiveWeightOrNull(set: LoggedSet): Double? =
             WorkoutMetrics.effectiveWeightKg(set, bodyWeightOf(set))
 
-        // Filter by isolated weight tag if specified
-        val filteredSets = if (addedWeightFilter != null) {
+        // Filter by isolated weight tag if specified.
+        //
+        // The tag is a plain number here, not a nullable one: comparing a Double against a
+        // Double? boxes both of them, and a boxed Double is compared by reference. The tag is
+        // already known to be set at this point, so it is taken out of the nullable wrapper first.
+        val weightTag = addedWeightFilter
+        val filteredSets = if (weightTag != null) {
             sets.filter { set ->
-                set.weight == addedWeightFilter ||
-                set.addedWeight == addedWeightFilter ||
-                (set.weight == 0.0 && set.addedWeight == 0.0 && bodyWeightOf(set) == addedWeightFilter)
+                set.weight == weightTag ||
+                set.addedWeight == weightTag ||
+                (set.weight == 0.0 && set.addedWeight == 0.0 && bodyWeightOf(set) == weightTag)
             }
         } else {
             sets
