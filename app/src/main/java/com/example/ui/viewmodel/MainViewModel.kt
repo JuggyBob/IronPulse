@@ -1681,19 +1681,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         // Filter by isolated weight tag if specified.
         //
-        // The tag is a plain number here, not a nullable one: comparing a Double against a
-        // Double? boxes both of them, and a boxed Double is compared by reference. The tag is
-        // already known to be set at this point, so it is taken out of the nullable wrapper first.
-        val weightTag = addedWeightFilter
-        val filteredSets = if (weightTag != null) {
+        // The tag is a plain number inside the block, not a nullable one. A Double compared
+        // against a Double? is boxed on both sides, and a boxed Double is compared by reference
+        // rather than by value, so the tag is unwrapped before it is compared.
+        val filteredSets = addedWeightFilter?.let { tag ->
             sets.filter { set ->
-                set.weight == weightTag ||
-                set.addedWeight == weightTag ||
-                (set.weight == 0.0 && set.addedWeight == 0.0 && bodyWeightOf(set) == weightTag)
+                set.weight == tag ||
+                set.addedWeight == tag ||
+                (set.weight == 0.0 && set.addedWeight == 0.0 && bodyWeightOf(set) == tag)
             }
-        } else {
-            sets
-        }
+        } ?: sets
 
         if (filteredSets.isEmpty()) return@combine emptyList()
 
