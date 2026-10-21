@@ -9,7 +9,80 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet. See [CONTRIBUTING.md](CONTRIBUTING.md) to propose a change.
+### Added
+
+#### Home dashboard
+- **Home is the landing screen.** It is the first thing the app shows after the onboarding, the
+  first thing it shows on every later launch, and it is a destination of its own in the bottom
+  navigation, between Progress and Profile.
+- The dashboard answers the questions an athlete has when they open a workout logger: what day it
+  is, what is planned for today, whether they can start right now, what they have been doing, when
+  they last weighed in, and how their week is going.
+  - **Today's workout.** The workout the scheduled routine assigns to today, with a **Start Workout**
+    button that opens the real workout session. A rest day says so and offers another workout, a
+    routine that was never scheduled asks which one is the week being followed, and a workout that
+    is already running offers to resume it rather than starting a second one.
+  - **Your week.** All seven days of the scheduled routine, with the date and the weekday under
+    each one, what is trained on it, and which days are rest days. Tapping a training day starts it.
+  - **Saved Routines** is a shortcut on the dashboard itself, so the list of routines is one tap
+    away instead of two.
+  - **Last 7 days** as a heat map, with a **Volume / Duration** switch. Both metrics cover the same
+    seven dates, and tapping a day says exactly what was done on it.
+  - **Training days**, a lifetime count of the days on which a qualifying workout was completed, with
+    a dialog that explains exactly what qualifies.
+  - **This week**: workouts, time and volume, for the calendar week the athlete is in.
+  - **Body weight**: the latest weigh-in, the change since the one before it, and a **Log Weight**
+    button that saves through the same weigh-in the Profile page uses.
+  - **Last workout** with its time and its set count, and a line for the day.
+
+#### Seven day routines
+- A routine is now a **week of seven days**, one slot per weekday, instead of a list of numbered
+  "Day 1, Day 2, Day 3" slots.
+- **A day with no exercise in it is a rest day.** There is no separate rest flag to keep in step
+  with the exercises: an empty day is a rest day, so a day can never claim to be a training day
+  while holding nothing.
+- The routine editor is a **week planner**: all seven weekdays are shown with how many exercises
+  each one holds, and tapping a day opens it. New exercises land on the day that is open.
+- The **week can start on Monday or on Sunday**, in Settings. It decides where a week is displayed
+  and where a sequence of workouts with no day of its own begins. It never moves a workout that
+  already sits on a weekday.
+
+### Changed
+- **The AI now plans a week.** The routine prompts ask for the weekday of each day of the week
+  rather than a number, and the app applies the scheduling rules itself: a weekday the answer named
+  is kept, a workout with no weekday named is laid out from the start of the athlete's week, two
+  entries that claim the same weekday are merged into it, and every weekday nothing was assigned to
+  becomes a rest day.
+- **One definition of volume.** The activity heat map counted only the external load while the
+  Progress chart counted the load actually lifted, so two screens could disagree about the same
+  week. Both now count the same thing, and the duration of a session comes from one place.
+- The routines that were saved before the seven day model existed are **migrated to real weekdays**
+  the first time the app opens: the first training day of a split becomes the first day of the
+  week, the second the second day, and so on. Everything that says what to train is kept — the
+  exercise names and their ids, the order, the sets and reps and loads, the coach notes, the name
+  and the description. The migration runs once per routine and is safe to interrupt.
+
+### Fixed
+- **An empty weight field made a bodyweight workout count as nothing.** The isolated weight tag
+  said "BW: 80 kg" while the volume and the estimated one rep max said zero, and the workout
+  history showed no volume at all. The load a set moved is now measured the same way everywhere:
+  the external load for a barbell set, the body weight plus the added load for a weighted bodyweight
+  set, and the body weight for a plain bodyweight set.
+- **The body weight is the one from the time of the workout.** A set carries the body weight it was
+  done at, and the volume, the one rep max and the "BW" label all use it. A set logged before the
+  snapshot existed falls back to the profile weight, as before.
+- **A restored workout kept its body weight.** The auto save blob did not carry it, so a workout
+  that was app killed and restored was measured against whatever the athlete weighs today rather
+  than the weight of the day they trained.
+- **The Progress tab and the workout history described the same set two different ways.** The
+  Progress tab showed "+0 kg x 8 reps" for a bodyweight set while the history showed "80 kg BW".
+  Both now use the same text.
+- **A cardio set no longer counts as the body weight.** A run is not lifted, so it has no load: it
+  no longer adds phantom volume and can no longer win an estimated one rep max against a real set.
+- **The "BW: 80 kg" tag now filters the session history by the body weight it names.** Picking
+  the tag used to show every bodyweight set, including the ones done at a different weight.
+- The session volume in the workout history is labelled in kilogram-reps, like every other volume
+  in the app.
 
 ---
 
@@ -162,7 +235,9 @@ Entries are grouped under **Added**, **Changed**, **Deprecated**, **Removed**, *
 **Security**, each newest first. Versions follow [SemVer](https://semver.org/): bump the patch for a
 fix, the minor for a feature, the major for a breaking change.
 
-[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/JuggyBob/IronPulse/compare/v1.1.1...v2.0.0
+[1.1.1]: https://github.com/JuggyBob/IronPulse/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/JuggyBob/IronPulse/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/JuggyBob/IronPulse/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/JuggyBob/IronPulse/releases/tag/v1.0.0

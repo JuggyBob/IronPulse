@@ -42,7 +42,7 @@ import kotlinx.coroutines.sync.withLock
         ChatMessageEntity::class,
         GeminiSummary::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -242,6 +242,27 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Marks the routines that still carry the old numbered training days.
+         *
+         * A routine used to be a list of abstract days, "Day 1", "Day 2", "Day 3", which said
+         * nothing about the days of the week. The schedule is now a week of seven weekday slots, and
+         * the old days have to be bound to real weekdays.
+         *
+         * That binding is done by the app rather than by SQL, because the days live inside a JSON
+         * column and the work is a transformation of that JSON. The column added here is the flag
+         * that says a routine has not been through it yet: 0 means "still the old format", 1 means
+         * "the days are real weekdays now". A routine is only touched once, so the migration is safe
+         * to run again after an interruption.
+         */
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `saved_routines` ADD COLUMN `scheduleVersion` INTEGER NOT NULL DEFAULT 0"
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -257,7 +278,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_5_6,
                         MIGRATION_6_7,
                         MIGRATION_7_8,
-                        MIGRATION_8_9
+                        MIGRATION_8_9,
+                        MIGRATION_9_10
                     )
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .addCallback(DatabasePrepopulationCallback(context))
@@ -331,8 +353,36 @@ abstract class AppDatabase : RoomDatabase() {
 
                     // 4. Keep logged set exercise types in sync with the catalog
                     database.workoutDao().syncLoggedSetExerciseTypes()
+
+                    // 5. Bind the routines that were saved before the seven day model existed to
+                    //    real weekdays.
+                    //
+                    //    The work is a transformation of the JSON the days live in, so it cannot be
+                    //    done in SQL. It runs here, once, and every routine it has already done
+                    //    carries a flag that keeps it from being looked at again.
+                    migrateRoutineSchedules(database)
                 }
             }
         }
+    }
+}
+
+/**
+ * Binds the old numbered training days of the saved routines to real weekdays.
+ *
+ * Each routine is written on its own, so a run that is interrupted halfway leaves the routines
+ * that are not done yet to be migrated the next time the app opens.
+ */
+private suspend fun migrateRoutineSchedules(database: AppDatabase) {
+    val routineDao = database.savedRoutineDao()
+    val outdated = routineDao.getRoutinesNeedingScheduleMigration()
+    for (routine in outdated) {
+        val migrated = RoutineScheduleMigration.migrate(routine) ?: continue
+        routineDao.updateRoutineSchedule(
+            id = migrated.id,
+            exercisesJson = migrated.exercisesJson,
+            daysPerWeek = migrated.daysPerWeek,
+            scheduleVersion = migrated.scheduleVersion
+        )
     }
 }

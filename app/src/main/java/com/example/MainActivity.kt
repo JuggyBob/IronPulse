@@ -5,31 +5,38 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.ime
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.ScaffoldDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -39,12 +46,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.ime
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -62,6 +71,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.ui.screens.AiCoachScreen
+import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.LogWorkoutScreen
 import com.example.ui.screens.SettingsScreen
@@ -80,6 +90,7 @@ import com.example.ui.viewmodel.MainViewModel
 sealed class Screen(val route: String, val title: String, val icon: ImageVector, val tag: String) {
     object LogWorkout : Screen("log_workout", "Exercises", Icons.Default.FitnessCenter, "nav_log_workout")
     object Progress : Screen("progress", "Progress", Icons.Default.ShowChart, "nav_progress")
+    object Home : Screen("home", "Home", Icons.Default.Home, "nav_home")
     object Profile : Screen("profile", "Profile", Icons.Default.Person, "nav_profile")
     object AiCoach : Screen("ai_coach", "AI Coach", Icons.Default.AutoAwesome, "nav_ai_coach")
     object Settings : Screen("settings", "Settings", Icons.Default.Settings, "nav_settings")
@@ -218,15 +229,18 @@ fun IronPulseApp() {
     if (activeRoutineWorkout != null) {
         RoutineWorkoutScreen(viewModel = viewModel)
     } else {
+        // The order of the bottom bar. Home sits between Progress and Profile, which is where the
+        // athlete expects the entry point to the app to be.
         val screens = listOf(
             Screen.LogWorkout,
             Screen.Progress,
+            Screen.Home,
             Screen.Profile,
             Screen.AiCoach
         )
 
         val navBackStackEntry by navController.currentBackStackEntryAsState()
-        val currentRoute = navBackStackEntry?.destination?.route ?: Screen.LogWorkout.route
+        val currentRoute = navBackStackEntry?.destination?.route ?: Screen.Home.route
 
         val isKeyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
 
@@ -242,59 +256,27 @@ fun IronPulseApp() {
                 // during a text edit anyway, and leaving it would shrink the visible list to a row
                 // of dead space above the keyboard.
                 if (!isKeyboardOpen) {
-                    NavigationBar(
-                        containerColor = DarkSurface,
-                        tonalElevation = 8.dp,
-                        modifier = Modifier.testTag("bottom_navigation_bar")
-                    ) {
-                        screens.forEach { screen ->
-                            val isSelected = currentRoute == screen.route
-                            NavigationBarItem(
-                                selected = isSelected,
-                                onClick = {
-                                    if (currentRoute != screen.route) {
-                                        navController.navigate(screen.route) {
-                                            popUpTo(navController.graph.findStartDestination().id) {
-                                                saveState = true
-                                            }
-                                            launchSingleTop = true
-                                            restoreState = true
-                                        }
+                    IronBottomBar(
+                        screens = screens,
+                        currentRoute = currentRoute,
+                        onSelect = { screen ->
+                            if (currentRoute != screen.route) {
+                                navController.navigate(screen.route) {
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        saveState = true
                                     }
-                                },
-                                icon = {
-                                    Icon(
-                                        imageVector = screen.icon,
-                                        contentDescription = screen.title,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                },
-                                label = {
-                                    Text(
-                                        text = screen.title,
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                            fontSize = 11.sp
-                                        )
-                                    )
-                                },
-                                colors = NavigationBarItemDefaults.colors(
-                                    selectedIconColor = DarkBg,
-                                    selectedTextColor = ElectricCyan,
-                                    indicatorColor = ElectricCyan,
-                                    unselectedIconColor = TextMuted,
-                                    unselectedTextColor = TextMuted
-                                ),
-                                modifier = Modifier.testTag(screen.tag)
-                            )
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            }
                         }
-                    }
+                    )
                 }
             }
         ) { innerPadding ->
             NavHost(
                 navController = navController,
-                startDestination = Screen.LogWorkout.route,
+                startDestination = Screen.Home.route,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
@@ -327,6 +309,42 @@ fun IronPulseApp() {
                         onBack = { navController.popBackStack() }
                     )
                 }
+                composable(Screen.Home.route) {
+                    HomeScreen(
+                        viewModel = viewModel,
+                        onOpenSavedRoutines = {
+                            // The saved routines live in a tab of the AI Coach screen rather than in
+                            // a destination of their own, so the request goes through the view
+                            // model and the tab opens when the coach screen is on screen.
+                            viewModel.requestSavedRoutinesTab()
+                            navController.navigate(Screen.AiCoach.route) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = true
+                                }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        onOpenProgress = {
+                            navController.navigate(Screen.Progress.route) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = true
+                                }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        onOpenLogWorkout = {
+                            navController.navigate(Screen.LogWorkout.route) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = true
+                                }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        }
+                    )
+                }
                 composable(Screen.AiCoach.route) {
                     AiCoachScreen(
                         viewModel = viewModel,
@@ -339,6 +357,106 @@ fun IronPulseApp() {
                                 restoreState = true
                             }
                         }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The bottom navigation bar.
+ *
+ * Built by hand rather than with the Material bar, for two reasons.
+ *
+ * The spacing: every item takes an equal share of the width, so the five destinations stay evenly
+ * spread whatever is in the list and whatever the screen is. Nothing here depends on a fixed
+ * offset or on the number of items, so the bar cannot drift out of alignment when one is added.
+ *
+ * The Home button: it is a circle in the middle of the bar, the way the entry point of a training
+ * app is expected to look. It is dark like the rest of the app, and the ring and the icon light up
+ * when it is the selected destination, which is the difference an athlete can read at a glance
+ * without looking at the label.
+ */
+@Composable
+private fun IronBottomBar(
+    screens: List<Screen>,
+    currentRoute: String,
+    onSelect: (Screen) -> Unit
+) {
+    Surface(
+        color = DarkSurface,
+        tonalElevation = 8.dp,
+        modifier = Modifier.testTag("bottom_navigation_bar")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            screens.forEach { screen ->
+                val isSelected = currentRoute == screen.route
+                val isHome = screen == Screen.Home
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .selectable(
+                            selected = isSelected,
+                            onClick = { onSelect(screen) },
+                            role = Role.Tab
+                        )
+                        .padding(vertical = 4.dp)
+                        .testTag(screen.tag),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .background(
+                                color = when {
+                                    isHome && isSelected -> ElectricCyan.copy(alpha = 0.18f)
+                                    isHome -> DarkBg
+                                    isSelected -> ElectricCyan
+                                    else -> Color.Transparent
+                                },
+                                shape = if (isHome) CircleShape else RoundedCornerShape(20.dp)
+                            )
+                            .then(
+                                if (isHome) {
+                                    Modifier.border(
+                                        width = if (isSelected) 2.dp else 1.dp,
+                                        color = if (isSelected) ElectricCyan else DarkBorder,
+                                        shape = CircleShape
+                                    )
+                                } else {
+                                    Modifier
+                                }
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = screen.icon,
+                            contentDescription = screen.title,
+                            tint = when {
+                                isHome && isSelected -> ElectricCyan
+                                isHome -> TextMuted
+                                isSelected -> DarkBg
+                                else -> TextMuted
+                            },
+                            modifier = Modifier.size(if (isHome) 21.dp else 24.dp)
+                        )
+                    }
+                    Text(
+                        text = screen.title,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            fontSize = 11.sp
+                        ),
+                        color = if (isSelected) ElectricCyan else TextMuted,
+                        maxLines = 1
                     )
                 }
             }

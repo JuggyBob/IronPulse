@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.data.model.Weekday
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.DarkSurfaceVariant
@@ -41,26 +42,25 @@ import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 
-/** Longest routine the builder allows, so the list can never overflow the screen. */
-private const val MAX_ROUTINE_DAYS = 7
-
 /**
- * Chooses which training day new exercises are assigned to.
+ * Chooses the weekday new exercises are assigned to.
  *
- * The entry count always follows [daysPerWeek]: a two day routine offers two entries and a four day
- * routine offers four, so a day that does not exist can never be picked.
+ * The seven days of the week are always offered: a routine is a week, and a day without an
+ * exercise in it is a rest day rather than a day that does not exist. The days are listed in the
+ * order the athlete's week runs in.
+ *
+ * @param exerciseCount how many exercises each weekday holds, so the menu can say which days are
+ *        training days and which are rest days.
  */
 @Composable
 fun DayDropdown(
-    daysPerWeek: Int,
     selectedDay: Int,
     onSelect: (Int) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    weekStartsOnMonday: Boolean = true,
+    exerciseCount: Map<Int, Int> = emptyMap()
 ) {
-    // A day count can only shrink while the routine is being edited, so the selection is clamped
-    // rather than kept pointing at a day that no longer exists.
-    val safeDays = daysPerWeek.coerceIn(1, MAX_ROUTINE_DAYS)
-    val safeSelected = selectedDay.coerceIn(1, safeDays)
+    val safeSelected = selectedDay.coerceIn(1, Weekday.COUNT)
 
     var expanded by remember { mutableStateOf(false) }
 
@@ -76,7 +76,7 @@ fun DayDropdown(
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Text(
-                text = "Day $safeSelected of $safeDays",
+                text = Weekday.name(safeSelected),
                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                 color = MintGreen
             )
@@ -94,15 +94,16 @@ fun DayDropdown(
             modifier = Modifier
                 .background(DarkBg, RoundedCornerShape(10.dp))
                 .border(1.dp, DarkBorder, RoundedCornerShape(10.dp))
-                .heightIn(max = 260.dp)
+                .heightIn(max = 320.dp)
                 .testTag("assign_day_dropdown_menu")
         ) {
-            (1..safeDays).forEach { day ->
+            Weekday.ordered(weekStartsOnMonday).forEach { day ->
                 val isSelected = day == safeSelected
+                val count = exerciseCount[day] ?: 0
                 DropdownMenuItem(
                     text = {
                         Text(
-                            text = "Day $day",
+                            text = Weekday.name(day),
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                             ),
@@ -110,14 +111,11 @@ fun DayDropdown(
                         )
                     },
                     trailingIcon = {
-                        if (isSelected) {
-                            Icon(
-                                imageVector = Icons.Default.Check,
-                                contentDescription = null,
-                                tint = ElectricCyan,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
+                        Text(
+                            text = if (count > 0) "$count ex" else "Rest",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (count > 0) MintGreen else TextMuted
+                        )
                     },
                     onClick = {
                         onSelect(day)

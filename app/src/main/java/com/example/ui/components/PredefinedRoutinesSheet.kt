@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import com.example.data.model.Exercise
 import com.example.data.model.PredefinedRoutines
 import com.example.data.model.RoutineParser
+import com.example.data.model.Weekday
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.DarkSurface
@@ -234,7 +235,7 @@ private fun TemplateCard(
                         .padding(horizontal = 7.dp, vertical = 3.dp)
                 ) {
                     Text(
-                        text = "D${day.dayNumber}",
+                        text = Weekday.shortName(day.weekday),
                         style = MaterialTheme.typography.labelSmall,
                         color = ElectricCyan
                     )
@@ -297,7 +298,7 @@ private fun TemplatePreview(
         Spacer(modifier = Modifier.height(12.dp))
         template.days.forEach { day ->
             Text(
-                text = day.title,
+                text = "${Weekday.name(day.weekday)} • ${day.focus}",
                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                 color = ElectricCyan
             )

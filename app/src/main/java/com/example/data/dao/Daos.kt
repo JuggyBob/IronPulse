@@ -406,6 +406,30 @@ interface SavedRoutineDao {
 
     @Query("DELETE FROM saved_routines")
     suspend fun deleteAllRoutines()
+
+    /**
+     * The routines whose days are still the old numbered training days.
+     *
+     * Empty once the migration has run, which is what makes it cheap to ask on every open.
+     */
+    @Query("SELECT * FROM saved_routines WHERE scheduleVersion < 1")
+    suspend fun getRoutinesNeedingScheduleMigration(): List<SavedRoutine>
+
+    /**
+     * Writes the migrated days of a routine back.
+     *
+     * The name, the description and the goal are not touched: the migration only binds the days.
+     */
+    @Query(
+        "UPDATE saved_routines SET exercisesJson = :exercisesJson, daysPerWeek = :daysPerWeek, " +
+            "scheduleVersion = :scheduleVersion WHERE id = :id"
+    )
+    suspend fun updateRoutineSchedule(
+        id: Long,
+        exercisesJson: String,
+        daysPerWeek: Int,
+        scheduleVersion: Int
+    )
 }
 
 @Dao

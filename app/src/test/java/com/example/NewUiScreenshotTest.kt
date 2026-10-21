@@ -138,8 +138,8 @@ class NewUiScreenshotTest {
             MyApplicationTheme {
                 Column(modifier = Modifier.background(DarkBg).padding(12.dp)) {
                     Text("Assign added exercises to:")
-                    DayDropdown(daysPerWeek = 2, selectedDay = 1, onSelect = {})
-                    DayDropdown(daysPerWeek = 4, selectedDay = 3, onSelect = {})
+                    DayDropdown(selectedDay = 1, onSelect = {})
+                    DayDropdown(selectedDay = 3, onSelect = {}, weekStartsOnMonday = false)
                 }
             }
         }

@@ -391,8 +391,8 @@ private fun WelcomePage() {
         Bullet("1,334 built in exercises, each with an animation of the movement.")
         Bullet("A library sorted into muscle groups, equipment and movement type, so searching by body " +
             "part finds what you actually did.")
-        Bullet("Build a routine once and run it on however many days a week you train; the app keeps " +
-            "the right exercises on the right day.")
+        Bullet("Build a routine once and it becomes a week: every day of it has its own workout, and " +
+            "a day with nothing on it is a rest day.")
         Bullet("Everything is stored on your phone. No account to make, and nothing uploaded unless " +
             "you ask for AI help.")
     }
@@ -408,7 +408,7 @@ private fun LogPage() {
         testTag = "onboarding_page_log"
     ) {
         Bullet("Quick workout: start it, tap the exercises you did, tick the sets off as you go.")
-        Bullet("Saved routine: run a routine you built once, and pick which training day it is.")
+        Bullet("Saved routine: run a routine you built once, and pick which day of the week it is.")
         Bullet("Three ready made routines, so you have somewhere to start before you build your own.")
         Bullet("The rest timer and the set renumbering are handled for you while you lift.")
         Bullet("Tap an exercise name mid set to check the movement, without leaving the workout.")

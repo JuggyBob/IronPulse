@@ -541,7 +541,7 @@ fun PromptWorkoutRoutineDialog(
                                                         if (parsedDays.size > 1) {
                                                             showDayPickerForRoutine = savedRoutine
                                                         } else {
-                                                            viewModel.startRoutineWorkout(savedRoutine, targetDayNumber = 1)
+                                                            viewModel.startRoutineWorkout(savedRoutine)
                                                             onStartWorkoutDirectly()
                                                         }
                                                     }
@@ -549,7 +549,7 @@ fun PromptWorkoutRoutineDialog(
                                                     if (parsedDays.size > 1) {
                                                         showDayPickerForRoutine = successState.routine
                                                     } else {
-                                                        viewModel.startRoutineWorkout(successState.routine, targetDayNumber = 1)
+                                                        viewModel.startRoutineWorkout(successState.routine)
                                                         onStartWorkoutDirectly()
                                                     }
                                                 }
@@ -671,7 +671,7 @@ fun PromptWorkoutRoutineDialog(
                 days = pickerDays,
                 onSelectDay = { day ->
                     val r = showDayPickerForRoutine!!
-                    viewModel.startRoutineWorkout(r, targetDayNumber = day.dayNumber)
+                    viewModel.startRoutineWorkout(r, targetWeekday = day.weekday)
                     showDayPickerForRoutine = null
                     onStartWorkoutDirectly()
                 },

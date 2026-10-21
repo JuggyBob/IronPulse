@@ -29,13 +29,21 @@ object PredefinedRoutines {
         val days: List<TemplateDay>
     )
 
+    /**
+     * One training day of a template.
+     *
+     * @param weekday the day of the week this session is scheduled on: 1 = Monday ... 7 = Sunday.
+     * @param focus what the day trains, e.g. "Legs, chest, triceps".
+     */
     data class TemplateDay(
-        val dayNumber: Int,
-        val title: String,
+        val weekday: Int,
         val focus: String,
         /** "name (sets x reps)" entries, resolved against the catalog on adoption. */
         val entries: List<String>
-    )
+    ) {
+        /** The name of the day, e.g. "Monday". */
+        val dayName: String get() = Weekday.name(weekday)
+    }
 
     /**
      * A four day full body split that leans on the barbell basics, with a calisthenics finisher.
@@ -56,7 +64,7 @@ object PredefinedRoutines {
         suitedTo = "Beginners and intermediates training 4 days a week",
         days = listOf(
             TemplateDay(
-                1, "Day 1: Squat & Push", "Legs, chest, triceps",
+                Weekday.MONDAY, "Legs, chest, triceps",
                 listOf(
                     "Barbell Full Squat (4 x 6)",
                     "Barbell Bench Press (4 x 6)",
@@ -65,7 +73,7 @@ object PredefinedRoutines {
                 )
             ),
             TemplateDay(
-                2, "Day 2: Pull & Press", "Back, shoulders, arms",
+                Weekday.TUESDAY, "Back, shoulders, arms",
                 listOf(
                     "Barbell Bent Over Row (4 x 6)",
                     "Barbell Seated Overhead Press (4 x 6)",
@@ -74,7 +82,7 @@ object PredefinedRoutines {
                 )
             ),
             TemplateDay(
-                3, "Day 3: Deadlift & Legs", "Posterior chain, hamstrings",
+                Weekday.THURSDAY, "Posterior chain, hamstrings",
                 listOf(
                     "Barbell Deadlift (4 x 5)",
                     "Barbell Front Squat (3 x 8)",
@@ -83,7 +91,7 @@ object PredefinedRoutines {
                 )
             ),
             TemplateDay(
-                4, "Day 4: Upper Volume", "Chest, back, shoulders",
+                Weekday.SATURDAY, "Chest, back, shoulders",
                 listOf(
                     "Barbell Incline Bench Press (4 x 8)",
                     "Barbell Bent Over Row (4 x 8)",
@@ -110,7 +118,7 @@ object PredefinedRoutines {
         suitedTo = "Anyone already training three days a week",
         days = listOf(
             TemplateDay(
-                1, "Day 1: Push", "Chest, shoulders, triceps",
+                Weekday.MONDAY, "Chest, shoulders, triceps",
                 listOf(
                     "Barbell Bench Press (4 x 8)",
                     "Dumbbell Incline Bench Press (3 x 10)",
@@ -119,7 +127,7 @@ object PredefinedRoutines {
                 )
             ),
             TemplateDay(
-                2, "Day 2: Pull", "Back and biceps",
+                Weekday.WEDNESDAY, "Back and biceps",
                 listOf(
                     "Barbell Deadlift (4 x 5)",
                     "Barbell Bent Over Row (4 x 8)",
@@ -128,7 +136,7 @@ object PredefinedRoutines {
                 )
             ),
             TemplateDay(
-                3, "Day 3: Legs", "Quads, hamstrings, calves",
+                Weekday.FRIDAY, "Quads, hamstrings, calves",
                 listOf(
                     "Barbell Full Squat (4 x 8)",
                     "Barbell Romanian Deadlift (3 x 10)",
@@ -156,7 +164,7 @@ object PredefinedRoutines {
         suitedTo = "Training at home or with only a pull-up bar",
         days = listOf(
             TemplateDay(
-                1, "Day 1: Push & Core", "Chest, triceps, core",
+                Weekday.MONDAY, "Chest, triceps, core",
                 listOf(
                     "Push-Up (4 x 10)",
                     "Chest Dip (4 x 8)",
@@ -165,7 +173,7 @@ object PredefinedRoutines {
                 )
             ),
             TemplateDay(
-                2, "Day 2: Pull", "Back and biceps",
+                Weekday.WEDNESDAY, "Back and biceps",
                 listOf(
                     "Pull-Up (4 x 6)",
                     "Chin-Up (3 x 8)",
@@ -176,7 +184,7 @@ object PredefinedRoutines {
                 )
             ),
             TemplateDay(
-                3, "Day 3: Legs & Core", "Quads, calves, core",
+                Weekday.FRIDAY, "Quads, calves, core",
                 listOf(
                     "Bodyweight Drop Jump Squat (4 x 20)",
                     "Barbell Single Leg Split Squat (3 x 10)",
@@ -204,8 +212,8 @@ object PredefinedRoutines {
                 RoutineExerciseItem(
                     exerciseName = entry.substringBefore(" ("),
                     prescription = entry.substringAfter(" (", "").removeSuffix(")"),
-                    dayNumber = day.dayNumber,
-                    dayTitle = "Day ${day.dayNumber}: ${day.focus}"
+                    weekday = day.weekday,
+                    dayTitle = day.focus
                 )
             }
         }

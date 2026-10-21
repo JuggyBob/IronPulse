@@ -29,6 +29,7 @@ import com.example.data.model.ExerciseMedia
 import com.example.data.model.PredefinedRoutines
 import com.example.data.model.ExerciseType
 import com.example.data.model.GeminiSummary
+import com.example.data.model.HomeDashboard
 import com.example.data.model.LoggedSet
 import com.example.data.model.LoggedSetNumbering
 import com.example.data.model.MonthlyExerciseAnalyzer
@@ -39,9 +40,12 @@ import com.example.data.model.MusclePart
 import com.example.data.model.MusclePartResolver
 import com.example.data.model.ActivityDay
 import com.example.data.model.ActivityHeatmap
+import com.example.data.model.AiRoutineSchedule
+import com.example.data.model.Weekday
 import com.example.data.model.SessionWithSets
 import com.example.data.model.RoutineExerciseItem
 import com.example.data.model.RoutineParser
+import com.example.data.model.RoutineDay
 import com.example.data.model.SavedRoutine
 import com.example.data.model.UnstructuredParseState
 import com.example.data.model.CustomRoutinePromptState
@@ -50,6 +54,7 @@ import com.example.data.model.WeightConversion
 import com.example.data.model.UserProfile
 import com.example.data.model.WorkoutDraft
 import com.example.data.model.WorkoutDraftCodec
+import com.example.data.model.WorkoutMetrics
 import com.example.data.model.WorkoutSession
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.repository.FitnessRepository
@@ -1467,7 +1472,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 sets = routine.sets,
                 routineId = routine.routineId,
                 routineGoal = routine.routineGoal,
-                dayNumber = routine.dayNumber ?: 1,
+                weekday = routine.weekday ?: Weekday.MONDAY,
                 dayTitle = routine.dayTitle.orEmpty(),
                 dayNote = routine.dayNote,
                 routineItems = routine.routineItems
@@ -1540,8 +1545,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 exercises = exercises,
                 routineItems = draft.routineItems,
                 sets = draft.sets,
-                dayNumber = draft.dayNumber,
-                dayTitle = draft.dayTitle.ifBlank { "Day 1" },
+                weekday = draft.weekday,
+                dayTitle = draft.dayTitle,
                 dayNote = draft.dayNote
             )
         } else {
@@ -1671,22 +1676,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             BodyWeightTimeline.bodyWeightForSet(set, profile.currentWeightKg)
 
         /** Load actually lifted, or null when there is no usable body weight for the set. */
-        fun effectiveWeightOrNull(set: LoggedSet): Double? = when (set.exerciseType) {
-            ExerciseType.STANDARD_WEIGHT -> set.weight
-            ExerciseType.ADDED_WEIGHT -> bodyWeightOf(set)?.let { it + set.addedWeight }
-            else -> bodyWeightOf(set)
-        }
+        fun effectiveWeightOrNull(set: LoggedSet): Double? =
+            WorkoutMetrics.effectiveWeightKg(set, bodyWeightOf(set))
 
-        // Filter by isolated weight tag if specified
-        val filteredSets = if (addedWeightFilter != null) {
+        // Filter by isolated weight tag if specified.
+        //
+        // The tag is a plain number inside the block, not a nullable one. A Double compared
+        // against a Double? is boxed on both sides, and a boxed Double is compared by reference
+        // rather than by value, so the tag is unwrapped before it is compared.
+        val filteredSets = addedWeightFilter?.let { tag ->
             sets.filter { set ->
-                set.weight == addedWeightFilter ||
-                set.addedWeight == addedWeightFilter ||
-                (set.weight == 0.0 && set.addedWeight == 0.0 && bodyWeightOf(set) == addedWeightFilter)
+                set.weight == tag ||
+                set.addedWeight == tag ||
+                (set.weight == 0.0 && set.addedWeight == 0.0 && bodyWeightOf(set) == tag)
             }
-        } else {
-            sets
-        }
+        } ?: sets
 
         if (filteredSets.isEmpty()) return@combine emptyList()
 
@@ -1711,8 +1715,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val measurable = daySets.filter { effectiveWeightOrNull(it) != null }
                     measurable.maxOfOrNull { set ->
                         val effectiveWeight = effectiveWeightOrNull(set) ?: 0.0
-                        if (set.reps <= 1) effectiveWeight
-                        else effectiveWeight * (36.0 / (37.0 - set.reps.coerceAtMost(36).toDouble()))
+                        WorkoutMetrics.estimateOneRepMax(effectiveWeight, set.reps)
                     } ?: return@mapNotNull null
                 }
                 ProgressMetric.TOTAL_VOLUME -> {
@@ -2068,21 +2071,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             val allSets = repository.getSetsForExerciseList(exerciseName)
 
-            // Each set carries the body weight it was done at. The analyzer only has a timestamp to
-            // work with, so the snapshot is looked up by it: sets logged in the same session share
-            // a timestamp and therefore a body weight. A set logged before the snapshot existed has
-            // none, and falls back to the profile weight, which is the best guess available.
-            val bodyWeightByTimestamp = allSets.associate { it.timestamp to it.bodyWeightKg }
-            fun bodyWeightAt(timestamp: Long): Double? =
-                bodyWeightByTimestamp[timestamp]?.takeIf { it > 0.0 }
-                    ?: BodyWeightTimeline.currentWeightOrNull(userProfile.value.currentWeightKg)
+            // The body weight each set was done at, taken from the snapshot the set carries.
+            //
+            // The set is the unit here, not the timestamp: a set carries its own body weight, and
+            // two sets of the same session can have been done at different weights. A set logged
+            // before the snapshot existed has none, and falls back to the profile weight, which is
+            // the best guess available and the same fallback every other screen uses.
+            fun bodyWeightForSet(set: LoggedSet): Double? =
+                BodyWeightTimeline.bodyWeightForSet(set, userProfile.value.currentWeightKg)
 
             val summary = MonthlyExerciseAnalyzer.build(
                 exerciseName = exerciseName,
                 exerciseType = exerciseType,
                 weightUnit = summaryUnit,
                 sets = allSets,
-                bodyWeightAt = ::bodyWeightAt
+                bodyWeightForSet = ::bodyWeightForSet
             )
 
             // The user cancelled, switched exercise or started another request in the meantime
@@ -2262,6 +2265,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             UserPreferencesRepository.AppSettings()
         )
 
+    /**
+     * Whether the athlete's week starts on Monday.
+     *
+     * Read straight from the settings, so the routine editor, the dashboard, the weekly summaries
+     * and the AI import all agree on where the week begins.
+     */
+    fun weekStartsOnMonday(): Boolean = appSettings.value.weekStartsOnMonday
+
+    /** Where a week begins, as a flow for the screens that redraw when the setting changes. */
+    val weekStartFlow: StateFlow<Boolean> = appSettings
+        .map { it.weekStartsOnMonday }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
+
+    /** Changes the first day of the week. */
+    fun setWeekStartsOnMonday(enabled: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) { userPreferencesRepo.setWeekStartsOnMonday(enabled) }
+    }
+
     fun setWeightUnit(unit: String) {
         viewModelScope.launch(Dispatchers.IO) {
             userPreferencesRepo.setWeightUnit(unit)
@@ -2378,12 +2399,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * logged set is used as a second source, and a day with logged sets always keeps a visible
      * floor of colour (see [ActivityHeatmap.intensity]).
      */
-    val activityDays: StateFlow<List<ActivityDay>> = repository.getAllSessionsWithSets()
-        .map { sessions -> buildActivityDays(sessions) }
+    val activityDays: StateFlow<List<ActivityDay>> = combine(
+        repository.getAllSessionsWithSets(),
+        userProfile
+    ) { sessions, profile -> buildActivityDays(sessions, profile.currentWeightKg) }
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    private fun buildActivityDays(sessions: List<SessionWithSets>): List<ActivityDay> {
+    private fun buildActivityDays(
+        sessions: List<SessionWithSets>,
+        profileWeightKg: Double
+    ): List<ActivityDay> {
         val oneYearAgo = ActivityHeatmap.startOfDay(
             java.util.Calendar.getInstance().apply { add(java.util.Calendar.MONTH, -12) }.timeInMillis
         )
@@ -2396,20 +2422,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val day = ActivityHeatmap.startOfDay(wrapper.session.startTime)
             if (day < oneYearAgo) return@forEach
 
-            val setTimestamps = wrapper.sets.map { it.timestamp }
-            val spanMinutes = if (setTimestamps.size >= 2) {
-                ((setTimestamps.max() - setTimestamps.min()) / 60_000L).toInt().coerceAtLeast(0)
-            } else {
-                0
+            // The same duration and the same volume the Progress chart uses, so the two screens
+            // never tell the athlete two different things about the same week.
+            val minutes = WorkoutMetrics.minutes(wrapper.session, wrapper.sets)
+            val volume = WorkoutMetrics.sessionVolume(wrapper.sets) { set ->
+                BodyWeightTimeline.bodyWeightForSet(set, profileWeightKg)
             }
-            val sessionMinutes = if (wrapper.session.endTime > wrapper.session.startTime) {
-                ((wrapper.session.endTime - wrapper.session.startTime) / 60_000L).toInt()
-            } else {
-                0
-            }
-            // The session duration wins when it is meaningful, the set span is the fallback
-            val minutes = maxOf(sessionMinutes, spanMinutes)
-            val volume = wrapper.sets.sumOf { (it.weight + it.addedWeight) * it.reps }
 
             minutesByDay[day] = (minutesByDay[day] ?: 0) + minutes
             volumeByDay[day] = (volumeByDay[day] ?: 0.0) + volume
@@ -2429,6 +2447,123 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // === SAVED ROUTINES ===
     val savedRoutines: StateFlow<List<SavedRoutine>> = repository.getAllSavedRoutines()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /**
+     * Asks the AI Coach screen to open on its Saved Routines tab.
+     *
+     * The saved routines are a tab of the coach screen rather than a destination of their own, so
+     * a request from elsewhere in the app has to travel through here. The counter is what the
+     * coach screen watches: a repeat request is a new number, not the same one again.
+     */
+    private val _savedRoutinesTabRequest = MutableStateFlow(0)
+    val savedRoutinesTabRequest: StateFlow<Int> = _savedRoutinesTabRequest.asStateFlow()
+
+    fun requestSavedRoutinesTab() {
+        _savedRoutinesTabRequest.value = _savedRoutinesTabRequest.value + 1
+    }
+
+    // === HOME DASHBOARD ===
+
+    /**
+     * Every finished workout with its sets.
+     *
+     * One read of the history feeds every number on the Home screen, so the dashboard never
+     * shows two different versions of the same week.
+     */
+    val workoutHistory: StateFlow<List<SessionWithSets>> = repository.getAllSessionsWithSets()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** The body weight that applied to a set, taken from the snapshot the set carries. */
+    private fun bodyWeightForSet(profileWeightKg: Double): (LoggedSet) -> Double? = { set ->
+        BodyWeightTimeline.bodyWeightForSet(set, profileWeightKg)
+    }
+
+    /**
+     * The last seven calendar dates, today included, with the volume and the time trained on each.
+     */
+    val homeHeatmap: StateFlow<List<HomeDashboard.DayCell>> = combine(
+        workoutHistory,
+        userProfile
+    ) { sessions, profile ->
+        HomeDashboard.rollingHeatmap(
+            sessions = sessions,
+            today = System.currentTimeMillis(),
+            bodyWeightForSet = bodyWeightForSet(profile.currentWeightKg)
+        )
+    }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /**
+     * The number of days on which the athlete completed a qualifying workout.
+     *
+     * It is the number of distinct calendar days, not a streak, so it never resets.
+     */
+    val lifetimeTrainingDays: StateFlow<Int> = workoutHistory
+        .map { sessions -> HomeDashboard.qualifyingDayCount(sessions) }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    /** The totals of the calendar week the athlete is in. */
+    val weekTotals: StateFlow<HomeDashboard.WeekTotals> = combine(
+        workoutHistory,
+        userProfile,
+        weekStartFlow
+    ) { sessions, profile, weekStartsOnMonday ->
+        HomeDashboard.weekTotals(
+            sessions = sessions,
+            today = System.currentTimeMillis(),
+            weekStartsOnMonday = weekStartsOnMonday,
+            bodyWeightForSet = bodyWeightForSet(profile.currentWeightKg)
+        )
+    }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeDashboard.WeekTotals(0, 0, 0.0))
+
+    /** The last workout the athlete finished. */
+    val recentWorkout: StateFlow<SessionWithSets?> = workoutHistory
+        .map { sessions -> HomeDashboard.mostRecentWorkout(sessions) }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /** The routine the athlete has scheduled their week with. */
+    val activeRoutineId: StateFlow<Long> = userPreferencesRepo.activeRoutineIdFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
+
+    /**
+     * The routine the athlete has scheduled their week with.
+     *
+     * Null when none has been picked, or when the routine it named has been deleted. The Home
+     * screen then asks the athlete to choose one rather than picking one for them.
+     */
+    val activeRoutine: StateFlow<SavedRoutine?> = combine(
+        savedRoutines,
+        activeRoutineId
+    ) { routines, id ->
+        if (id <= 0L) null else routines.firstOrNull { it.id == id }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /** Schedules a routine as the athlete's week, or clears it with 0. */
+    fun setActiveRoutine(routineId: Long) {
+        viewModelScope.launch(Dispatchers.IO) { userPreferencesRepo.setActiveRoutineId(routineId) }
+    }
+
+    /**
+     * The seven days of the scheduled routine, one per weekday.
+     *
+     * A day with no exercises in it is a rest day.
+     */
+    val activeRoutineDays: StateFlow<List<RoutineDay>> = combine(
+        activeRoutine,
+        allExercises,
+        weekStartFlow
+    ) { routine, exercises, weekStartsOnMonday ->
+        if (routine == null) {
+            emptyList()
+        } else {
+            RoutineParser.parseWeek(routine.exercisesJson, exercises, weekStartsOnMonday)
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     fun saveRoutine(routine: SavedRoutine) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -2485,8 +2620,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         category = match?.category.orEmpty(),
                         equipment = match?.equipment.orEmpty(),
                         prescription = prescription,
-                        dayNumber = day.dayNumber,
-                        dayTitle = day.title
+                        weekday = day.weekday,
+                        dayTitle = day.focus
                     )
                 }
             }
@@ -2556,26 +2691,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return exercise.copy(exerciseType = ExerciseType.ADDED_WEIGHT)
     }
 
-    fun startRoutineWorkout(routine: SavedRoutine, targetDayNumber: Int? = null) {
+    /**
+     * Starts a routine workout.
+     *
+     * @param targetWeekday the weekday to train, 1 = Monday ... 7 = Sunday. When it is null the
+     *        first day of the routine is used.
+     */
+    fun startRoutineWorkout(routine: SavedRoutine, targetWeekday: Int? = null) {
         // Dismiss any lingering quick workout tray so only the dedicated routine workout runs
         _activeSession.value = null
         _activeSets.value = emptyList()
         _activeSessionExercises.value = emptyList()
 
         val allEx = allExercises.value
-        val days = RoutineParser.parseDays(routine.exercisesJson, allEx)
+        val days = RoutineParser.parseDays(routine.exercisesJson, allEx, weekStartsOnMonday())
 
-        val targetDay = if (targetDayNumber != null && days.isNotEmpty()) {
-            days.firstOrNull { it.dayNumber == targetDayNumber } ?: days.first()
+        // The day the athlete asked for, or the first day of the routine. A rest day is never
+        // started: an empty routine must not launch an empty session.
+        val targetDay = if (targetWeekday != null && days.isNotEmpty()) {
+            days.firstOrNull { it.weekday == targetWeekday && it.exercises.isNotEmpty() }
+                ?: days.firstOrNull { it.exercises.isNotEmpty() }
         } else if (days.isNotEmpty()) {
-            days.first()
+            days.firstOrNull { it.exercises.isNotEmpty() }
         } else {
             null
         }
 
-        val routineItems = targetDay?.exercises ?: RoutineParser.parseExercises(routine.exercisesJson, allEx)
-        val dayNumber = targetDay?.dayNumber ?: 1
-        val dayTitle = targetDay?.dayTitle ?: "Day 1"
+        val routineItems = targetDay?.exercises
+            ?: RoutineParser.parseExercises(routine.exercisesJson, allEx, weekStartsOnMonday())
+        val weekday = targetDay?.weekday ?: Weekday.MONDAY
+        val dayTitle = targetDay?.dayTitle.orEmpty()
         val dayNote = targetDay?.note.orEmpty()
 
         val exMap = allEx.associateBy { it.id }
@@ -2665,7 +2810,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             exercises = resolvedExercises,
             routineItems = routineItems,
             sets = initialSets,
-            dayNumber = dayNumber,
+            weekday = weekday,
             dayTitle = dayTitle,
             dayNote = dayNote
         )
@@ -3038,18 +3183,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 append("{\n")
                 append("  \"routine_name\": \"<short routine title>\",\n")
                 append("  \"routine_goal\": \"<short goal>\",\n")
-                append("  \"days_per_week\": ${routineDaysPerWeek.value},\n")
-                append("  \"day_notes\": [ { \"day\": 1, \"note\": \"<one short motivating sentence>\" } ],\n")
-                append("  \"exercises\": [\n")
+                append("  \"days\": [\n")
                 append("    {\n")
-                append("      \"name\": \"<EXACT exercise name copied from the catalog>\",\n")
-                append("      \"sets\": 4,\n")
-                append("      \"reps\": 8,\n")
-                append("      \"weight\": 0.0,\n")
-                append("      \"holdSeconds\": 0,\n")
-                append("      \"prescription\": \"4 sets x 8 reps\",\n")
-                append("      \"day\": 1,\n")
-                append("      \"dayTitle\": \"Day 1: Upper Body Push\"\n")
+                append("      \"weekday\": \"Monday\",\n")
+                append("      \"focus\": \"<short focus of the day, e.g. Upper Body Push>\",\n")
+                append("      \"note\": \"<one short motivating sentence, or empty>\",\n")
+                append("      \"exercises\": [\n")
+                append("        {\n")
+                append("          \"name\": \"<EXACT exercise name copied from the catalog>\",\n")
+                append("          \"sets\": 4,\n")
+                append("          \"reps\": 8,\n")
+                append("          \"weight\": 0.0,\n")
+                append("          \"holdSeconds\": 0,\n")
+                append("          \"prescription\": \"4 sets x 8 reps\"\n")
+                append("        }\n")
+                append("      ]\n")
                 append("    }\n")
                 append("  ]\n")
                 append("}\n\n")
@@ -3064,6 +3212,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 append("- NEVER put equipment ('Barbell', 'Dumbbells', 'with Barbell', ...) in \"prescription\".\n")
                 append("- NEVER add any commentary, notes, tempo, rest or technique hints to \"prescription\".\n")
                 append("- Order the exercises day by day, exactly as the athlete should perform them.\n")
+                append(weekdayPromptRules())
             }
 
             val customKey = geminiApiKey.value.ifBlank { userProfile.value.customApiKey }
@@ -3075,15 +3224,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             result.fold(
                 onSuccess = { rawResponse ->
                     // The model may still wrap the object in prose: parse it, never store it raw
-                    val routineItems = parseAiRoutineItems(rawResponse, knownExercises)
-                    if (routineItems.isEmpty()) {
+                    val parsed = parseAiRoutine(rawResponse, knownExercises)
+                    if (!parsed.isValid || parsed.items.isEmpty()) {
                         generatedRoutine.value = ""
                         showAiError(
                             "Routine Generation Failed",
-                            "The AI did not return any usable exercise. Please generate the routine again."
+                            parsed.errorReason.ifBlank {
+                                "The AI did not return any usable exercise. Please generate the routine again."
+                            }
                         )
                     } else {
-                        generatedRoutine.value = RoutineParser.serializeExercises(routineItems)
+                        generatedRoutine.value = RoutineParser.serializeExercises(parsed.items)
                     }
                 },
                 onFailure = { error ->
@@ -3096,83 +3247,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Turns an AI routine answer into [RoutineExerciseItem]s.
+     * The scheduling rules every routine prompt carries.
      *
-     * Shared by every AI routine flow: it tolerates prose around the JSON, refuses names that are
-     * clearly sentences (the "first exercise is a description" bug) and only keeps real exercises.
+     * The app applies the rules itself, so the prompt only has to ask for the right shape: the model
+     * names the weekdays it was given, and [AiRoutineSchedule] works out the rest. The week start is
+     * passed in because the model has to know where an unspecified sequence of workouts begins.
      */
-    private fun parseAiRoutineItems(
+    private fun weekdayPromptRules(usesDaysArray: Boolean = true): String {
+        val firstDay = if (weekStartsOnMonday()) "Monday" else "Sunday"
+        return buildString {
+            append("\nSCHEDULE RULES:\n")
+            if (usesDaysArray) {
+                append("- The routine is a week of seven days. Use the \"days\" array, with one entry per training day.\n")
+                append("- \"weekday\" MUST be the full name of the day of the week: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday or Sunday. Never write a number and never write \"Day 1\".\n")
+                append("- \"focus\" is a short label for the day, e.g. \"Upper Body Push\". Never put the weekday name in it.\n")
+                append("- \"note\" is one short motivating sentence for the day, or an empty string.\n")
+            } else {
+                append("- \"weekday\" MUST be the full name of the day of the week: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday or Sunday. Never write a number and never write \"Day 1\".\n")
+                append("- Use \"weekday\" ONLY when the athlete's own text names the day of the week. When it does not, leave it out and use \"day\" instead.\n")
+            }
+            append("- Only include the days that hold a workout. Every day you leave out becomes a rest day.\n")
+            append("- The athlete's week starts on $firstDay. Spread the training days over the week so that the same day is never used twice, and keep at least one rest day between two hard sessions.\n")
+        }
+    }
+
+    /**
+     * Turns an AI routine answer into the seven weekday slots of a routine.
+     *
+     * The scheduling rules are applied by [AiRoutineSchedule], not by the model: a weekday the
+     * answer named is kept, a workout with no weekday named is laid out from the start of the
+     * athlete's week, and every day nothing was assigned to is a rest day.
+     */
+    private suspend fun parseAiRoutine(
         rawResponse: String,
         knownExercises: List<Exercise>
-    ): List<RoutineExerciseItem> {
-        val cleaned = RoutineParser.extractJson(rawResponse)
-        val root = try {
-            if (cleaned.trimStart().startsWith("[")) JSONObject("{\"exercises\": $cleaned}")
-            else JSONObject(cleaned)
-        } catch (_: Exception) {
-            return emptyList()
-        }
-
-        val array = root.optJSONArray("exercises") ?: return emptyList()
+    ): AiRoutineSchedule.Parsed {
         val exByName = knownExercises.associateBy { it.name.trim().lowercase() }
-        val notesByDay = mutableMapOf<Int, String>()
-        root.optJSONArray("day_notes")?.let { notes ->
-            for (i in 0 until notes.length()) {
-                val noteObj = notes.optJSONObject(i) ?: continue
-                val day = noteObj.optInt("day", 0)
-                val note = RoutineParser.cleanNoteText(noteObj.optString("note", ""))
-                if (day > 0 && note.isNotBlank()) notesByDay[day] = note
-            }
-        }
-
-        val items = mutableListOf<RoutineExerciseItem>()
-        for (i in 0 until array.length()) {
-            val obj = array.optJSONObject(i) ?: continue
-            val rawName = obj.optString("name").trim()
-            // A greeting / description leaked into the exercises array is dropped, never logged
-            if (RoutineParser.looksLikeProseNotExercise(rawName)) continue
-
-            val sets = obj.optInt("sets", 3).coerceIn(1, 10)
-            val hold = obj.optInt("holdSeconds", 0).coerceAtLeast(0)
-            var reps = obj.optInt("reps", 8).coerceAtLeast(0)
-            val weight = obj.optDouble("weight", 0.0).coerceAtLeast(0.0)
-            val dayNum = obj.optInt("day", 1).coerceAtLeast(1)
-            val dayTitle = obj.optString("dayTitle", "").ifBlank { "Day $dayNum" }
-            // A rep based movement must never end up as a hold only set
-            if (reps <= 0 && hold <= 0) reps = 8
-
-            val matched = exByName[rawName.lowercase()]
-                ?: RoutineParser.findMatchingExercise(rawName, exByName.values)
-            val prescription = RoutineParser.shortPrescription(
-                obj.optString("prescription", ""),
-                matched?.equipment.orEmpty()
-            ).ifBlank {
-                when {
-                    hold > 0 && reps > 0 -> "$sets sets x $reps reps / ${hold}s"
-                    hold > 0 -> "$sets sets x ${hold}s"
-                    else -> "$sets sets x $reps reps"
-                }
-            }
-
-            items.add(
-                RoutineExerciseItem(
-                    exerciseId = matched?.id ?: 0L,
-                    exerciseName = matched?.name ?: rawName,
-                    exerciseType = matched?.exerciseType ?: ExerciseType.STANDARD_WEIGHT,
-                    category = matched?.category.orEmpty(),
-                    equipment = matched?.equipment.orEmpty(),
-                    targetSets = sets,
-                    targetReps = reps,
-                    targetWeight = weight,
-                    targetHoldSeconds = hold,
-                    prescription = prescription,
-                    dayNumber = dayNum,
-                    dayTitle = dayTitle,
-                    dayNote = notesByDay[dayNum].orEmpty()
-                )
-            )
-        }
-        return items
+        return AiRoutineSchedule.parse(
+            rawResponse = rawResponse,
+            resolveExercise = { name ->
+                exByName[name.trim().lowercase()]
+                    ?: RoutineParser.findMatchingExercise(name, exByName.values)
+            },
+            weekStartsOnMonday = weekStartsOnMonday()
+        )
     }
 
     // === UNSTRUCTURED WORKOUT PROGRAM PARSER (GEMINI AI) ===
@@ -3323,6 +3441,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                        * NEVER add commentary, notes, tempo, rest or technique hints to "prescription".
                      - "day": Int (training day number starting at 1, e.g. 1 for Day 1, 2 for Day 2)
                      - "dayTitle": String (title of the training day, e.g. "Day 1: Lower Body" or "Day 1")
+                     - "weekday": String (the full name of the day of the week, e.g. "Monday"). Use it ONLY when the athlete's own text names the day of the week; leave it out when it does not.
 
                 JSON FORMAT REQUIREMENT:
                 Respond ONLY with a valid JSON object:
@@ -3346,8 +3465,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                   ]
                 }
-            """.trimIndent()
-
+            """.trimIndent() + "\n" + weekdayPromptRules(usesDaysArray = false)
             val customKey = geminiApiKey.value.ifBlank { userProfile.value.customApiKey }
             val geminiResult = GeminiClient.generateContent(
                 prompt = prompt,
@@ -3405,41 +3523,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
 
-                    // Process routine items
-                    val exercisesJson = json.optJSONArray("exercises")
-                    val routineItems = mutableListOf<RoutineExerciseItem>()
-
-                    if (exercisesJson != null) {
-                        for (i in 0 until exercisesJson.length()) {
-                            val obj = exercisesJson.optJSONObject(i) ?: continue
-                            val name = obj.optString("name").trim()
-                            // A greeting / description that leaked into the exercises array is never logged
-                            if (RoutineParser.looksLikeProseNotExercise(name)) continue
-                            val sets = obj.optInt("sets", 3)
-                            val reps = obj.optInt("reps", 8)
-                            val weight = obj.optDouble("weight", 0.0)
-                            val hold = obj.optInt("holdSeconds", 0)
-                            val rawPrescription = obj.optString("prescription", "")
-                            val dayNum = obj.optInt("day", 1)
-                            val dayTitle = obj.optString("dayTitle", "Day $dayNum")
-
-                            // Find or create exercise
-                            //
-                            // The source text is the authority on which movement this is. The AI
-                            // normalises aggressively and often drops the modifier: a "Decline Push-Up"
-                            // in the pasted program routinely comes back as a plain "Push-Up", and the
-                            // exact-name lookup below then succeeds, so the decline is lost for good.
-                            // Asking the source first costs one match per line and keeps the movement
-                            // the athlete actually wrote.
+                    // The routine itself: the seven weekday slots the answer describes.
+                    //
+                    // The source text is the authority on which movement this is. The AI
+                    // normalises aggressively and often drops the modifier: a "Decline Push-Up"
+                    // in the pasted program routinely comes back as a plain "Push-Up", and the
+                    // exact-name lookup would then succeed, so the decline is lost for good.
+                    // Asking the source first costs one match per line and keeps the movement
+                    // the athlete actually wrote.
+                    val parsed = AiRoutineSchedule.parse(
+                        rawResponse = rawResponse,
+                        resolveExercise = { name ->
                             val fromSource = RoutineParser.resolveAgainstSource(
                                 aiName = name,
                                 sourceText = trimmedInput,
                                 candidates = existingByName.values
                             )
-                            var matched = fromSource
-                                ?: existingByName[name.lowercase()]
+                            val found = fromSource
+                                ?: existingByName[name.trim().lowercase()]
                                 ?: RoutineParser.findMatchingExercise(name, existingByName.values)
-                            if (matched == null) {
+                            if (found != null) {
+                                found
+                            } else {
                                 val fallbackEx = Exercise(
                                     name = name,
                                     category = "Calisthenics",
@@ -3448,47 +3553,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     description = "Imported custom exercise"
                                 )
                                 val id = insertCustomExercise(fallbackEx)
-                                matched = fallbackEx.copy(id = id)
-                                newlyCreatedExercises.add(matched)
-                                existingByName[name.lowercase()] = matched
+                                val created = fallbackEx.copy(id = id)
+                                newlyCreatedExercises.add(created)
+                                existingByName[name.trim().lowercase()] = created
+                                created
                             }
+                        },
+                        weekStartsOnMonday = weekStartsOnMonday()
+                    )
 
-                            val cleanPrescription = RoutineParser.shortPrescription(rawPrescription, matched.equipment).ifBlank {
-                                if (hold > 0) "$sets sets x ${hold}s"
-                                else "$sets sets x $reps reps"
-                            }
-
-                            routineItems.add(
-                                RoutineExerciseItem(
-                                    exerciseId = matched.id,
-                                    exerciseName = matched.name,
-                                    exerciseType = matched.exerciseType,
-                                    category = matched.category,
-                                    equipment = matched.equipment,
-                                    targetSets = sets,
-                                    targetReps = reps,
-                                    targetWeight = weight,
-                                    targetHoldSeconds = hold,
-                                    prescription = cleanPrescription,
-                                    dayNumber = dayNum,
-                                    dayTitle = dayTitle
-                                )
-                            )
-                        }
-                    }
-
-                    if (routineItems.isEmpty()) {
+                    if (!parsed.isValid || parsed.items.isEmpty()) {
                         _unstructuredParseState.value = UnstructuredParseState.Error(
-                            "Could not extract any exercises from the provided text. Please verify the exercises and try again."
+                            parsed.errorReason.ifBlank {
+                                "Could not extract any exercises from the provided text. Please verify the exercises and try again."
+                            }
                         )
                         return@launch
                     }
 
+                    val routineItems = parsed.items
                     val finalTitle = customName.trim().ifBlank {
-                        json.optString("routine_name", "Imported Routine")
+                        parsed.routineName.ifBlank { "Imported Routine" }
                     }
-                    val goal = json.optString("routine_goal", "Custom Workout")
-                    val daysCount = routineItems.map { it.dayNumber }.distinct().size.coerceAtLeast(1)
+                    val goal = parsed.routineGoal.ifBlank { "Custom Workout" }
+                    val daysCount = parsed.trainingDays.coerceAtLeast(1)
 
                     val savedRoutine = SavedRoutine(
                         name = finalTitle,
@@ -3506,6 +3594,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 } catch (e: Exception) {
                     Log.e("MainViewModel", "Failed to parse the Gemini JSON response of the parser", e)
+                    _unstructuredParseState.value = UnstructuredParseState.Error(
+                        "The AI answer could not be read as a workout program. Please try again."
+                    )
+                    return@launch
                 }
             }
 
@@ -3615,7 +3707,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                    - In the "exercises" list, use that exact same name for the newly created exercise.
 
                 4. STRUCTURED WORKOUT FORMAT:
-                   - Organize the routine into clear training days (e.g. Day 1, Day 2...) matching the user's requested split or schedule (default to 3 days if unspecified).
+                   - Organize the routine into the training days of a week, using the "days" array, matching the user's requested split or schedule (default to 3 days if unspecified).
+                   - Each day of the "days" array must have:
+                     - "weekday": String (the full name of the day of the week, e.g. "Monday")
+                     - "focus": String (a short label for the day, e.g. "Upper Body Push")
+                     - "note": String (one short motivating sentence, or an empty string)
+                     - "exercises": an array of the exercises of that day
                    - Each exercise in the routine must have:
                      - "name": String (exact matching catalog title or newly created name)
                      - "sets": Int (target sets, e.g. 3 or 4)
@@ -3628,8 +3725,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                        * NEVER put a load inside "prescription" (no "80kg", no "@ 80kg", no "bodyweight"). The load is set separately by the athlete.
                        * NEVER include equipment (e.g. do NOT write "Barbell", "Dumbbell", "Cable", "Machine", "with Barbell", "using Dumbbells", "(Barbell)") inside "prescription"! Equipment belongs strictly in the "equipment" field, NOT in "prescription".
                        * NEVER add commentary, notes, tempo, rest or technique hints to "prescription".
-                     - "day": Int (training day number starting at 1: 1 for Day 1, 2 for Day 2)
-                     - "dayTitle": String (e.g. "Day 1: Upper Body Push" or "Day 1: Full Body A")
 
                 JSON FORMAT REQUIREMENT:
                 Respond ONLY with a valid JSON object:
@@ -3638,22 +3733,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                   "error_reason": "",
                   "routine_name": "Suggested Routine Name",
                   "routine_goal": "Goal description",
-                  "days_per_week": 3,
                   "new_exercises_to_create": [],
-                  "exercises": [
+                  "days": [
                     {
-                      "name": "Barbell Bench Press",
-                      "sets": 4,
-                      "reps": 8,
-                      "weight": 0.0,
-                      "holdSeconds": 0,
-                      "prescription": "4 sets x 8 reps",
-                      "day": 1,
-                      "dayTitle": "Day 1: Push & Core"
+                      "weekday": "Monday",
+                      "focus": "Push & Core",
+                      "note": "",
+                      "exercises": [
+                        {
+                          "name": "Barbell Bench Press",
+                          "sets": 4,
+                          "reps": 8,
+                          "weight": 0.0,
+                          "holdSeconds": 0,
+                          "prescription": "4 sets x 8 reps"
+                        }
+                      ]
                     }
                   ]
                 }
-            """.trimIndent()
+            """.trimIndent() + "\n" + weekdayPromptRules()
 
             val customKey = geminiApiKey.value.ifBlank { userProfile.value.customApiKey }
             val geminiResult = GeminiClient.generateContent(
@@ -3712,27 +3811,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
 
-                    // Process routine items
-                    val exercisesJson = json.optJSONArray("exercises")
-                    val routineItems = mutableListOf<RoutineExerciseItem>()
-
-                    if (exercisesJson != null) {
-                        for (i in 0 until exercisesJson.length()) {
-                            val obj = exercisesJson.optJSONObject(i) ?: continue
-                            val name = obj.optString("name").trim()
-                            // A greeting / description that leaked into the exercises array is never logged
-                            if (RoutineParser.looksLikeProseNotExercise(name)) continue
-                            val sets = obj.optInt("sets", 3)
-                            val reps = obj.optInt("reps", 8)
-                            val weight = obj.optDouble("weight", 0.0)
-                            val hold = obj.optInt("holdSeconds", 0)
-                            val rawPrescription = obj.optString("prescription", "")
-                            val dayNum = obj.optInt("day", 1)
-                            val dayTitle = obj.optString("dayTitle", "Day $dayNum")
-
-                            // Match or create fallback
-                            var matched = existingByName[name.lowercase()] ?: RoutineParser.findMatchingExercise(name, existingByName.values)
-                            if (matched == null) {
+                    // The routine itself: the seven weekday slots the answer describes.
+                    val parsed = AiRoutineSchedule.parse(
+                        rawResponse = rawResponse,
+                        resolveExercise = { name ->
+                            val found = existingByName[name.trim().lowercase()]
+                                ?: RoutineParser.findMatchingExercise(name, existingByName.values)
+                            if (found != null) {
+                                found
+                            } else {
                                 val fallbackEx = Exercise(
                                     name = name,
                                     category = "Calisthenics",
@@ -3741,47 +3828,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     description = "Imported custom exercise"
                                 )
                                 val id = insertCustomExercise(fallbackEx)
-                                matched = fallbackEx.copy(id = id)
-                                newlyCreatedExercises.add(matched)
-                                existingByName[name.lowercase()] = matched
+                                val created = fallbackEx.copy(id = id)
+                                newlyCreatedExercises.add(created)
+                                existingByName[name.trim().lowercase()] = created
+                                created
                             }
+                        },
+                        weekStartsOnMonday = weekStartsOnMonday()
+                    )
 
-                            val cleanPrescription = RoutineParser.shortPrescription(rawPrescription, matched.equipment).ifBlank {
-                                if (hold > 0) "$sets sets x ${hold}s"
-                                else "$sets sets x $reps reps"
-                            }
-
-                            routineItems.add(
-                                RoutineExerciseItem(
-                                    exerciseId = matched.id,
-                                    exerciseName = matched.name,
-                                    exerciseType = matched.exerciseType,
-                                    category = matched.category,
-                                    equipment = matched.equipment,
-                                    targetSets = sets,
-                                    targetReps = reps,
-                                    targetWeight = weight,
-                                    targetHoldSeconds = hold,
-                                    prescription = cleanPrescription,
-                                    dayNumber = dayNum,
-                                    dayTitle = dayTitle
-                                )
-                            )
-                        }
-                    }
-
-                    if (routineItems.isEmpty()) {
+                    if (!parsed.isValid || parsed.items.isEmpty()) {
                         _customRoutinePromptState.value = CustomRoutinePromptState.Error(
-                            "Could not generate exercises for the given prompt. Please specify your workout goals more clearly."
+                            parsed.errorReason.ifBlank {
+                                "Could not generate exercises for the given prompt. Please specify your workout goals more clearly."
+                            }
                         )
                         return@launch
                     }
 
+                    val routineItems = parsed.items
                     val finalTitle = customName.trim().ifBlank {
-                        json.optString("routine_name", "AI Custom Routine")
+                        parsed.routineName.ifBlank { "AI Custom Routine" }
                     }
-                    val goal = json.optString("routine_goal", "Custom Workout Goal")
-                    val daysCount = routineItems.map { it.dayNumber }.distinct().size.coerceAtLeast(1)
+                    val goal = parsed.routineGoal.ifBlank { "Custom Workout Goal" }
+                    val daysCount = parsed.trainingDays.coerceAtLeast(1)
 
                     val generatedRoutine = SavedRoutine(
                         name = finalTitle,
@@ -3801,6 +3871,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 } catch (e: Exception) {
                     Log.e("MainViewModel", "Failed to parse the Gemini JSON prompt routine", e)
+                    _customRoutinePromptState.value = CustomRoutinePromptState.Error(
+                        "The AI answer could not be read as a routine. Please try again."
+                    )
+                    return@launch
                 }
             }
 

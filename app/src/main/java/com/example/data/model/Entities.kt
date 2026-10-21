@@ -275,7 +275,16 @@ data class SavedRoutine(
     val daysPerWeek: Int = 3,
     val goal: String = "Hypertrophy & Strength",
     val exercisesJson: String = "",
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    /**
+     * Whether the days of this routine are real weekdays yet.
+     *
+     * 0 means the routine still carries the old numbered training days, which are bound to the days
+     * of the week the first time the routine is read. 1 means it is already in the seven day
+     * format. See [com.example.data.db.RoutineScheduleMigration].
+     */
+    @ColumnInfo(defaultValue = "0")
+    val scheduleVersion: Int = 0
 )
 
 @Immutable

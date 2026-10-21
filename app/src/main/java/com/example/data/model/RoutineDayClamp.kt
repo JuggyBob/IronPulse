@@ -1,59 +1,42 @@
 package com.example.data.model
 
 /**
- * Keeps a routine's exercises inside the days the routine actually has.
+ * Keeps a routine's exercises inside the days of the week.
  *
- * The bug this exists for: an athlete puts an exercise on day 5, then shortens the routine to 4 days
- * and saves. The exercise stayed in the routine. It was invisible on every day, so it looked like it
- * had been deleted, yet it was still being saved and logged, and it reappeared the moment the routine
- * was widened back to 5. Both readings are wrong.
+ * A routine has seven slots, one per weekday, so a day can no longer be "stranded" by shrinking
+ * the routine: there is always a Monday to hold an exercise. What can still go wrong is an
+ * exercise that carries a weekday outside the week, which would make it invisible in the editor
+ * and in the dashboard.
  *
- * Clamping is the fix: an exercise never sits on a day that does not exist. It is a pure function so
- * it can be covered by a plain test, and so both the live screen and the save path can call it and be
- * certain they agree.
+ * That can only come from data written before the seven day model existed, or from a hand edited
+ * file, so the clamp is the safety net that keeps such an exercise visible instead of lost.
+ *
+ * It is a pure function so it can be covered by a plain test, and so the editor and the save path
+ * can call it and be certain they agree.
  */
 object RoutineDayClamp {
 
-    /** Clamps [dayNumber] into 1..[daysPerWeek]. A non positive week collapses to day 1. */
-    fun clampDay(dayNumber: Int, daysPerWeek: Int): Int {
-        val lastDay = daysPerWeek.coerceAtLeast(1)
-        return dayNumber.coerceIn(1, lastDay)
-    }
-
-    /** The day number the athlete should be looking at after [daysPerWeek] changed. */
-    fun clampSelectedDay(selectedDay: Int, daysPerWeek: Int): Int =
-        clampDay(selectedDay, daysPerWeek)
+    /** Clamps a weekday into 1..7. A weekday outside the week is pulled back onto it. */
+    fun clampDay(weekday: Int): Int = weekday.coerceIn(1, Weekday.COUNT)
 
     /**
-     * @return the exercises with any out of range day number moved onto the last surviving day.
-     * The input order is preserved, and only the day number and title change.
+     * @return the exercises with any weekday outside the week moved onto the Monday.
+     * The input order is preserved, and only the weekday changes.
      */
-    fun clampExercises(
-        exercises: List<RoutineExerciseItem>,
-        daysPerWeek: Int
-    ): List<RoutineExerciseItem> {
-        val lastDay = daysPerWeek.coerceAtLeast(1)
-        return exercises.map { item ->
-            if (item.dayNumber > lastDay) {
-                item.copy(dayNumber = lastDay, dayTitle = "Day $lastDay")
-            } else if (item.dayNumber < 1) {
-                item.copy(dayNumber = 1, dayTitle = "Day 1")
-            } else {
+    fun clampExercises(exercises: List<RoutineExerciseItem>): List<RoutineExerciseItem> =
+        exercises.map { item ->
+            if (item.weekday in 1..Weekday.COUNT) {
                 item
+            } else {
+                item.copy(weekday = Weekday.MONDAY)
             }
         }
-    }
 
     /**
-     * Whether any exercise is stranded on a day the routine does not have.
+     * Whether any exercise sits on a day that is not part of the week.
      *
-     * Used by the tests and, in the app, to decide whether a shrink actually needs a correction pass.
+     * Used by the tests and, in the app, to decide whether a correction pass is needed.
      */
-    fun hasStrandedExercises(
-        exercises: List<RoutineExerciseItem>,
-        daysPerWeek: Int
-    ): Boolean {
-        val lastDay = daysPerWeek.coerceAtLeast(1)
-        return exercises.any { it.dayNumber > lastDay || it.dayNumber < 1 }
-    }
+    fun hasStrandedExercises(exercises: List<RoutineExerciseItem>): Boolean =
+        exercises.any { it.weekday !in 1..Weekday.COUNT }
 }
