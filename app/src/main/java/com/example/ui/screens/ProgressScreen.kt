@@ -200,10 +200,10 @@ fun ProgressScreen(
         exerciseHistorySets.any { it.addedWeight > 0.0 || (it.exerciseType == ExerciseType.ADDED_WEIGHT && it.addedWeight == 0.0) }
     }
 
+    // The tag is unwrapped before it is compared: a Double compared against a Double? is boxed on
+    // both sides, and a boxed Double is compared by reference rather than by value.
     val displayedHistorySets = remember(exerciseHistorySets, selectedAddedWeightFilter, userProfile.currentWeightKg) {
-        if (selectedAddedWeightFilter == null) {
-            exerciseHistorySets
-        } else {
+        selectedAddedWeightFilter?.let { tag ->
             // The same rule the chart uses: a set belongs to the tag when its external load, its
             // added load or the body weight it was done at is the one that was picked.
             //
@@ -211,12 +211,12 @@ fun ProgressScreen(
             // today. A set done at 80 kg and a set done at 84 kg are two different bodyweight
             // entries, and the "BW: 80 kg" tag has to show only the first one.
             exerciseHistorySets.filter { set ->
-                set.weight == selectedAddedWeightFilter ||
-                    set.addedWeight == selectedAddedWeightFilter ||
+                set.weight == tag ||
+                    set.addedWeight == tag ||
                     (set.weight == 0.0 && set.addedWeight == 0.0 &&
-                        BodyWeightTimeline.bodyWeightForSet(set, userProfile.currentWeightKg) == selectedAddedWeightFilter)
+                        BodyWeightTimeline.bodyWeightForSet(set, userProfile.currentWeightKg) == tag)
             }
-        }
+        } ?: exerciseHistorySets
     }
 
     val historyDateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
