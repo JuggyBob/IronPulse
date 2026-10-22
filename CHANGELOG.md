@@ -52,6 +52,9 @@ Nothing yet. See [CONTRIBUTING.md](CONTRIBUTING.md) to propose a change.
 - The release notes are shown as headings, points and bold text rather than as the raw Markdown they
   were written in. Nothing else in a release description is interpreted, so a release can never do
   anything but be read.
+- The app now says in one place which domains it talks to. The new network security configuration
+  names the repository's own domains, refuses cleartext for them, and leaves the device's own
+  trust of certificates as it was.
 
 ---
 

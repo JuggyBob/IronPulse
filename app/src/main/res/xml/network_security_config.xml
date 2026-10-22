@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The domains IronPulse talks to, and the rules for them.
+
+    The app only ever reads from the public API of its own GitHub repository and from the public
+    release download of that repository. This file says so, so the list of places the app reaches
+    out to is written down in one place instead of being spread over the code.
+
+    Cleartext is refused for these domains: everything the app fetches is over TLS, and the
+    certificates are the ones the device already trusts. Nothing here narrows what the device
+    trusts, it only says that these are the domains the app expects to be talking to.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">github.com</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>

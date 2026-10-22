@@ -4,6 +4,7 @@ import com.example.data.api.ReleaseApi
 import com.example.data.model.AboutState
 import com.example.data.model.GithubRelease
 import com.example.data.model.ReleaseAsset
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -248,6 +249,35 @@ class ReleaseMetadataTest {
         assertFalse(api.isOfficialAssetUrl("https://github.com/someone/else/releases/download/v2.0.1/app.apk"))
         assertFalse(api.isOfficialAssetUrl("https://example.com/IronPulse2.0.1-release.apk"))
         assertFalse(api.isOfficialAssetUrl("https://github.com/JuggyBob/IronPulse/issues/1"))
+    }
+
+    @Test
+    fun `the app declares the domains it talks to`() {
+        // The network security config says which domains the app expects to be talking to and
+        // refuses cleartext for them. Without it the declaration is nowhere to be found.
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val id = context.resources.getIdentifier(
+            "network_security_config",
+            "xml",
+            context.packageName
+        )
+        assertTrue("the network security config must be packaged", id != 0)
+
+        val parser = context.resources.getXml(id)
+        val domains = mutableListOf<String>()
+        var event = parser.next()
+        while (event != android.content.res.XmlResourceParser.END_DOCUMENT) {
+            if (event == android.content.res.XmlResourceParser.START_TAG &&
+                parser.name == "domain"
+            ) {
+                domains.add(parser.nextText())
+            }
+            event = parser.next()
+        }
+        assertTrue(
+            "the release domain must be declared, found $domains",
+            domains.any { it.contains("github.com") }
+        )
     }
 
     private fun releaseWith(vararg names: String): GithubRelease = ReleaseApi.parseRelease(

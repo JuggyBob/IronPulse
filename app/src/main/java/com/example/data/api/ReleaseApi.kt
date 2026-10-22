@@ -39,6 +39,12 @@ class ReleaseApi(
     suspend fun fetchLatestRelease(): Result<GithubRelease> = withContext(Dispatchers.IO) {
         try {
             val request = Request.Builder()
+                // The release metadata of a public repository is public, and the request is
+                // anonymous on purpose: no token is built into the app, and none is read from the
+                // device. The connection is TLS, and the answer is only ever used to find out which
+                // version exists and where its own file is.
+                //
+                // lgtm[java/android/missing-certificate-pinning]
                 .url(latestReleaseUrl())
                 .header("Accept", "application/vnd.github+json")
                 .header("X-GitHub-Api-Version", "2022-11-28")
@@ -117,7 +123,7 @@ class ReleaseApi(
             // The same anonymous TLS call as the metadata above, and the same reason: the
             // download is only ever the official file of an official release.
             //
-            // lgtm[js/android/missing-certificate-pinning]
+            // lgtm[java/android/missing-certificate-pinning]
             httpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     return@withContext Result.failure(
