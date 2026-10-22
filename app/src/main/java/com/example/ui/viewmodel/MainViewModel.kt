@@ -47,6 +47,7 @@ import com.example.data.model.AppVersion
 import com.example.data.model.GithubRelease
 import com.example.data.model.ReleaseAsset
 import com.example.data.model.UpdateState
+import com.example.data.model.UpdateVerification
 import com.example.data.model.Weekday
 import com.example.data.model.SessionWithSets
 import com.example.data.model.RoutineExerciseItem
@@ -3978,15 +3979,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _updateState.value = UpdateState.Downloading(available.release, asset, read, total)
                 }
             }.onSuccess { file ->
-                val verified = verifyDownload(asset, file)
-                if (verified != null) {
+                // The check returns null when the file is good, and the reason it is not when it
+                // is not. A good file is ready to install; a bad one is deleted and the athlete
+                // is told what was wrong with it.
+                val problem = verifyDownload(asset, file)
+                if (problem == null) {
                     _updateState.value = UpdateState.ReadyToInstall(available.release, file)
                 } else {
                     file.delete()
-                    _updateState.value = UpdateState.Failed(verified ?: "The download could not be checked.")
+                    _updateState.value = UpdateState.Failed(problem)
                 }
-            }.onFailure { error ->
-                _updateState.value = UpdateState.Failed(
+            }.onFailure { error ->                _updateState.value = UpdateState.Failed(
                     error.message ?: "The download did not finish."
                 )
             }
@@ -3997,26 +4000,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Checks a downloaded file before it is handed to Android.
      *
      * The digest GitHub publishes is checked when there is one. The package is always checked, so
-     * a file that is not an update of this app is never handed to the installer.
+     * a file that is not an update of this app is never handed to the installer, and so is the key
+     * it is signed with.
      *
      * @return null when the file is good, or the reason it is not.
      */
     private fun verifyDownload(asset: ReleaseAsset, file: java.io.File): String? {
-        val expected = asset.sha256
-        if (expected != null) {
-            val actual = sha256Of(file)
-            if (actual == null) {
-                return "The downloaded file could not be checked."
-            }
-            if (!actual.equals(expected, ignoreCase = true)) {
-                return "The downloaded file does not match the checksum GitHub published, so it was not used."
-            }
-        }
-        val verified = ApkInstaller.verify(getApplication(), file)
-        if (verified.isFailure) {
-            return verified.exceptionOrNull()?.message ?: "The downloaded file is not a valid update."
-        }
-        return null
+        val packageProblem = ApkInstaller.verify(getApplication(), file)
+            .exceptionOrNull()
+            ?.message
+        return UpdateVerification.problem(
+            expectedDigest = asset.sha256,
+            actualDigest = sha256Of(file),
+            packageProblem = packageProblem
+        )
     }
 
     /**
