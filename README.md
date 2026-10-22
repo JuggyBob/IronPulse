@@ -3,7 +3,7 @@
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](LICENSE)
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9-7F52FF.svg)](https://kotlinlang.org)
 [![Android](https://img.shields.io/badge/Android-7.1%2B-3DDC84.svg)](https://developer.android.com)
-[![Release](https://img.shields.io/badge/release-v2.0.0-blue.svg)](https://github.com/JuggyBob/IronPulse/releases)
+[![Release](https://img.shields.io/badge/release-v2.0.1-blue.svg)](https://github.com/JuggyBob/IronPulse/releases)
 
 A dark-themed workout logger for strength training and calisthenics, built for the gym:
 offline by default, no account, no tracking, and a 1,300+ movement catalog that streams its
@@ -160,6 +160,18 @@ storage, so it keeps working even after you delete the original from your galler
   <img src="docs/screenshots/04-profile-metrics.png" width="45%" alt="Profile and metrics" />
 </p>
 
+### Updates and what's new
+- **Check for updates** is in Settings. It looks at the official releases of this repository on
+  GitHub and tells you whether the build you are running is the newest one.
+- When there is a newer release, the app can download it and hand it to the Android installer. The
+  download is checked against the checksum GitHub publishes, and against the package inside the
+  file, before the installer ever sees it.
+- **Android still asks you to confirm.** From Android 8 you also have to allow IronPulse to install
+  packages, and the app takes you to that setting and checks again when you come back.
+- **About IronPulse** shows the version you are running, the newest published version and what
+  changed in it, taken from the official release notes. A copy is kept so it is still there without
+  a network.
+
 ---
 
 ## Privacy
@@ -169,6 +181,8 @@ storage, so it keeps working even after you delete the original from your galler
 - AI features are optional and require your own Gemini key.
 - Athlete data sharing is **off** until you explicitly enable it.
 - "Erase all app data" in Settings wipes everything on the device.
+- The update check reads the public releases of this repository. **No token and no credential is
+  built into the app**, and nothing is sent anywhere else.
 
 ---
 
@@ -187,12 +201,13 @@ storage, so it keeps working even after you delete the original from your galler
 | **Language** | Kotlin (100%) |
 | **UI** | Jetpack Compose + Material 3 |
 | **Architecture** | MVVM — Compose screens → `MainViewModel` → `FitnessRepository` → Room DAOs |
-| **Database** | Room (SQLite), schema v9, versioned migrations |
+| **Database** | Room (SQLite), schema v10, versioned migrations |
 | **Preferences** | DataStore |
 | **Async** | Coroutines + Flow |
 | **Images** | Coil (animated GIF + still-frame loaders) |
 | **Video** | Media3 / ExoPlayer |
 | **AI** | Gemini REST API (`GeminiClient`), bring your own key |
+| **Updates** | GitHub Releases REST API (`ReleaseApi`), no token, the official repository only |
 | **Min SDK** | 24 (Android 7.1) · **Target SDK** 35 |
 
 ---
@@ -229,7 +244,7 @@ The app works fully without one. To enable the AI features, add your key in
 
 ### Running the tests
 ```bash
-./gradlew testDebugUnitTest      # 385 JVM unit tests across 47 classes
+./gradlew testDebugUnitTest      # 428 JVM unit tests across 50 classes
 ./gradlew recordRoborazziDebug   # regenerate reference screenshots
 ```
 
@@ -242,7 +257,8 @@ Prebuilt APKs are attached to the
 
 | Version | File |
 |---|---|
-| **v2.0.0** | [`IronPulse2.0.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v2.0.0/IronPulse2.0.0-release.apk) |
+| **v2.0.1** | [`IronPulse2.0.1-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v2.0.1/IronPulse2.0.1-release.apk) |
+| v2.0.0 | [`IronPulse2.0.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v2.0.0/IronPulse2.0.0-release.apk) |
 | v1.1.1 | [`IronPulse1.1.1-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v1.1.1/IronPulse1.1.1-release.apk) |
 | v1.1.0 | [`IronPulse1.1.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v1.1.0/IronPulse1.1.0-release.apk) |
 | v1.0.1 | [`IronPulse-v1.0.1.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v1.0.1/IronPulse-v1.0.1.apk) |

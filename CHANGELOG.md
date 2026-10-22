@@ -13,6 +13,48 @@ Nothing yet. See [CONTRIBUTING.md](CONTRIBUTING.md) to propose a change.
 
 ---
 
+## [2.0.1] — 2026-10-22
+
+### Added
+
+#### Check for updates
+- **Settings now has a "Check for updates" entry.** Tap it and the app looks at the official
+  releases of this repository on GitHub, and tells you whether the build you are running is the
+  newest one there is.
+- When a newer release is published, the dialog says which version it is, and offers to download it.
+  The download only starts when you ask for it, and it runs in the background with a progress
+  indicator, so nothing ever blocks the screen.
+- When the download is finished, the app checks the file and then opens the Android installer for
+  it. Android asks you to confirm the installation, and from Android 8 it also asks you to allow
+  IronPulse to install packages: the app takes you to that setting and checks again when you come
+  back, rather than assuming you said yes.
+- The downloaded file is checked before the installer sees it. If GitHub published a checksum for
+  the release, the file is compared against it, and the package inside the file is always checked, so
+  a file that is not an update of IronPulse is never handed over.
+- A release that does not carry an installable Android package says so and opens the official
+  release page, rather than pretending the update can be installed.
+
+#### About IronPulse
+- **Settings has an "About IronPulse" entry** that shows the version you are running, the newest
+  published version, when it was published, and what changed in it, taken from the official release
+  notes.
+- The installed version and the newest release are always labelled separately, so the notes of a
+  release you do not have yet are never shown as if you were already running it.
+- The notes are read from the same place the updater reads them, and a copy is kept so they are
+  still there when there is no network. The copy says that it is a saved one.
+
+### Fixed
+- **The update file could not have been opened.** The folder the download is shared from was
+  configured with a trailing separator, and the system file provider never matches a root that
+  ends in one, so the installer would have been handed a link to nothing.
+
+### Changed
+- The release notes are shown as headings, points and bold text rather than as the raw Markdown they
+  were written in. Nothing else in a release description is interpreted, so a release can never do
+  anything but be read.
+
+---
+
 ## [2.0.0] — 2026-10-21
 
 ### Added

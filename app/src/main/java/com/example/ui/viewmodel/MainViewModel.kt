@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
 import com.example.data.api.GeminiClient
 import com.example.data.api.GeminiModelInfo
+import com.example.data.api.ReleaseApi
 import com.example.data.db.AppDatabase
 import com.example.data.model.ActiveRoutineWorkoutState
 import com.example.data.model.ActiveRestTimerState
@@ -41,6 +42,11 @@ import com.example.data.model.MusclePartResolver
 import com.example.data.model.ActivityDay
 import com.example.data.model.ActivityHeatmap
 import com.example.data.model.AiRoutineSchedule
+import com.example.data.model.AboutState
+import com.example.data.model.AppVersion
+import com.example.data.model.GithubRelease
+import com.example.data.model.ReleaseAsset
+import com.example.data.model.UpdateState
 import com.example.data.model.Weekday
 import com.example.data.model.SessionWithSets
 import com.example.data.model.RoutineExerciseItem
@@ -60,6 +66,7 @@ import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.repository.FitnessRepository
 import com.example.ui.components.ChartPoint
 import com.example.util.ExerciseMediaStore
+import com.example.util.ApkInstaller
 import com.example.util.VibrationHelper
 import com.example.util.SoundHelper
 import com.example.util.RestTimerScheduler
@@ -472,7 +479,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             ?: ExerciseSchema.categoryToBodyPart(validCategory)
         // The prompt asks for a primary target muscle and for secondary muscles, and the model
         // usually supplies them. When it does not, the TARGETS section of the detail dialog is
-        // skipped entirely — the row saves fine, looks complete, and simply says nothing about what
+        // skipped entirely ÔÇö the row saves fine, looks complete, and simply says nothing about what
         // the movement trains. Falling back to the category keeps the section populated with
         // something true, because the category was already validated against the fixed seven.
         val target = obj.optString("target", "").trim().ifBlank { fallbackTargetForCategory(validCategory) }
@@ -666,7 +673,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * How a benchmark's load reads to the model.
      *
      * "bodyweight" when the set had nothing on the bar, otherwise the kilograms converted to the
-     * athlete's own unit — a stored kilogram sent as-is would read as the wrong load to an athlete
+     * athlete's own unit ÔÇö a stored kilogram sent as-is would read as the wrong load to an athlete
      * training in pounds.
      */
     private fun loadedAt(addedKg: Int): String =
@@ -2240,13 +2247,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             append("- Keep the whole answer between 200 and 320 words.\n\n")
 
             append("REQUIRED STRUCTURE (use exactly these headings, in this order):\n")
-            append("# ${summary.exerciseName} — ${MonthlyExerciseAnalyzer.WINDOW_DAYS} Day Summary\n")
+            append("# ${summary.exerciseName} ÔÇö ${MonthlyExerciseAnalyzer.WINDOW_DAYS} Day Summary\n")
             append("## Trend\n")
             append("One short paragraph (2-3 sentences) stating whether strength is trending up, down or holding steady, and the single biggest reason why.\n")
             append("## Key Numbers\n")
             append("4 to 6 bullets covering: training days, total sets, total volume, best estimated 1RM with the set it came from, and the change across the period.\n")
             append("## Session Log\n")
-            append("3 to 8 bullets, one per training day, in the format \"- Mar 3 — 4 sets, best set 80kg x 5, est. 1RM 93kg\". Cover the most representative days, not necessarily all of them.\n")
+            append("3 to 8 bullets, one per training day, in the format \"- Mar 3 ÔÇö 4 sets, best set 80kg x 5, est. 1RM 93kg\". Cover the most representative days, not necessarily all of them.\n")
             append("## What The Numbers Say\n")
             append("2 to 3 bullets interpreting the data: consistency, volume vs intensity, rep range, added-weight progression, or plateaus. Be analytical and honest, including any warning signs.\n")
             append("## Coaching Takeaways\n")
@@ -3340,7 +3347,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      *
      * A library row the athlete edited is exempt, and that is not an optimisation. Renaming a library
      * exercise takes its name out of the dataset, so the "not in the library" test below matches it
-     * and this would flag the row as AI generated — on a release where the dataset happens to have
+     * and this would flag the row as AI generated ÔÇö on a release where the dataset happens to have
      * moved, and silently, in the background, with nothing the athlete did to cause it. Those edits
      * are exactly the ones already remembered by LibraryEditTracker, so the exemption is free.
      */
@@ -3407,7 +3414,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 2. EXACT EXERCISE MATCHING (NO MISMATCHED SUBSTITUTIONS):
                    - If an exercise in the user's workout exists in the catalog above (for example: "Goblet Squat", "Knee Raises" -> "Hanging Knee Raise" or "Captain's Chair Knee Raise", "Bench Press" -> "Barbell Bench Press" or "Flat Dumbbell Bench Press", "Squat" -> "Barbell Back Squat"), you MUST use the EXACT exercise title from the catalog!
                    - NEVER substitute an exercise with a biomechanically different movement simply because it shares a word:
-                     * DO NOT replace "Goblet Squat" with "Band Resisted Squat" or anything else. "Goblet Squat" IS in the catalog under [Legs] — use "Goblet Squat"!
+                     * DO NOT replace "Goblet Squat" with "Band Resisted Squat" or anything else. "Goblet Squat" IS in the catalog under [Legs] ÔÇö use "Goblet Squat"!
                      * DO NOT replace "Knee Raises" with "Ab Wheel Rollout from Knees" or "Clapping Push-up on Knees". Use "Hanging Knee Raise" (under [Core])!
                      * DO NOT replace squats with lunges, pull-ups with pulldowns, or bench press with flyes.
 
@@ -3580,7 +3587,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                     val savedRoutine = SavedRoutine(
                         name = finalTitle,
-                        description = "AI Parsed Program • ${routineItems.size} exercises • $daysCount training day${if (daysCount > 1) "s" else ""}",
+                        description = "AI Parsed Program ÔÇó ${routineItems.size} exercises ÔÇó $daysCount training day${if (daysCount > 1) "s" else ""}",
                         daysPerWeek = daysCount,
                         goal = goal,
                         exercisesJson = RoutineParser.serializeExercises(routineItems)
@@ -3855,7 +3862,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                     val generatedRoutine = SavedRoutine(
                         name = finalTitle,
-                        description = "AI Prompt Routine • ${routineItems.size} exercises • $daysCount training day${if (daysCount > 1) "s" else ""}",
+                        description = "AI Prompt Routine ÔÇó ${routineItems.size} exercises ÔÇó $daysCount training day${if (daysCount > 1) "s" else ""}",
                         daysPerWeek = daysCount,
                         goal = goal,
                         exercisesJson = RoutineParser.serializeExercises(routineItems)
@@ -3886,6 +3893,227 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+    // === APP UPDATES AND ABOUT ===
+
+    /**
+     * The service that reads the official releases of this repository.
+     *
+     * It is created once and reused, so the connections are pooled and the release metadata is
+     * read from the same place every time.
+     */
+    private val releaseApi = ReleaseApi()
+
+    private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
+    val updateState: StateFlow<UpdateState> = _updateState.asStateFlow()
+
+    /**
+     * The release information the About screen shows.
+     *
+     * It starts from the cached copy, so the screen has something to say before the network has
+     * answered, and it is refreshed whenever the screen is opened.
+     */
+    private val _aboutState = MutableStateFlow(
+        AboutState(installedVersion = BuildConfig.VERSION_NAME)
+    )
+    val aboutState: StateFlow<AboutState> = _aboutState.asStateFlow()
+
+    /** The running check or download, so it can be cancelled. */
+    private var updateJob: Job? = null
+
+    /**
+     * Looks the newest published release up and works out whether it is newer than the build that
+     * is running.
+     */
+    fun checkForUpdates() {
+        updateJob?.cancel()
+        updateJob = viewModelScope.launch {
+            _updateState.value = UpdateState.Checking
+            releaseApi.fetchLatestRelease()
+                .onSuccess { release ->
+                    cacheRelease(release)
+                    _updateState.value = evaluateRelease(release)
+                }
+                .onFailure { error ->
+                    _updateState.value = UpdateState.Failed(
+                        error.message ?: "The update could not be checked."
+                    )
+                }
+        }
+    }
+
+    /** Stops a running check or download and puts the interface back where it started. */
+    fun cancelUpdate() {
+        updateJob?.cancel()
+        updateJob = null
+        _updateState.value = UpdateState.Cancelled
+    }
+
+    /** Puts the update interface back to its starting state. */
+    fun dismissUpdate() {
+        updateJob?.cancel()
+        updateJob = null
+        _updateState.value = UpdateState.Idle
+    }
+
+    /**
+     * Downloads the release APK the update dialog is offering.
+     *
+     * The download is only started when the athlete asked for it, and it is written into the app's
+     * own storage, where nothing else on the device can read it.
+     */
+    fun downloadUpdate() {
+        val available = _updateState.value as? UpdateState.Available ?: return
+        val asset = available.asset ?: return
+        updateJob?.cancel()
+        updateJob = viewModelScope.launch {
+            _updateState.value = UpdateState.Downloading(available.release, asset, 0L, asset.size)
+            val target = ApkInstaller.updateFile(getApplication(), asset.name)
+            val lastPercent = intArrayOf(-1)
+            releaseApi.downloadAsset(asset, target) { read, total ->
+                // Only tell the interface when the percentage moved, so a fast download does not
+                // flood it with updates.
+                val percent = if (total > 0L) ((read * 100L) / total).toInt() else -1
+                if (percent != lastPercent[0]) {
+                    lastPercent[0] = percent
+                    _updateState.value = UpdateState.Downloading(available.release, asset, read, total)
+                }
+            }.onSuccess { file ->
+                val verified = verifyDownload(asset, file)
+                if (verified != null) {
+                    _updateState.value = UpdateState.ReadyToInstall(available.release, file)
+                } else {
+                    file.delete()
+                    _updateState.value = UpdateState.Failed(verified ?: "The download could not be checked.")
+                }
+            }.onFailure { error ->
+                _updateState.value = UpdateState.Failed(
+                    error.message ?: "The download did not finish."
+                )
+            }
+        }
+    }
+
+    /**
+     * Checks a downloaded file before it is handed to Android.
+     *
+     * The digest GitHub publishes is checked when there is one. The package is always checked, so
+     * a file that is not an update of this app is never handed to the installer.
+     *
+     * @return null when the file is good, or the reason it is not.
+     */
+    private fun verifyDownload(asset: ReleaseAsset, file: java.io.File): String? {
+        val expected = asset.sha256
+        if (expected != null) {
+            val actual = sha256Of(file)
+            if (actual == null) {
+                return "The downloaded file could not be checked."
+            }
+            if (!actual.equals(expected, ignoreCase = true)) {
+                return "The downloaded file does not match the checksum GitHub published, so it was not used."
+            }
+        }
+        val verified = ApkInstaller.verify(getApplication(), file)
+        if (verified.isFailure) {
+            return verified.exceptionOrNull()?.message ?: "The downloaded file is not a valid update."
+        }
+        return null
+    }
+
+    /**
+     * The SHA-256 of a file, as a hex string.
+     *
+     * @return the digest, or null when the file could not be read.
+     */
+    private fun sha256Of(file: java.io.File): String? = try {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+    } catch (_: Exception) {
+        null
+    }
+
+    /**
+     * Works out what the release means for the build that is running.
+     *
+     * A release that is not newer is never offered: an installed build that is ahead of the
+     * published one is up to date as far as the athlete is concerned, and offering it a "newer"
+     * release would be offering a downgrade.
+     */
+    private fun evaluateRelease(release: GithubRelease): UpdateState {
+        val latest = release.version
+        if (latest == null) {
+            return UpdateState.Failed(
+                "The release ${release.tagName} does not carry a version the app can read.",
+                canRetry = false
+            )
+        }
+        val installed = AppVersion.parse(BuildConfig.VERSION_NAME)
+        if (installed == null) {
+            return UpdateState.Failed(
+                "The installed version could not be read, so no update was offered.",
+                canRetry = false
+            )
+        }
+        if (!latest.isNewerThan(installed)) {
+            return UpdateState.UpToDate(release)
+        }
+        return UpdateState.Available(release, release.installableApk())
+    }
+
+    /**
+     * Reads the release information for the About screen.
+     *
+     * The cached copy is shown first, so the screen is never empty, and the network answer replaces
+     * it when it arrives.
+     */
+    fun loadAboutInfo() {
+        viewModelScope.launch {
+            userPreferencesRepo.cachedReleaseFlow.first()?.let { cached ->
+                val release = ReleaseApi.parseRelease(cached)
+                if (release != null) {
+                    _aboutState.value = _aboutState.value.copy(
+                        latestRelease = release,
+                        isFromCache = true
+                    )
+                }
+            }
+            _aboutState.value = _aboutState.value.copy(isLoading = true, error = null)
+            releaseApi.fetchLatestRelease()
+                .onSuccess { release ->
+                    cacheRelease(release)
+                    _aboutState.value = _aboutState.value.copy(
+                        latestRelease = release,
+                        isLoading = false,
+                        error = null,
+                        isFromCache = false
+                    )
+                }
+                .onFailure { error ->
+                    _aboutState.value = _aboutState.value.copy(
+                        isLoading = false,
+                        error = error.message ?: "The release information could not be read."
+                    )
+                }
+        }
+    }
+
+    /** Keeps a copy of the release information, so the About screen works without a network. */
+    private fun cacheRelease(release: GithubRelease) {
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.saveCachedRelease(release)
+        }
+    }
+
+    /** The page the official releases are on. */
+    fun releasesPageUrl(): String = releaseApi.releasesPageUrl()
+
     companion object {
         /** A monthly summary needs more than this many logged sets to read a trend from. */
         const val MIN_SETS_FOR_MONTHLY_SUMMARY = 2

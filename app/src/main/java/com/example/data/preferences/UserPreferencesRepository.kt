@@ -104,6 +104,15 @@ class UserPreferencesRepository(private val context: Context) {
          * plan of this routine, and nothing is scheduled until the athlete picks one.
          */
         val ACTIVE_ROUTINE_ID = longPreferencesKey("active_routine_id")
+
+        /**
+         * The last release information read from GitHub, kept so the About screen has something
+         * to say when there is no network.
+         *
+         * It is public release information, not a secret, and it is only ever a copy of what the
+         * releases page already shows.
+         */
+        val CACHED_GITHUB_RELEASE = stringPreferencesKey("cached_github_release")
     }
 
     // === APP SETTINGS (settings page) ===
@@ -186,6 +195,22 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setActiveRoutineId(id: Long) {
         context.userDataStore.edit { it[ACTIVE_ROUTINE_ID] = id }
+    }
+
+    /**
+     * The last release information read from GitHub.
+     *
+     * Kept so the About screen can show the release notes without a network, and so it can say
+     * that what it is showing was last refreshed at a certain time.
+     */
+    val cachedReleaseFlow: Flow<String?> = context.userDataStore.data.map { prefs ->
+        prefs[CACHED_GITHUB_RELEASE]
+    }
+
+    /** Keeps a copy of the release information for the About screen. */
+    suspend fun saveCachedRelease(release: com.example.data.model.GithubRelease) {
+        val json = com.example.data.api.ReleaseApi.releaseToJson(release) ?: return
+        context.userDataStore.edit { it[CACHED_GITHUB_RELEASE] = json }
     }
 
     /** False until the athlete finishes the first run onboarding. */
