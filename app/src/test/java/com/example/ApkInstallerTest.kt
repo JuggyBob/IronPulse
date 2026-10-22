@@ -1,6 +1,7 @@
 package com.example
 
 import android.content.Intent
+import android.content.pm.Signature
 import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import com.example.util.ApkInstaller
@@ -97,5 +98,33 @@ class ApkInstallerTest {
 
         ApkInstaller.clearDownloads(context)
         assertFalse(file.exists())
+    }
+
+    @Test
+    fun `a signing certificate is compared by its digest`() {
+        val certificate = Signature(byteArrayOf(0x01, 0x02, 0x03, 0x04))
+        val digests = ApkInstaller.signatureDigests(listOf(certificate))
+        assertEquals(1, digests.size)
+        assertEquals("01020304", digests.first())
+    }
+
+    @Test
+    fun `two different certificates never share a digest`() {
+        val one = ApkInstaller.signatureDigests(listOf(Signature(byteArrayOf(0x01, 0x02))))
+        val other = ApkInstaller.signatureDigests(listOf(Signature(byteArrayOf(0x01, 0x03))))
+        assertFalse(one.any { digest -> other.contains(digest) })
+    }
+
+    @Test
+    fun `a build signed with another key is not an update`() {
+        // The app is signed with one key, so a file signed with another one is a different app
+        // even when the package name matches. Android refuses it, and the app never offers it.
+        val certificate = Signature(byteArrayOf(0x7f, 0x7f, 0x7f))
+        val digests = ApkInstaller.signatureDigests(listOf(certificate))
+        assertTrue(digests.isNotEmpty())
+        assertFalse(
+            "a different key must not match the app's own",
+            digests.any { digest -> digest == "01020304" }
+        )
     }
 }

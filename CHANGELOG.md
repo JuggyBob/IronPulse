@@ -31,6 +31,9 @@ Nothing yet. See [CONTRIBUTING.md](CONTRIBUTING.md) to propose a change.
 - The downloaded file is checked before the installer sees it. If GitHub published a checksum for
   the release, the file is compared against it, and the package inside the file is always checked, so
   a file that is not an update of IronPulse is never handed over.
+- The downloaded file also has to be signed with the same key IronPulse itself is signed with. The
+  app checks that before it opens the installer, so a file Android would refuse is never presented
+  as an update in the first place.
 - A release that does not carry an installable Android package says so and opens the official
   release page, rather than pretending the update can be installed.
 

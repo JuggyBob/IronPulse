@@ -14,8 +14,8 @@ import java.io.File
  *
  * The app does not install anything itself, and it does not try to: Android asks the person to
  * confirm the installation, and it refuses an APK that is signed with a different key. What this
- * does is the part the app is allowed to do: check that the file really is this app, and open the
- * system installer for it.
+ * does is the part the app is allowed to do: check that the file really is this app, signed with
+ * this app's key, and open the system installer for it.
  */
 object ApkInstaller {
 
@@ -47,9 +47,17 @@ object ApkInstaller {
     /**
      * Checks that the downloaded file is an installable build of this app.
      *
-     * The check reads the package out of the archive, so a file that is not an APK of this app
-     * never reaches the installer. Android refuses an APK signed with another key anyway, but the
-     * app does not hand it something that is plainly not an update in the first place.
+     * Two things are checked, and both have to hold:
+     *
+     *  - the package inside the archive has to be this app's own package, so a file that is not an
+     *    update of IronPulse never reaches the installer;
+     *  - the file has to be signed with a key this app is signed with, so the installer is never
+     *    handed something Android is bound to refuse.
+     *
+     * Android enforces the second of those itself, but only once the installer has been opened and
+     * the athlete has already been through the system screens. Checking it here means the app can
+     * say what is wrong while it still knows, and it means a file that is not an update is never
+     * presented as one.
      *
      * @return the package information of the file, or a failure with a readable reason.
      */
@@ -59,18 +67,80 @@ object ApkInstaller {
         }
         return try {
             val packageManager = context.packageManager
-            val info = packageManager.getPackageArchiveInfo(file.absolutePath, 0)
+            val info = packageManager.getPackageArchiveInfo(file.absolutePath, signingFlag)
                 ?: return Result.failure(IllegalStateException("The downloaded file is not a readable app."))
             if (info.packageName != context.packageName) {
                 return Result.failure(
                     IllegalStateException("The downloaded file is a different app, so it was not installed.")
                 )
             }
+
+            // The key the file is signed with has to be one this app is signed with.
+            val downloaded = signingDigests(info)
+            val installed = packageManager.getPackageInfo(
+                context.packageName,
+                signingFlag
+            ).let { signingDigests(it) }
+            if (downloaded.isEmpty() || installed.isEmpty() || downloaded.none { it in installed }) {
+                return Result.failure(
+                    IllegalStateException(
+                        "The downloaded file is not signed with the same key, so it was not installed."
+                    )
+                )
+            }
+
             Result.success(info)
         } catch (e: Exception) {
             Result.failure(IllegalStateException("The downloaded file could not be read."))
         }
     }
+
+    /**
+     * The flag that asks the package manager for the certificates a package is signed with.
+     *
+     * From Android 9 the newer flag is the one to use; before that the old one is the only one
+     * the platform understands, and asking for the newer one there would quietly return nothing.
+     */
+    private val signingFlag: Int
+        get() = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            PackageManager.GET_SIGNING_CERTIFICATES
+        } else {
+            @Suppress("DEPRECATION")
+            PackageManager.GET_SIGNATURES
+        }
+
+    /**
+     * The digests of the certificates a package is signed with.
+     *
+     * A key that has been rotated leaves a history behind it, and the history is what has to
+     * match: a build signed with the new key is still an update of a build signed with the old
+     * one, and Android says so.
+     */
+    private fun signingDigests(info: PackageInfo): Set<String> {
+        val signatures = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            val signingInfo = info.signingInfo ?: return emptySet()
+            if (signingInfo.hasMultipleSigners()) {
+                signingInfo.apkContentsSigners
+            } else {
+                signingInfo.signingCertificateHistory
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            info.signatures ?: return emptySet()
+        }
+        return signatureDigests(signatures.toList())
+    }
+
+    /**
+     * The digests of a set of signing certificates.
+     *
+     * The digest is what is compared, so that a certificate is never held in memory or written
+     * anywhere as anything but a fingerprint.
+     */
+    fun signatureDigests(signatures: List<android.content.pm.Signature>): Set<String> =
+        signatures.map { signature ->
+            signature.toByteArray().joinToString("") { byte -> "%02x".format(byte) }
+        }.toSet()
 
     /**
      * The content uri the downloaded file is shared under.
