@@ -286,7 +286,8 @@ Entries are grouped under **Added**, **Changed**, **Deprecated**, **Removed**, *
 **Security**, each newest first. Versions follow [SemVer](https://semver.org/): bump the patch for a
 fix, the minor for a feature, the major for a breaking change.
 
-[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/JuggyBob/IronPulse/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/JuggyBob/IronPulse/compare/v1.1.1...v2.0.0
 [1.1.1]: https://github.com/JuggyBob/IronPulse/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/JuggyBob/IronPulse/compare/v1.0.1...v1.1.0
