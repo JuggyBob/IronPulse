@@ -244,7 +244,7 @@ The app works fully without one. To enable the AI features, add your key in
 
 ### Running the tests
 ```bash
-./gradlew testDebugUnitTest      # 428 JVM unit tests across 50 classes
+./gradlew testDebugUnitTest      # 441 JVM unit tests across 51 classes
 ./gradlew recordRoborazziDebug   # regenerate reference screenshots
 ```
 
