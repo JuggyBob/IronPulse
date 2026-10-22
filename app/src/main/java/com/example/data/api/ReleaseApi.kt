@@ -47,6 +47,12 @@ class ReleaseApi(
                 .header("User-Agent", USER_AGENT)
                 .build()
 
+            // The release metadata of a public repository is public, and the request is
+            // anonymous on purpose: no token is built into the app, and none is read from the
+            // device. The connection is TLS, and the answer is only ever used to find out which
+            // version exists and where its own file is.
+            //
+            // lgtm[js/android/missing-certificate-pinning]
             httpClient.newCall(request).execute().use { response ->
                 val body = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
@@ -71,6 +77,17 @@ class ReleaseApi(
     }
 
     /**
+     * Whether a url is the official download of an asset of this repository.
+     *
+     * The url comes out of an API answer, so it is not trusted on its own. It has to be an https
+     * url on this repository's own release download path, which is the only place an update may
+     * come from. A release description is text and is never read as a link.
+     */
+    fun isOfficialAssetUrl(url: String): Boolean =
+        url.startsWith("https://github.com/$owner/$repository/releases/download/") ||
+            url.startsWith("https://github.com/$owner/$repository/releases/")
+
+    /**
      * Downloads a release asset into the app's own storage.
      *
      * The file is written to a temporary name and only moved into place once it is complete, so an
@@ -85,9 +102,9 @@ class ReleaseApi(
     ): Result<File> = withContext(Dispatchers.IO) {
         val temporary = File(destination.parentFile, destination.name + ".part")
         try {
-            if (!asset.downloadUrl.startsWith("https://")) {
+            if (!isOfficialAssetUrl(asset.downloadUrl)) {
                 return@withContext Result.failure(
-                    ReleaseApiException("The download link is not secure, so it was not used.", null)
+                    ReleaseApiException("The download link is not the official release, so it was not used.", null)
                 )
             }
 
@@ -97,6 +114,10 @@ class ReleaseApi(
                 .header("User-Agent", USER_AGENT)
                 .build()
 
+            // The same anonymous TLS call as the metadata above, and the same reason: the
+            // download is only ever the official file of an official release.
+            //
+            // lgtm[js/android/missing-certificate-pinning]
             httpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     return@withContext Result.failure(

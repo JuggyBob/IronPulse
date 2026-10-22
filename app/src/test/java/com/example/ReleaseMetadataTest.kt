@@ -235,6 +235,21 @@ class ReleaseMetadataTest {
         )
     }
 
+    @Test
+    fun `only the official release download is accepted`() {
+        val api = ReleaseApi()
+        assertTrue(
+            api.isOfficialAssetUrl(
+                "https://github.com/JuggyBob/IronPulse/releases/download/v2.0.1/IronPulse2.0.1-release.apk"
+            )
+        )
+        // A link that is not the official release is never downloaded, whatever it says.
+        assertFalse(api.isOfficialAssetUrl("http://github.com/JuggyBob/IronPulse/releases/download/v2.0.1/app.apk"))
+        assertFalse(api.isOfficialAssetUrl("https://github.com/someone/else/releases/download/v2.0.1/app.apk"))
+        assertFalse(api.isOfficialAssetUrl("https://example.com/IronPulse2.0.1-release.apk"))
+        assertFalse(api.isOfficialAssetUrl("https://github.com/JuggyBob/IronPulse/issues/1"))
+    }
+
     private fun releaseWith(vararg names: String): GithubRelease = ReleaseApi.parseRelease(
         """
         {

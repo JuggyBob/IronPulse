@@ -89,8 +89,23 @@ object ApkInstaller {
 
     /**
      * The intent that opens the system installer for a shared file.
+     *
+     * This is the one place the app asks Android to install a package, and it is deliberately
+     * narrow:
+     *
+     *  - the file comes from the official release of this repository, over TLS, and the url is
+     *    checked against that repository before anything is downloaded;
+     *  - the file's SHA-256 is compared with the digest GitHub published for the asset, when there
+     *    is one;
+     *  - the package inside the file is read and has to be this app's own package, so a file that
+     *    is not an update of IronPulse is never handed over;
+     *  - Android itself refuses an APK that is signed with another key, and it asks the athlete
+     *    to confirm the installation.
+     *
+     * The app never installs anything on its own and never works around that confirmation.
      */
     fun installIntentFor(uri: Uri): Intent = Intent(Intent.ACTION_VIEW).apply {
+        // lgtm[java/android/apk-installation]
         setDataAndType(uri, "application/vnd.android.package-archive")
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
