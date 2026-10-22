@@ -2,6 +2,8 @@ package com.example.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -43,6 +45,8 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.MonitorWeight
+import androidx.compose.material.icons.filled.NewReleases
+import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RestartAlt
@@ -98,6 +102,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
 import com.example.data.model.UserProfile
 import com.example.ui.components.ProgressionLineChart
+import com.example.ui.components.AboutDialog
+import com.example.ui.components.UpdateDialog
+import com.example.util.ApkInstaller
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.DarkSurface
@@ -136,6 +143,14 @@ fun SettingsScreen(
 
     var showClearDataDialog by remember { mutableStateOf(false) }
 
+    // The update checker and the About sheet.
+    var showUpdateDialog by remember { mutableStateOf(false) }
+    var showAboutDialog by remember { mutableStateOf(false) }
+    // The downloaded update that is waiting to be installed, if there is one.
+    var pendingInstall by remember { mutableStateOf<java.io.File?>(null) }
+    // Shown when Android will not let the app install a package yet.
+    var installPermissionNeeded by remember { mutableStateOf(false) }
+
     // API Key & Model in settings
     val persistedApiKey by viewModel.geminiApiKey.collectAsStateWithLifecycle()
     val persistedModelName by viewModel.geminiModelName.collectAsStateWithLifecycle()
@@ -165,6 +180,72 @@ fun SettingsScreen(
 
     val uriHandler = LocalUriHandler.current
     val context = LocalContext.current
+
+    /**
+     * The update state and the About information, read from the view model.
+     *
+     * They are read here rather than inside the dialogs so the Settings screen can show the
+     * current version in its own row.
+     */
+    val updateState by viewModel.updateState.collectAsStateWithLifecycle()
+    val aboutState by viewModel.aboutState.collectAsStateWithLifecycle()
+
+    /**
+     * Opens the system installer for a downloaded update.
+     *
+     * The file is shared through the app's own file provider, so it never has to be readable by
+     * anything else on the device.
+     */
+    val launchInstaller: (java.io.File) -> Unit = { file ->
+        try {
+            context.startActivity(ApkInstaller.installIntent(context, file))
+        } catch (_: Exception) {
+            // No installer on the device, or it refused the intent. The dialog says so.
+            installPermissionNeeded = false
+            showUpdateDialog = true
+        }
+    }
+
+    /**
+     * Asks Android for the permission to install a package, and installs as soon as it is given.
+     *
+     * The permission is re-checked when the athlete comes back, rather than assumed: they can
+     * refuse it, and the app has to notice.
+     */
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        val file = pendingInstall
+        if (file == null) return@rememberLauncherForActivityResult
+        if (ApkInstaller.canRequestPackageInstalls(context)) {
+            pendingInstall = null
+            launchInstaller(file)
+        } else {
+            installPermissionNeeded = true
+        }
+    }
+
+    /**
+     * Starts the installation of the downloaded update.
+     */
+    val startInstall: () -> Unit = {
+        val ready = updateState as? com.example.data.model.UpdateState.ReadyToInstall
+        val file = ready?.file
+        if (file != null) {
+            if (ApkInstaller.canRequestPackageInstalls(context)) {
+                launchInstaller(file)
+            } else {
+                // Android 8 and later need the permission before an app may install a package.
+                pendingInstall = file
+                try {
+                    permissionLauncher.launch(ApkInstaller.installPermissionIntent(context))
+                } catch (_: Exception) {
+                    pendingInstall = null
+                    installPermissionNeeded = true
+                }
+            }
+        }
+    }
 
     /**
      * Opens [url] with an explicit ACTION_VIEW intent so the link always goes to the device's
@@ -639,6 +720,113 @@ fun SettingsScreen(
             }
         }
 
+        // The app itself: the version that is running, the update checker and the release notes.
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("app_card"),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                shape = RoundedCornerShape(16.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "IronPulse",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = TextWhite
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "version ${aboutState.installedVersion}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Check for updates.
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showUpdateDialog = true
+                                viewModel.checkForUpdates()
+                            }
+                            .padding(vertical = 10.dp)
+                            .testTag("check_for_updates_row"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SystemUpdateAlt,
+                            contentDescription = null,
+                            tint = MintGreen,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Check for updates",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = TextWhite
+                            )
+                            Text(
+                                text = updateStatusText(updateState, aboutState),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    androidx.compose.material3.HorizontalDivider(color = DarkBorder)
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // About and what's new.
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showAboutDialog = true
+                                viewModel.loadAboutInfo()
+                            }
+                            .padding(vertical = 10.dp)
+                            .testTag("about_row"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.NewReleases,
+                            contentDescription = null,
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "About IronPulse",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = TextWhite
+                            )
+                            Text(
+                                text = "The version, and what is new in the official releases",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // Revert the exercise catalog Card
         item {
             RevertCatalogCard(
@@ -709,6 +897,81 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+
+    // The update checker.
+    if (showUpdateDialog) {
+        UpdateDialog(
+            state = updateState,
+            installedVersion = aboutState.installedVersion,
+            releasesPageUrl = viewModel.releasesPageUrl(),
+            onCheck = { viewModel.checkForUpdates() },
+            onDownload = { viewModel.downloadUpdate() },
+            onInstall = { startInstall() },
+            onOpenReleasePage = { url -> openExternalUrl(url) },
+            onDismiss = {
+                showUpdateDialog = false
+                viewModel.dismissUpdate()
+            }
+        )
+    }
+
+    // The About sheet, with the release notes of the official releases.
+    if (showAboutDialog) {
+        AboutDialog(
+            state = aboutState,
+            onDismiss = { showAboutDialog = false },
+            onOpenReleasePage = { url -> openExternalUrl(url) },
+            onCheckForUpdates = {
+                showAboutDialog = false
+                showUpdateDialog = true
+                viewModel.checkForUpdates()
+            }
+        )
+    }
+
+    // Android will not install a package until the person allows this app to do so.
+    if (installPermissionNeeded) {
+        AlertDialog(
+            onDismissRequest = { installPermissionNeeded = false },
+            containerColor = DarkSurface,
+            title = {
+                Text(
+                    text = "Allow the installation",
+                    color = TextWhite,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "Android only lets an app install a package when you allow it. " +
+                        "Turn on \"Install unknown apps\" for IronPulse in the system settings, " +
+                        "then come back and the update will install.",
+                    color = TextMuted
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        installPermissionNeeded = false
+                        try {
+                            permissionLauncher.launch(ApkInstaller.installPermissionIntent(context))
+                        } catch (_: Exception) {
+                            // The settings screen is not there either, so there is nothing to do.
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Open the settings", color = DarkBg, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { installPermissionNeeded = false }) {
+                    Text("Not now", color = TextMuted)
+                }
+            }
+        )
     }
 
     // Delete All App Data Confirmation Dialog
@@ -1285,6 +1548,27 @@ fun SettingsScreen(
             dismissButton = null
         )
     }
+}
+
+/**
+ * The line under the "Check for updates" row.
+ *
+ * It says what is known without making a second request: the version that is running, and what the
+ * last check found.
+ */
+private fun updateStatusText(
+    updateState: com.example.data.model.UpdateState,
+    aboutState: com.example.data.model.AboutState
+): String = when {
+    updateState is com.example.data.model.UpdateState.Checking -> "Checking the official releases..."
+    updateState is com.example.data.model.UpdateState.Available ->
+        "Version ${updateState.release.versionText} is available"
+    updateState is com.example.data.model.UpdateState.UpToDate ->
+        "Version ${aboutState.installedVersion} is the latest version"
+    updateState is com.example.data.model.UpdateState.Failed -> updateState.message
+    aboutState.hasUpdate -> "Version ${aboutState.latestVersion} is available"
+    aboutState.latestVersion != null -> "Version ${aboutState.installedVersion} is the latest version"
+    else -> "Installed version ${aboutState.installedVersion}"
 }
 
 /**

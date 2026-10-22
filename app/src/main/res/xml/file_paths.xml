@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!--
+        The folder the downloaded release APK is written to. It is inside the app's own private
+        storage, and it is shared with the system installer through this provider rather than as a
+        file path, so nothing else on the device can read it.
+
+        The path has no trailing separator on purpose: the provider turns it into the root of the
+        share, and a root that ends in a separator never matches the canonical path of the file
+        inside it, so the installer would be handed nothing to open.
+    -->
+    <files-path
+        name="updates"
+        path="updates" />
+</paths>
