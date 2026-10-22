@@ -57,8 +57,6 @@ class ReleaseApi(
             // anonymous on purpose: no token is built into the app, and none is read from the
             // device. The connection is TLS, and the answer is only ever used to find out which
             // version exists and where its own file is.
-            //
-            // lgtm[js/android/missing-certificate-pinning]
             httpClient.newCall(request).execute().use { response ->
                 val body = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
@@ -122,8 +120,6 @@ class ReleaseApi(
 
             // The same anonymous TLS call as the metadata above, and the same reason: the
             // download is only ever the official file of an official release.
-            //
-            // lgtm[java/android/missing-certificate-pinning]
             httpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     return@withContext Result.failure(
