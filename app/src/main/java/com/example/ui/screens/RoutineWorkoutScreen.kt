@@ -91,7 +91,7 @@ import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import com.example.ui.components.ExerciseDetailDialog
 import com.example.ui.components.ExerciseEditorDialog
-import com.example.ui.components.AutoSaveIndicator
+import com.example.ui.components.WorkoutTimerBadge
 import kotlinx.coroutines.flow.map
 import com.example.ui.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
@@ -99,9 +99,17 @@ import kotlinx.coroutines.delay
 @Composable
 fun RoutineWorkoutScreen(
     viewModel: MainViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /*
+     * The workout state to draw, when the screen is being animated out.
+     *
+     * The view model has already cleared the active workout by then, and without a snapshot the
+     * exiting screen would flash its "no active workout" placeholder while it slides away.
+     */
+    workoutSnapshot: ActiveRoutineWorkoutState? = null
 ) {
-    val activeWorkout by viewModel.activeRoutineWorkout.collectAsStateWithLifecycle()
+    val liveWorkout by viewModel.activeRoutineWorkout.collectAsStateWithLifecycle()
+    val activeWorkout = workoutSnapshot ?: liveWorkout
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
     // Weights live in kilograms; this is the unit the athlete reads and types in
     val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
@@ -226,36 +234,16 @@ fun RoutineWorkoutScreen(
                                 color = TextMuted,
                                 maxLines = 1
                             )
-                            // Says that the session is being written down, so closing the app by
-                            // accident costs nothing.
-                            AutoSaveIndicator(
-                                lastAutoSaveAt = lastAutoSaveAt,
-                                modifier = Modifier.padding(top = 3.dp)
-                            )
                         }
 
-                        // Live Timer Badge
-                        Box(
-                            modifier = Modifier
-                                .background(DarkBg, RoundedCornerShape(8.dp))
-                                .border(1.dp, DarkBorder, RoundedCornerShape(8.dp))
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .background(MintGreen, CircleShape)
-                                )
-                                Spacer(modifier = Modifier.width(5.dp))
-                                Text(
-                                    text = timerFormatted,
-                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = MintGreen
-                                )
-                            }
-                        }
+                        // Live timer badge with the auto save cloud inside it, on the left of the
+                        // time. The cloud says the session is written down, and pops a check when
+                        // a save lands.
+                        WorkoutTimerBadge(
+                            timerText = timerFormatted,
+                            lastAutoSaveAt = lastAutoSaveAt,
+                            timerColor = MintGreen
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(6.dp))
@@ -361,7 +349,19 @@ fun RoutineWorkoutScreen(
                             unit = weightUnit,
                             onAddSet = { viewModel.addSetToRoutineWorkout(exercise) },
                             onUpdateSet = { setIndexInWorkout, updatedSet ->
+                                val wasCompleted =
+                                    workout.sets.getOrNull(setIndexInWorkout)?.isCompleted == true
                                 viewModel.updateRoutineWorkoutSet(setIndexInWorkout, updatedSet)
+                                // A routine entry may carry its own rest default. Ticking a set
+                                // starts that timer through the existing timer flow; changing the
+                                // active timer afterwards is a manual override and never rewrites
+                                // the saved routine.
+                                if (!wasCompleted && updatedSet.isCompleted) {
+                                    val restSeconds = routineItem?.restSeconds ?: 0
+                                    if (restSeconds > 0) {
+                                        viewModel.startRestTimer(restSeconds, exercise.name)
+                                    }
+                                }
                             },
                             onDeleteSet = { setIndexInWorkout ->
                                 viewModel.deleteRoutineWorkoutSet(setIndexInWorkout)

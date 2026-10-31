@@ -66,11 +66,34 @@ object BodyWeightTimeline {
      * was the bug this fixed: the isolated weight tag of a set logged last month changed as soon
      * as a new weight was logged today.
      *
-     * A set logged before the snapshot existed carries 0 and falls back to the current profile
-     * weight, which is the best guess available for it.
+     * A stored set should never need the fallback: migration 10 -> 11 fills the rows that predate
+     * the snapshot, and finishing a workout stamps the final body weight on every set it saves.
+     * The fallback remains for a set that is still in progress and has not been stamped yet.
      */
     fun bodyWeightForSet(set: LoggedSet, profileWeightKg: Double): Double? =
         set.bodyWeightKg.takeIf { it > 0.0 } ?: currentWeightOrNull(profileWeightKg)
+
+    /**
+     * Whether a set can appear under a bodyweight isolated-weight tag at all.
+     *
+     * Only the bodyweight types qualify. A [ExerciseType.STANDARD_WEIGHT] set with no load is an
+     * empty bar, not a bodyweight set: tagging it with the athlete's weight is what produced the
+     * ghost "BW: 80 kg" chip on a zero-load barbell exercise.
+     */
+    fun isBodyweightTagCandidate(set: LoggedSet): Boolean =
+        set.weight == 0.0 && set.addedWeight == 0.0 && ExerciseType.isBodyweight(set.exerciseType)
+
+    /**
+     * Whether [set] belongs to the isolated weight [tag].
+     *
+     * A set matches by its external load, its added load, or — for bodyweight work only — the
+     * body weight it was done at. The body weight passed in is already the set's own snapshot, not
+     * today's profile weight.
+     */
+    fun matchesIsolatedWeight(set: LoggedSet, tag: Double, bodyWeightKg: Double?): Boolean =
+        set.weight == tag ||
+            set.addedWeight == tag ||
+            (isBodyweightTagCandidate(set) && bodyWeightKg == tag)
 
     /**
      * The same value, but with the fallback applied so a number is always returned.

@@ -60,6 +60,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.Exercise
+import com.example.data.model.ExerciseSchema
 import com.example.data.model.ExerciseType
 import com.example.data.seed.toJsonArray
 import com.example.ui.components.AnimatedDropdownField
@@ -113,8 +114,10 @@ fun ExerciseEditorDialog(
     var category by remember { mutableStateOf(exercise.category) }
     var type by remember { mutableStateOf(exercise.exerciseType) }
     var equipment by remember { mutableStateOf(exercise.equipment) }
-    var bodyPart by remember { mutableStateOf(exercise.bodyPart) }
-    var target by remember { mutableStateOf(exercise.target) }
+    // Old library rows can still carry the dataset's lower case spelling until the reseed touches
+    // them; canonicalising here means the dropdown shows the selected option even for those rows.
+    var bodyPart by remember { mutableStateOf(ExerciseSchema.canonicalBodyPart(exercise.bodyPart)) }
+    var target by remember { mutableStateOf(ExerciseSchema.canonicalTarget(exercise.target)) }
     var secondary by remember { mutableStateOf(exercise.secondaryMuscleList) }
     var secondaryInput by remember { mutableStateOf(exercise.secondaryMuscleList.joinToString(", ")) }
     var guidance by remember {
@@ -294,7 +297,7 @@ fun ExerciseEditorDialog(
                     value = bodyPart,
                     icon = Icons.Default.AccessibilityNew,
                     accent = GoldenAmber,
-                    options = DATASET_BODY_PARTS,
+                    options = ExerciseSchema.BODY_PART_OPTIONS,
                     expanded = bodyPartMenuExpanded,
                     onExpandedChange = { bodyPartMenuExpanded = it },
                     onOptionSelected = { bodyPart = it },
@@ -310,7 +313,7 @@ fun ExerciseEditorDialog(
                     value = target,
                     icon = Icons.Default.Search,
                     accent = CoralOrange,
-                    options = DATASET_TARGET_MUSCLES,
+                    options = ExerciseSchema.TARGET_MUSCLES,
                     expanded = targetMenuExpanded,
                     onExpandedChange = { targetMenuExpanded = it },
                     onOptionSelected = { target = it },
@@ -761,21 +764,4 @@ private val EDITOR_EQUIPMENT = listOf(
     "Pull-up Bar", "Dip Bar", "Bench", "Stability Ball", "Foam Roller", "Mat",
     "Treadmill", "Stationary Bike", "Elliptical Machine", "Rowing Machine",
     "Jump Rope", "Sled", "Tire", "Other"
-)
-
-/**
- * The dataset's own target muscle vocabulary, so the editor and the catalog agree on spelling.
- */
-private val DATASET_TARGET_MUSCLES = listOf(
-    "Pectorals", "Lats", "Upper Back", "Lower Back", "Trapezius", "Deltoids",
-    "Rotator Cuff", "Biceps", "Triceps", "Forearms", "Abdominals", "Obliques",
-    "Serratus Anterior", "Hip Flexors", "Adductors", "Abductors", "Glutes",
-    "Hamstrings", "Quadriceps", "Calves", "Soleus", "Tibialis", "Ankles",
-    "Neck", "Cardiovascular System", "Full Body"
-)
-
-/** The body part vocabulary the dataset itself uses, offered so the editor stays consistent with it. */
-private val DATASET_BODY_PARTS = listOf(
-    "chest", "back", "shoulders", "upper arms", "lower arms",
-    "waist", "upper legs", "lower legs", "cardio", "neck"
 )

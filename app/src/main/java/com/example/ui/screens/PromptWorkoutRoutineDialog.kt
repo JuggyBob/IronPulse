@@ -171,7 +171,7 @@ fun PromptWorkoutRoutineDialog(
                                     color = TextWhite
                                 )
                                 Text(
-                                    text = "Generate a custom routine with Gemini 3.5 Flash Lite",
+                                    text = "Generate a custom routine with your AI provider",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = TextMuted,
                                     fontSize = 11.sp
@@ -209,13 +209,13 @@ fun PromptWorkoutRoutineDialog(
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
                                 Text(
-                                    text = "💡 Tell Gemini AI what you need:",
+                                    text = "💡 Tell the AI coach what you need:",
                                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                                     color = ElectricCyan
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "Describe your training goals, preferred schedule (e.g. 3 or 4-day split), target muscle groups, or available equipment. Gemini AI will craft a structured routine using your local exercise catalog (and dynamically add any missing exercises)!",
+                                    text = "Describe your training goals, preferred schedule (e.g. 3 or 4-day split), target muscle groups, or available equipment. The AI coach will craft a structured routine using your local exercise catalog (and dynamically add any missing exercises)!",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = TextMuted,
                                     lineHeight = 18.sp

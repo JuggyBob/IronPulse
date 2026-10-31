@@ -268,9 +268,13 @@ object MonthlyExerciseAnalyzer {
             set.addedWeight > 0.0 -> "+${trim(set.addedWeight, weightUnit)}$unit" +
                 (bodyWeight?.let { " (bodyweight ${trim(it, weightUnit)}$unit)" } ?: "")
             set.weight > 0.0 -> "${trim(set.weight, weightUnit)}$unit"
-            // Never invent a body weight: say plainly that none was recorded for that day
-            bodyWeight != null -> "bodyweight ${trim(bodyWeight, weightUnit)}$unit"
-            else -> "bodyweight not recorded"
+            // Only a bodyweight type can be described as bodyweight. An empty barbell is not a
+            // bodyweight movement, and giving it the athlete's weight is the same ghost load the
+            // Progress screen used to show.
+            ExerciseType.isBodyweight(set.exerciseType) && bodyWeight != null ->
+                "bodyweight ${trim(bodyWeight, weightUnit)}$unit"
+            ExerciseType.isBodyweight(set.exerciseType) -> "bodyweight not recorded"
+            else -> "0$unit"
         }
     }
 

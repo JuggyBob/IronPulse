@@ -12,9 +12,32 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.data.model.UserProfile
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 val Context.userDataStore: DataStore<Preferences> by preferencesDataStore(name = "user_preferences")
+
+/**
+ * Everything that decides which Home widgets are shown and how they are personalized.
+ *
+ * [hiddenIds] is null until the athlete customizes the page for the first time. That distinction
+ * matters: a fresh install keeps the optional photo and goal widgets off Home, while an athlete
+ * who has explicitly turned everything on has an empty set and sees every widget.
+ */
+data class HomeWidgetConfig(
+    val order: List<String> = emptyList(),
+    val hiddenIds: Set<String>? = null
+)
+
+private fun parseWidgetIds(raw: String?): List<String> =
+    raw
+        ?.split(',')
+        ?.map { it.trim() }
+        ?.filter { it.isNotEmpty() }
+        ?: emptyList()
+
+private fun parseWidgetIdSet(raw: String): Set<String> =
+    parseWidgetIds(raw).toSet()
 
 class UserPreferencesRepository(private val context: Context) {
     companion object {
@@ -97,6 +120,68 @@ class UserPreferencesRepository(private val context: Context) {
         val WEEK_STARTS_ON_MONDAY = booleanPreferencesKey("week_starts_on_monday")
 
         /**
+         * How often the workout in progress is written to disk, in seconds.
+         *
+         * The athlete owns this because the right answer depends on the phone and the workout: ten
+         * seconds is almost free, but someone logging a four hour session may prefer a quieter
+         * cadence, and someone interrupted often may want every five.
+         */
+        val AUTO_SAVE_INTERVAL_SECONDS = intPreferencesKey("auto_save_interval_seconds")
+
+        /**
+         * Whether the app looks for a newer release when it starts.
+         *
+         * On by default, because the update dialog is the only way the athlete learns a fix is
+         * available. The manual "Check for updates" entry always works either way.
+         */
+        val AUTO_CHECK_UPDATES_ON_START = booleanPreferencesKey("auto_check_updates_on_start")
+
+        /**
+         * The app version for which the startup update prompt was dismissed with "Do not show
+         * again".
+         *
+         * Stored against the *installed* version rather than the newer one, so updating the app
+         * makes the suppression stop matching by itself: the athlete asked to stop being reminded
+         * for that release, not forever.
+         */
+        val DISMISSED_UPDATE_PROMPT_VERSION = stringPreferencesKey("dismissed_update_prompt_version")
+
+        /**
+         * The athlete's Home widget order, as a comma separated list of stable widget ids.
+         *
+         * Kept as text rather than nine keys because the order is one thing, and a list that
+         * changes as widgets are added or removed can be merged with the known ids on read.
+         */
+        val HOME_WIDGET_ORDER = stringPreferencesKey("home_widget_order")
+
+        /**
+         * The widgets the athlete removed from Home, as a comma separated list of stable ids.
+         *
+         * Absent means "never customized" and lets the optional widgets stay hidden by default;
+         * an empty string means "customized, nothing is hidden". Keeping removals separate from the
+         * order is what lets a removed card be added back where it belongs.
+         */
+        val HOME_WIDGET_HIDDEN = stringPreferencesKey("home_widget_hidden")
+
+        /**
+         * The app-private copy of the motivation photo, or absent when no photo is selected.
+         *
+         * Only the path is stored here. The bytes live in [com.example.util.WidgetPhotoStore], so
+         * clearing app data removes them with the rest of the app's files.
+         */
+        val HOME_WIDGET_PHOTO_PATH = stringPreferencesKey("home_widget_photo_path")
+
+        /** The athlete's target number of workouts per week, shown by the goal widget. */
+        val HOME_WIDGET_WEEKLY_GOAL = intPreferencesKey("home_widget_weekly_goal")
+
+        /** The goal a fresh install starts with, and the value a reset restores. */
+        const val DEFAULT_HOME_WIDGET_WEEKLY_GOAL = 3
+
+        /** The intervals the settings page offers, in seconds. */
+        val AUTO_SAVE_INTERVAL_OPTIONS = listOf(5, 10, 15, 30, 60)
+        const val DEFAULT_AUTO_SAVE_INTERVAL_SECONDS = 10
+
+        /**
          * The routine the athlete has scheduled their week with.
          *
          * A saved routine is not automatically the athlete's plan: they may keep several, and
@@ -132,7 +217,11 @@ class UserPreferencesRepository(private val context: Context) {
          * Monday is the default because it is the convention most training plans are written in,
          * and it is the one the seven day schedules are seeded from.
          */
-        val weekStartsOnMonday: Boolean = true
+        val weekStartsOnMonday: Boolean = true,
+        /** How often the in-progress workout is auto saved, in seconds. */
+        val autoSaveIntervalSeconds: Int = DEFAULT_AUTO_SAVE_INTERVAL_SECONDS,
+        /** Whether a newer release is looked up automatically when the app starts. */
+        val autoCheckUpdatesOnStart: Boolean = true
     )
 
     val appSettingsFlow: Flow<AppSettings> = context.userDataStore.data.map { prefs ->
@@ -142,7 +231,10 @@ class UserPreferencesRepository(private val context: Context) {
             restTimerSound = prefs[REST_TIMER_SOUND_ENABLED] ?: true,
             shareAthleteDataWithAi = prefs[SHARE_ATHLETE_DATA_WITH_AI] ?: false,
             autoplayExerciseDemos = prefs[AUTOPLAY_EXERCISE_DEMOS] ?: true,
-            weekStartsOnMonday = prefs[WEEK_STARTS_ON_MONDAY] ?: true
+            weekStartsOnMonday = prefs[WEEK_STARTS_ON_MONDAY] ?: true,
+            autoSaveIntervalSeconds = (prefs[AUTO_SAVE_INTERVAL_SECONDS]
+                ?: DEFAULT_AUTO_SAVE_INTERVAL_SECONDS).coerceIn(5, 300),
+            autoCheckUpdatesOnStart = prefs[AUTO_CHECK_UPDATES_ON_START] ?: true
         )
     }
 
@@ -184,6 +276,117 @@ class UserPreferencesRepository(private val context: Context) {
      */
     suspend fun setWeekStartsOnMonday(enabled: Boolean) {
         context.userDataStore.edit { it[WEEK_STARTS_ON_MONDAY] = enabled }
+    }
+
+    /** How often the workout in progress is written to disk, in seconds. */
+    val autoSaveIntervalSecondsFlow: Flow<Int> = context.userDataStore.data.map { prefs ->
+        (prefs[AUTO_SAVE_INTERVAL_SECONDS] ?: DEFAULT_AUTO_SAVE_INTERVAL_SECONDS).coerceIn(5, 300)
+    }
+
+    suspend fun setAutoSaveIntervalSeconds(seconds: Int) {
+        context.userDataStore.edit {
+            it[AUTO_SAVE_INTERVAL_SECONDS] = seconds.coerceIn(5, 300)
+        }
+    }
+
+    /** Whether a newer release is looked up automatically when the app starts. */
+    val autoCheckUpdatesOnStartFlow: Flow<Boolean> = context.userDataStore.data.map { prefs ->
+        prefs[AUTO_CHECK_UPDATES_ON_START] ?: true
+    }
+
+    suspend fun setAutoCheckUpdatesOnStart(enabled: Boolean) {
+        context.userDataStore.edit { it[AUTO_CHECK_UPDATES_ON_START] = enabled }
+    }
+
+    /**
+     * The installed app version the athlete asked not to be reminded for, or null.
+     *
+     * The UI compares it with the running version: once the app is updated the stored version is
+     * older and the reminder is allowed again.
+     */
+    val dismissedUpdatePromptVersionFlow: Flow<String?> = context.userDataStore.data.map { prefs ->
+        prefs[DISMISSED_UPDATE_PROMPT_VERSION]?.takeIf { it.isNotBlank() }
+    }
+
+    suspend fun dismissUpdatePromptForVersion(version: String) {
+        context.userDataStore.edit { it[DISMISSED_UPDATE_PROMPT_VERSION] = version }
+    }
+
+    /**
+     * The Home widget configuration, read as one value so the order and the hidden set can never
+     * be observed half-updated by the Home screen.
+     */
+    val homeWidgetConfigFlow: Flow<HomeWidgetConfig> = context.userDataStore.data.map { prefs ->
+        HomeWidgetConfig(
+            order = parseWidgetIds(prefs[HOME_WIDGET_ORDER]),
+            hiddenIds = prefs[HOME_WIDGET_HIDDEN]?.let { parseWidgetIdSet(it) }
+        )
+    }
+
+    /** The Home widget order last saved by the athlete, empty before the first reorder. */
+    val homeWidgetOrderFlow: Flow<List<String>> = homeWidgetConfigFlow.map { it.order }
+
+    /** The widgets removed from Home, or null when the athlete has never customized the page. */
+    val homeWidgetHiddenFlow: Flow<Set<String>?> = homeWidgetConfigFlow.map { it.hiddenIds }
+
+    /** The app-private motivation photo path, or blank when none is selected. */
+    val homeWidgetPhotoPathFlow: Flow<String> = context.userDataStore.data.map { prefs ->
+        prefs[HOME_WIDGET_PHOTO_PATH].orEmpty()
+    }
+
+    /** The athlete's weekly workout target, clamped to the range the manager offers. */
+    val homeWidgetWeeklyGoalFlow: Flow<Int> = context.userDataStore.data.map { prefs ->
+        (prefs[HOME_WIDGET_WEEKLY_GOAL] ?: DEFAULT_HOME_WIDGET_WEEKLY_GOAL).coerceIn(1, 7)
+    }
+
+    /** Keeps the order for the drag gesture, which never changes which widgets are visible. */
+    suspend fun setHomeWidgetOrder(order: List<String>) {
+        context.userDataStore.edit { it[HOME_WIDGET_ORDER] = order.joinToString(",") }
+    }
+
+    /**
+     * Writes the visible order and the hidden set in one DataStore edit.
+     *
+     * Adding or removing a widget changes both values. Writing them separately would let a process
+     * death between the two writes leave a widget both removed and visible on the next launch.
+     */
+    suspend fun setHomeWidgetConfig(order: List<String>, hiddenIds: Set<String>) {
+        context.userDataStore.edit { prefs ->
+            prefs[HOME_WIDGET_ORDER] = order.joinToString(",")
+            prefs[HOME_WIDGET_HIDDEN] = hiddenIds.sorted().joinToString(",")
+        }
+    }
+
+    /** Records the widget photo, or clears it when [path] is blank. */
+    suspend fun setHomeWidgetPhotoPath(path: String) {
+        context.userDataStore.edit { prefs ->
+            if (path.isBlank()) {
+                prefs.remove(HOME_WIDGET_PHOTO_PATH)
+            } else {
+                prefs[HOME_WIDGET_PHOTO_PATH] = path
+            }
+        }
+    }
+
+    suspend fun setHomeWidgetWeeklyGoal(goal: Int) {
+        context.userDataStore.edit {
+            it[HOME_WIDGET_WEEKLY_GOAL] = goal.coerceIn(1, 7)
+        }
+    }
+
+    /**
+     * Restores the stock Home page by removing only the four widget keys.
+     *
+     * It is one edit, so a failure leaves the previous configuration intact rather than half
+     * reset. Workouts, routines, weigh-ins, the profile and every other setting are untouched.
+     */
+    suspend fun resetHomeWidgets() {
+        context.userDataStore.edit { prefs ->
+            prefs.remove(HOME_WIDGET_ORDER)
+            prefs.remove(HOME_WIDGET_HIDDEN)
+            prefs.remove(HOME_WIDGET_PHOTO_PATH)
+            prefs.remove(HOME_WIDGET_WEEKLY_GOAL)
+        }
     }
 
     /**
@@ -300,7 +503,9 @@ class UserPreferencesRepository(private val context: Context) {
                 id = 1,
                 name = prefs[PROFILE_NAME] ?: "Athlete",
                 heightCm = prefs[PROFILE_HEIGHT_CM] ?: 178.0,
-                currentWeightKg = prefs[PROFILE_CURRENT_WEIGHT_KG] ?: 75.0,
+                // 0 rather than an invented 75: the caller merges this with the profile stored in
+                // Room and the weigh-in history. A default here would shadow a real Room weight.
+                currentWeightKg = prefs[PROFILE_CURRENT_WEIGHT_KG] ?: 0.0,
                 targetWeightKg = prefs[PROFILE_TARGET_WEIGHT_KG] ?: 78.0,
                 age = prefs[PROFILE_AGE] ?: 26,
                 preferredUnit = prefs[PROFILE_PREFERRED_UNIT] ?: "kg",
@@ -310,6 +515,19 @@ class UserPreferencesRepository(private val context: Context) {
         } else {
             null
         }
+    }
+
+    /**
+     * The profile weight as it is actually stored, without a made-up default.
+     *
+     * Used by the database open repair, which must not stamp 75 kg on every historical set merely
+     * because the DataStore key is missing. Returns null when no profile is saved or its weight is
+     * not usable.
+     */
+    suspend fun storedProfileWeightKg(): Double? {
+        val prefs = context.userDataStore.data.first()
+        if (prefs[PROFILE_IS_SAVED] != true) return null
+        return prefs[PROFILE_CURRENT_WEIGHT_KG]?.takeIf { it > 0.0 }
     }
 
     suspend fun saveUserProfile(profile: UserProfile) {

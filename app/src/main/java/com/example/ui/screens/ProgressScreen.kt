@@ -193,9 +193,6 @@ fun ProgressScreen(
         }
     }
 
-    val isPureBodyweight = remember(exerciseHistorySets) {
-        exerciseHistorySets.isNotEmpty() && exerciseHistorySets.all { it.weight == 0.0 && it.addedWeight == 0.0 }
-    }
     val hasAddedWeight = remember(exerciseHistorySets) {
         exerciseHistorySets.any { it.addedWeight > 0.0 || (it.exerciseType == ExerciseType.ADDED_WEIGHT && it.addedWeight == 0.0) }
     }
@@ -209,12 +206,14 @@ fun ProgressScreen(
             //
             // The body weight has to be the one the set carries, not the one the athlete has
             // today. A set done at 80 kg and a set done at 84 kg are two different bodyweight
-            // entries, and the "BW: 80 kg" tag has to show only the first one.
+            // entries, and the "BW: 80 kg" tag has to show only the first one. Only bodyweight
+            // exercise types qualify: a zero-load barbell set is an empty bar.
             exerciseHistorySets.filter { set ->
-                set.weight == tag ||
-                    set.addedWeight == tag ||
-                    (set.weight == 0.0 && set.addedWeight == 0.0 &&
-                        BodyWeightTimeline.bodyWeightForSet(set, userProfile.currentWeightKg) == tag)
+                BodyWeightTimeline.matchesIsolatedWeight(
+                    set = set,
+                    tag = tag,
+                    bodyWeightKg = BodyWeightTimeline.bodyWeightForSet(set, userProfile.currentWeightKg)
+                )
             }
         } ?: exerciseHistorySets
     }
@@ -541,7 +540,7 @@ fun ProgressScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "GEMINI MONTHLY SUMMARY",
+                                text = "AI MONTHLY SUMMARY",
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                 color = ElectricCyan
                             )
@@ -557,9 +556,9 @@ fun ProgressScreen(
 
                     Text(
                         text = if (hasSelection) {
-                            "Send the last ${MonthlyExerciseAnalyzer.WINDOW_DAYS} days of \"$selectedExercise\" to Gemini and get a strength trend analysis for it."
+                            "Send the last ${MonthlyExerciseAnalyzer.WINDOW_DAYS} days of \"$selectedExercise\" to your AI provider and get a strength trend analysis for it."
                         } else {
-                            "Select an exercise above to analyse its strength trend with Gemini."
+                            "Select an exercise above to analyse its strength trend with AI."
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted
@@ -595,7 +594,7 @@ fun ProgressScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Gemini Monthly Summary",
+                                text = "AI Monthly Summary",
                                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                                 color = if (hasSelection) DarkBg else TextMuted,
                                 maxLines = 1,
@@ -1115,7 +1114,7 @@ private fun GeminiSummaryLoadingDialog(
                 }
                 Spacer(modifier = Modifier.width(10.dp))
                 Text(
-                    text = "Gemini Monthly Summary",
+                    text = "AI Monthly Summary",
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                     color = TextWhite
                 )
@@ -1199,7 +1198,7 @@ private fun GeminiSummaryDialog(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "Gemini analysis • $windowLabel",
+                            text = "AI analysis • $windowLabel",
                             style = MaterialTheme.typography.labelSmall,
                             color = ElectricCyan
                         )
@@ -1392,7 +1391,7 @@ private fun SavedSummariesDialog(
                                     )
                                     Spacer(modifier = Modifier.height(2.dp))
                                     Text(
-                                        text = "Pick an exercise above and tap \"Gemini Summary\" to generate one.",
+                                        text = "Pick an exercise above and tap \"AI Summary\" to generate one.",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = TextMuted,
                                         textAlign = TextAlign.Center

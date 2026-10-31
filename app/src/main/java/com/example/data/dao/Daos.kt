@@ -57,6 +57,10 @@ interface ExerciseDao {
     @Query("SELECT * FROM exercises")
     suspend fun getAllExercisesList(): List<Exercise>
 
+    /** Finds an exercise by its stable row id. Used by the AI tool layer. */
+    @Query("SELECT * FROM exercises WHERE id = :id LIMIT 1")
+    suspend fun getExerciseById(id: Long): Exercise?
+
     /** Finds an exercise by its dataset record id, or null when it was never imported. */
     @Query("SELECT * FROM exercises WHERE sourceId = :sourceId LIMIT 1")
     suspend fun getExerciseBySourceId(sourceId: String): Exercise?
@@ -79,6 +83,37 @@ interface ExerciseDao {
 
     @Query("UPDATE exercises SET exerciseType = :exerciseType WHERE LOWER(TRIM(name)) = LOWER(TRIM(:name))")
     suspend fun updateExerciseType(name: String, exerciseType: String)
+
+    @Query(
+        """
+        UPDATE exercises
+        SET exerciseType = CASE
+            WHEN EXISTS (
+                SELECT 1 FROM logged_sets s
+                WHERE LOWER(TRIM(s.exerciseName)) = LOWER(TRIM(exercises.name))
+                  AND s.holdDurationSeconds > 0
+            ) AND NOT EXISTS (
+                SELECT 1 FROM logged_sets s
+                WHERE LOWER(TRIM(s.exerciseName)) = LOWER(TRIM(exercises.name))
+                  AND s.reps > 0
+            ) THEN 'PURE_BODYWEIGHT'
+            ELSE 'ADDED_WEIGHT'
+        END
+        WHERE isCustom = 1
+          AND exerciseType = 'STANDARD_WEIGHT'
+          AND LOWER(TRIM(equipment)) = 'bodyweight'
+          AND EXISTS (
+              SELECT 1 FROM logged_sets s
+              WHERE LOWER(TRIM(s.exerciseName)) = LOWER(TRIM(exercises.name))
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM logged_sets s
+              WHERE LOWER(TRIM(s.exerciseName)) = LOWER(TRIM(exercises.name))
+                AND (s.weight > 0 OR s.addedWeight > 0)
+          )
+        """
+    )
+    suspend fun retagCustomBodyweightExercises(): Int
 
     /** Every distinct exercise name currently stored, used by the AI parser prompts. */
     @Query("SELECT name FROM exercises ORDER BY name ASC")
@@ -376,6 +411,54 @@ interface WorkoutDao {
 
     @Query("UPDATE logged_sets SET exerciseType = (SELECT exerciseType FROM exercises WHERE exercises.name = logged_sets.exerciseName) WHERE EXISTS (SELECT 1 FROM exercises WHERE exercises.name = logged_sets.exerciseName)")
     suspend fun syncLoggedSetExerciseTypes()
+
+    /**
+     * Fills every body weight snapshot that is still missing.
+     *
+     * This runs on every database open, not only inside migration 10 -> 11, because a build that
+     * reached schema 11 without the backfill would otherwise keep its zero rows forever. The value
+     * is the latest weigh-in at or before the workout's end; if there is none, the earliest weigh-in;
+     * then the profile weight handed in by the caller (the live DataStore value); then the profile
+     * stored in Room; and finally the Historic fallback of 75 kg. It only touches rows that are
+     * still <= 0, so a snapshot that was already written is never rewritten.
+     *
+     * @return the number of repaired rows.
+     */
+    @Query(
+        """
+        UPDATE logged_sets
+        SET bodyWeightKg = COALESCE(
+            (
+                SELECT w.weightKg
+                FROM body_weight_logs w
+                WHERE w.weightKg > 0
+                  AND w.timestamp <= COALESCE(
+                      (SELECT s.endTime FROM workout_sessions s
+                       WHERE s.id = logged_sets.sessionId),
+                      logged_sets.timestamp
+                  )
+                ORDER BY w.timestamp DESC
+                LIMIT 1
+            ),
+            (
+                SELECT w.weightKg
+                FROM body_weight_logs w
+                WHERE w.weightKg > 0
+                ORDER BY w.timestamp ASC
+                LIMIT 1
+            ),
+            NULLIF(:profileWeightKg, 0),
+            (
+                SELECT p.currentWeightKg
+                FROM user_profile p
+                WHERE p.id = 1 AND p.currentWeightKg > 0
+            ),
+            75.0
+        )
+        WHERE bodyWeightKg <= 0
+        """
+    )
+    suspend fun repairMissingBodyWeights(profileWeightKg: Double?): Int
 }
 
 @Dao
@@ -397,6 +480,14 @@ interface UserProfileDao {
 interface SavedRoutineDao {
     @Query("SELECT * FROM saved_routines ORDER BY createdAt DESC")
     fun getAllRoutines(): Flow<List<SavedRoutine>>
+
+    /** One routine by its stable id, for the read-only routine lookup tool. */
+    @Query("SELECT * FROM saved_routines WHERE id = :id LIMIT 1")
+    suspend fun getRoutineById(id: Long): SavedRoutine?
+
+    /** All routines in one shot, for the read-only routine lookup tool. */
+    @Query("SELECT * FROM saved_routines ORDER BY createdAt DESC")
+    suspend fun getAllRoutinesOnce(): List<SavedRoutine>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRoutine(routine: SavedRoutine): Long
@@ -484,6 +575,18 @@ interface ChatDao {
 
     @Query("DELETE FROM chat_messages WHERE sessionId = :sessionId")
     suspend fun deleteMessagesForSession(sessionId: String)
+
+    /**
+     * Deletes a conversation and its messages in one transaction.
+     *
+     * Doing the two deletes separately left orphaned messages if the process died between them;
+     * those rows are invisible but still scanned by every session query.
+     */
+    @androidx.room.Transaction
+    suspend fun deleteSessionWithMessages(sessionId: String) {
+        deleteMessagesForSession(sessionId)
+        deleteSession(sessionId)
+    }
 
     @Query("DELETE FROM chat_messages")
     suspend fun deleteAllMessages()

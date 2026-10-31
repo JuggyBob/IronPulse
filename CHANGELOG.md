@@ -13,6 +13,209 @@ Nothing yet. See [CONTRIBUTING.md](CONTRIBUTING.md) to propose a change.
 
 ---
 
+## [3.0.0] — 2026-10-31
+
+This is the first release since 2.0.1. It consolidates every change that was developed under the
+unpublished 2.1.0 working label; no 2.1.0 or 2.2.0 build was ever released.
+
+### Added
+
+#### Autosave you can see and schedule
+- **The autosave indicator is now a small cloud inside the workout-time box, to the left of the
+  running timer.** It is the only thing on screen that says the session is being saved: there is no
+  separate banner and no "Saved" line taking up a row of the workout.
+- When a save lands, the cloud plays a short pop and becomes a check mark, then settles into a
+  lighter green until the next save.
+- **Settings → Autosave interval** chooses how often the workout in progress is written: 5, 10, 15,
+  30 or 60 seconds. The default is 10 seconds. The session is also written the moment the app goes
+  to the background, so leaving the app between two autosaves does not lose the last change.
+
+#### A startup update prompt
+- **Settings → Check for updates on app start** (on by default under the manual Check for updates
+  entry). When IronPulse opens and a newer official release exists, it shows a short prompt with
+  that release's version and changes, and a **Download** button that runs the same verified
+  download as the manual check.
+- **Close** dismisses the prompt for the rest of that launch; it comes back the next time the app
+  starts. **Close and do not show again** suppresses it until the app is updated, because the
+  suppression is stored against the installed version.
+- The prompt only appears once the app is actually usable: it waits for onboarding, a pending
+  workout draft and a running workout to be dealt with, so it never covers those screens.
+- Toggling the setting back off stops the automatic lookup; the manual entry and About IronPulse
+  are unaffected.
+
+#### Reorder and expand on Home
+- **Long-press any Home widget and drag it.** Every card can be moved, the order is saved in
+  DataStore, and it survives restarts. A widget that did not exist when the order was saved is
+  inserted at its default place rather than dropped.
+- **The page rearranges live under your finger.** The other widgets slide out of the way as the
+  card moves, so the gap it hovers over is exactly the order you will get, and a cyan outline on a
+  raised, opaque card makes it obvious which widget is selected.
+- **Holding the card near the top or bottom edge scrolls the list.** The closer to the edge, the
+  faster it scrolls, so a widget can be carried from the bottom of the dashboard to the top in one
+  drag. The card floats above the list, stays fully visible at either edge, and follows the finger
+  while the other cards move past it, even after the slot it came from has scrolled off screen.
+- **The drop settles instead of snapping.** On release the card glides the last few pixels into the
+  gap and the saved order changes once, under the same picture.
+- **Last workout expands in place.** Tapping the card opens it without leaving Home: exercise names
+  in bold, one bullet per logged set with its exact numbers, and **See full history** for the whole
+  session. The arrow rotates smoothly as the panel opens and closes.
+
+#### Customize Home
+- **The tune button in Home's top-right corner opens the widget manager.** Every card is listed
+  with its name and what it shows, so the dashboard is discoverable rather than a fixed page.
+- **Add, remove and reorder widgets.** The manager lists what is on Home and what is available.
+  **Up** and **Down** move a card one slot (the accessible alternative to the long-press drag),
+  and removing a card only hides it: the workouts, weigh-ins and routines it displays are untouched.
+  Adding a widget puts it back at its default place, and adding one twice is a no-op.
+- **Two new widgets.** **Motivation Photo** uses Android's photo picker, copies the picture into
+  app-private storage and centre-crops it to the card's 16:9 shape, so deleting the original from
+  the gallery does not break it. It can be replaced or removed from Home or from the manager, and a
+  missing or unreadable copy shows a clear placeholder with **Choose another** instead of a broken
+  image. **Weekly Goal** counts this week's finished workouts against a target of 1 to 7, set from
+  the card's tune button or the manager.
+- **The selection, order, photo and target survive navigation and restarts**, stored together in
+  DataStore so the order and the removed set cannot disagree after a crash. A page with every
+  widget removed is a valid empty state with a direct **Add widgets** way back.
+- **Settings → Home Widgets → Restore Default Home Widgets** brings back the original eight-card
+  dashboard. The confirmation says exactly what will be discarded (selection, order, weekly target,
+  photo and its app-private copy) and that it cannot be undone; **Cancel** leaves everything as it
+  was. Workouts, weigh-ins, routines, the profile, the exercise library and every other setting are
+  not touched. **Delete App Data** also clears the widget layout and saved widget photos.
+
+#### Motion
+- The bottom navigation is highlighted by one pill that slides between destinations instead of a
+  highlight that disappears and reappears. Home's selected state is a circle, the other tabs are a
+  pill that fits the label.
+- The AI Coach's three top tabs use the same idea: a single underline that slides to the selected
+  tab.
+- Starting a workout from Home slides and fades the session in over the dashboard, and leaving it
+  returns the other way. A retained snapshot feeds the animation, so the workout is not rebuilt
+  halfway through it.
+
+#### Your own AI provider
+- **Six providers, one AI layer.** Google Gemini, OpenAI, Anthropic, OpenRouter, xAI and a custom
+  OpenAI-compatible endpoint now share the same coach, routine generator, parser and monthly
+  summary. Switching provider no longer switches to a second implementation.
+- **A model selector for every provider.** **Choose model** loads the provider's live catalog,
+  shows loading, empty and error states, can refresh, and always accepts a manually typed model id.
+  The selected model is stored per provider. Capability badges report whether a model supports
+  native tool calling, and **Auto**, **Native only** and **Text fallback** control how tools are
+  offered.
+- **Custom endpoints are a deliberate choice.** The URL is validated and normalized, plain HTTP is
+  allowed only for loopback or a private-network host, and the first use shows a privacy/security
+  confirmation naming the exact endpoint. The key is sent only there, redirects are not followed,
+  and TLS certificate checks are never disabled. A local endpoint may need no key at all.
+- **The AI can look things up instead of guessing.** A read-only tool registry exposes exercise
+  search and details, exercise lists, saved routines and routine details. There is no SQL,
+  filesystem, network or code-execution tool. Calls are validated, capped and executed
+  sequentially, with per-conversation deduplication and a bounded number of rounds.
+- **Native tools with a bounded fallback.** OpenAI, Anthropic, Gemini and compatible endpoints use
+  their native tool protocol when available; a provider that rejects tools can fall back to a
+  constrained text protocol. Malformed calls, multiple calls, provider errors, timeouts, retries and
+  cancellation are handled without exposing raw provider payloads.
+
+#### Per-exercise rest defaults in routines
+- **Every routine entry can carry its own rest default** from 0 to 600 seconds. It belongs to the
+  exercise inside that routine, not to the shared exercise definition, so the same movement can
+  rest 45 seconds in one plan and 2 minutes in another. 0 keeps the timer manual, and routines
+  saved before this change keep working unchanged.
+- When a set is ticked in a routine workout, a non-zero default starts the rest timer automatically.
+  Changing the timer by hand never rewrites the routine.
+
+### Changed
+- **IronPulse is portrait-only.** The launcher activity declares `android:screenOrientation="portrait"`,
+  so rotating the phone no longer turns the dashboard, workout or dialogs sideways. Layouts and
+  navigation are unchanged; they simply keep the orientation they were designed for.
+- **Body parts and target muscles are one vocabulary, stored and displayed in Title Case.** Body
+  parts read `Chest`, `Back`, `Legs`, `Shoulders`, `Arms`, `Core`; targets read `Pectorals`,
+  `Deltoids`, `Triceps`, `Abdominals` and the rest of the editor's list. The exercise editor, the
+  detail dialog and the AI-created exercises all use those values, so a value can no longer appear
+  in one spelling in the dropdown and another in the details.
+- The bundled dataset is canonicalised when it is seeded: short dataset words (`abs`, `delts`,
+  `quads`, `traps`, `spine`) and lower-case body parts are folded onto the editor vocabulary, for
+  the primary target and every synergist. `DATASET_VERSION` moves to 4, which is what makes the
+  existing library pick the corrected spelling up on the next open.
+- **Instructions are broken into steps.** The detail dialog renders one bullet per sentence or per
+  line instead of one paragraph: existing numbered or bulleted lists are preserved, sentences are
+  split on their boundaries, and abbreviation dots are not mistaken for the end of one. The
+  splitter is shared, so every screen that shows instructions shows the same steps.
+- **AI settings follow the selected provider.** The key help, key placeholder and default model are
+  provider-aware: Google keeps the AI Studio/phone-verification guide, the other services link to
+  their own consoles, and a custom endpoint says the key is optional. User-facing AI copy no longer
+  names Gemini for features that work with any provider.
+- `versionCode = 7`, `versionName = "3.0.0"`. Room schema v12 with a data migration, no manual step.
+
+### Fixed
+- **The 12-month activity heat map uses local calendar days.** The old code stepped between dates
+  with a fixed 24-hour millisecond constant. Across a daylight-saving change that lands at 23:00 or
+  01:00, so a Monday evening workout could paint Sunday's square and a week could lose or repeat a
+  day. The grid now builds local midnights with `Calendar`, so day keys, week columns, month labels
+  and totals agree across DST and time zones.
+- **Bodyweight no longer reads as `0KG` after updating.** This was the tester's report: every
+  custom bodyweight movement showed `0KG` in the workout history, and Progress offered a bodyweight
+  tag that showed `0 kg` when it was tapped. Three faults combined:
+  - A custom exercise saved as a standard exercise at 0 kg was treated as external weight, so its
+    sets rendered as `0 kg` instead of the athlete's body weight. A custom bodyweight exercise whose
+    history is all zero-load is now retagged with Bodyweight equipment and handled as added-weight
+    work.
+  - The bodyweight tag was offered for any zero-load set and labelled with the profile weight, so
+    Progress listed a `BW: 80 kg` tag that then showed `0 kg` and drew a phantom point in the chart.
+    The tag now only matches sets whose exercise is actually bodyweight work.
+  - The profile-weight preference defaulted to 75 kg and could shadow a stored database weight.
+    The app now merges both sources and treats 0 as "not set"; a new install no longer starts at a
+    made-up 75 kg.
+- **An existing upgrade repairs its own history.** On the next open, any logged set still carrying
+  `bodyWeightKg = 0` is filled from the weigh-in timeline and then the profile weight, whatever
+  schema version the install is on. This fixes installs that had already run the 10 → 11 migration
+  before the snapshot rules were complete.
+- **Home's selected highlight was weaker than the other tabs.** Home used an 18% cyan wash so its
+  icon could stay cyan; against the full-strength indicator on the other destinations it read as
+  barely selected. Home now uses the same full `ElectricCyan` fill with a dark icon.
+- **The Profile weigh-in history no longer jumps when it opens.** The summary and the full log used
+  to be separate list branches: opening the list moved the heading and gave every entry its own
+  card, so the gaps changed with the number of entries. The panel now keeps one slot in the page and
+  slides open, and every weigh-in shares one card separated by a hairline divider. The heading row
+  also keeps its height, so **Hide all** no longer shifts it.
+- **Home was the only tab without the build stamp.** `IronPulse 3.0.0` now sits after the last
+  widget, so it stays at the bottom of the dashboard and moves with the cards when they are
+  reordered.
+- **Changing your body weight no longer rewrites old workouts.** This was the serious one: every
+  set logged before the snapshot existed carried `bodyWeightKg = 0`, and the UI resolved that
+  through the *current* profile weight. A new weigh-in therefore changed the body weight, the
+  volume, the estimated one-rep max and the "isolated weight" tag of every earlier workout while
+  the newest one looked correct.
+  - Finishing either a quick or a routine workout now stamps the final profile weight on **every**
+    saved set, so the session is frozen at the weight it was done at.
+  - `MIGRATION_10_11` backfills the rows that predate the snapshot: the latest weigh-in at or before
+    that workout's end, then the earliest weigh-in, then the profile weight, and finally 75.0 kg.
+    It is a one-time best effort for history that never recorded the number; once written, the row
+    is stable.
+  - Profile edits now affect only new workouts. The body-weight timeline, the volume maths and the
+    isolated weight tags of history all read the stored set weight.
+- **The first target muscle was lower case in exercise details.** The dataset's `target` values
+  (`pectorals`, `deltoids`, …) were outside the dropdown's vocabulary, so they were shown as
+  written. Canonicalisation fixes both the stored value and every display of it.
+- **Body Part was lower case in exercise details.** Same cause, same fix: the dataset's body part is
+  folded onto the Title Case list when seeded and when an exercise is edited or created.
+- **The bottom navigation highlight flickered.** It was a different composable per destination, so
+  it was removed and inserted on every tap. One indicator now stays on screen and animates its
+  position, width and colour.
+- **The AI Coach tab underline flickered for the same reason.** It is one indicator now.
+
+### Database
+- Room 11 → 12. The migration adds indexes for the hot queries: workout sessions by start time,
+  logged sets by session/exercise/timestamp, routines by creation time, weigh-ins by timestamp, and
+  chat sessions/messages by their lookup columns. No table or column changes.
+- Chat deletion now removes a session and its messages in one transaction, so a process death
+  cannot leave orphaned messages behind.
+- Room 10 → 11. No table or column changes: the migration freezes the body weight of historical
+  sets so the profile weight can never rewrite them.
+- The same idempotent repair runs on every open, including installs already on v11 or v12, so a row
+  that is still `0` is filled from the weigh-in timeline and the profile weight without waiting for
+  another schema version.
+
+---
+
 ## [2.0.1] — 2026-10-22
 
 ### Added
@@ -289,7 +492,8 @@ Entries are grouped under **Added**, **Changed**, **Deprecated**, **Removed**, *
 **Security**, each newest first. Versions follow [SemVer](https://semver.org/): bump the patch for a
 fix, the minor for a feature, the major for a breaking change.
 
-[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/JuggyBob/IronPulse/compare/v2.0.1...v3.0.0
 [2.0.1]: https://github.com/JuggyBob/IronPulse/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/JuggyBob/IronPulse/compare/v1.1.1...v2.0.0
 [1.1.1]: https://github.com/JuggyBob/IronPulse/compare/v1.1.0...v1.1.1

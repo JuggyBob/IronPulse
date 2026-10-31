@@ -56,7 +56,10 @@ object WorkoutMetrics {
             ExerciseType.ADDED_WEIGHT -> bodyWeightKg?.let { it + set.addedWeight }
             ExerciseType.PURE_BODYWEIGHT -> bodyWeightKg
             ExerciseType.CARDIO -> null
-            else -> bodyWeightKg
+            // A type from a newer build is not bodyweight by default: doing so invented load for
+            // any future time-based or distance-based type. Its own recorded load is the only safe
+            // reading, and 0 stays 0.
+            else -> set.weight
         }
 
     /**
@@ -109,12 +112,13 @@ object WorkoutMetrics {
         }
         set.weight > 0.0 -> "${format(set.weight, unit)} ${unit.suffix}"
         // A bodyweight or added weight set with no load: the body weight it was done at.
-        set.exerciseType != ExerciseType.STANDARD_WEIGHT && bodyWeightKg != null ->
+        ExerciseType.isBodyweight(set.exerciseType) && bodyWeightKg != null ->
             "${format(bodyWeightKg, unit)} ${unit.suffix} BW"
-        set.exerciseType != ExerciseType.STANDARD_WEIGHT ->
+        ExerciseType.isBodyweight(set.exerciseType) ->
             // No weigh-in existed on that day: never borrow today's weight.
             "Own body weight"
-        // A barbell set with no load logged: the load really is zero.
+        // A barbell set with no load logged: the load really is zero. An unknown type is treated
+        // the same way: inventing the athlete's body weight for it would invent volume too.
         else -> "0 ${unit.suffix}"
     }
 

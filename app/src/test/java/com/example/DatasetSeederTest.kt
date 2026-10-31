@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.db.AppDatabase
 import com.example.data.model.Exercise
+import com.example.data.model.ExerciseSchema
 import com.example.data.model.ExerciseType
 import com.example.data.model.MuscleCategory
 import com.example.data.seed.DatasetSeeder
@@ -59,7 +60,7 @@ class DatasetSeederTest {
 
         val bench = all.firstOrNull { it.name == "Barbell Bench Press" }
         assertNotNull("the dataset's own bench press must be present", bench)
-        assertEquals("chest", bench!!.bodyPart)
+        assertEquals("Chest", bench!!.bodyPart)
         assertTrue("target must come from the dataset", bench.target.isNotBlank())
         assertTrue("English instructions must come from the dataset", bench.instructions.isNotBlank())
         assertTrue("the GIF path must come from the dataset", bench.mediaPath.endsWith(".gif"))
@@ -186,5 +187,50 @@ class DatasetSeederTest {
         for (chip in MuscleCategory.ALL) {
             assertTrue("no exercise landed in the $chip chip", chip in categories)
         }
+    }
+
+    @Test
+    fun `the imported catalog stores the display spelling the editor offers`() = runBlocking {
+        seed()
+
+        val all = db.exerciseDao().getAllExercisesList()
+
+        // The asset's body parts are lower case keys ("upper arms"). Storing them verbatim left the
+        // detail page showing lower case text that the editor's dropdown could not match, which is
+        // the bug this canonicalisation fixes.
+        val badBodyParts = all.filter {
+            it.bodyPart.isNotBlank() && it.bodyPart !in ExerciseSchema.BODY_PART_OPTIONS
+        }
+        assertEquals(
+            "body parts outside the editor's list: ${badBodyParts.take(5).map { it.name to it.bodyPart }}",
+            emptyList<Exercise>(),
+            badBodyParts
+        )
+
+        // The asset's targets include "abs", "delts", "quads", "traps" and "spine". Every one must
+        // arrive as the anatomy name the dropdown and the detail page use.
+        val badTargets = all.filter {
+            it.target.isNotBlank() && !ExerciseSchema.isKnownTarget(it.target)
+        }
+        assertEquals(
+            "targets outside the editor's list: ${badTargets.take(5).map { it.name to it.target }}",
+            emptyList<Exercise>(),
+            badTargets
+        )
+
+        // Secondary muscles are shown beside the target; they get the same display treatment even
+        // when they are not one of the primary targets the editor offers (the asset uses words such
+        // as "Rhomboids" and "Wrist Flexors" there).
+        val badSecondary = all.filter { row ->
+            row.secondaryMuscleList.any { muscle ->
+                muscle.isNotBlank() && muscle != ExerciseSchema.canonicalTarget(muscle)
+            }
+        }
+        assertEquals(
+            "secondary muscles outside the editor's list: " +
+                badSecondary.take(5).map { it.name to it.secondaryMuscleList },
+            emptyList<Exercise>(),
+            badSecondary
+        )
     }
 }

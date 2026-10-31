@@ -27,6 +27,19 @@ object ExerciseType {
 
     val ALL = listOf(STANDARD_WEIGHT, ADDED_WEIGHT, PURE_BODYWEIGHT, CARDIO)
 
+    /**
+     * The types whose load is (partly) the athlete's own body weight.
+     *
+     * Kept here rather than repeated as `type == ADDED_WEIGHT || type == PURE_BODYWEIGHT` at every
+     * screen. A zero-load set of one of these types is bodyweight work; a zero-load
+     * [STANDARD_WEIGHT] set is an empty bar and must never be given the athlete's weight.
+     */
+    val BODYWEIGHT = setOf(ADDED_WEIGHT, PURE_BODYWEIGHT)
+
+    /** Whether [type] is one of the bodyweight types. */
+    fun isBodyweight(type: String?): Boolean =
+        type != null && BODYWEIGHT.contains(type)
+
     /** The types that record a distance alongside the time. */
     val DISTANCE_BASED = setOf(CARDIO)
 
@@ -186,7 +199,10 @@ data class Exercise(
 }
 
 @Immutable
-@Entity(tableName = "workout_sessions")
+@Entity(
+    tableName = "workout_sessions",
+    indices = [Index(value = ["startTime"])]
+)
 data class WorkoutSession(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
@@ -209,7 +225,14 @@ data class SessionWithSets(
 )
 
 @Immutable
-@Entity(tableName = "logged_sets")
+@Entity(
+    tableName = "logged_sets",
+    indices = [
+        Index(value = ["sessionId"]),
+        Index(value = ["exerciseName"]),
+        Index(value = ["timestamp"])
+    ]
+)
 data class LoggedSet(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
@@ -240,8 +263,9 @@ data class LoggedSet(
      * history every time the athlete weighs in. The isolated weight tag, the volume maths and the
      * one rep max all read this instead of the current profile weight.
      *
-     * 0 means "not recorded", which is the case for every set logged before this field existed.
-     * Those fall back to the current profile weight, which is the best guess available for them.
+     * 0 means "not recorded". Migration 10 -> 11 fills every row that predates the field with the
+     * best historical value available, and finishing a workout stamps the final profile weight on
+     * every set it saves, so a stored 0 should only ever be seen on a set that is still in progress.
      */
     @ColumnInfo(defaultValue = "0")
     val bodyWeightKg: Double = 0.0
@@ -266,7 +290,10 @@ data class UserProfile(
 )
 
 @Immutable
-@Entity(tableName = "saved_routines")
+@Entity(
+    tableName = "saved_routines",
+    indices = [Index(value = ["createdAt"])]
+)
 data class SavedRoutine(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
@@ -288,7 +315,10 @@ data class SavedRoutine(
 )
 
 @Immutable
-@Entity(tableName = "body_weight_logs")
+@Entity(
+    tableName = "body_weight_logs",
+    indices = [Index(value = ["timestamp"])]
+)
 data class BodyWeightLog(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
@@ -298,7 +328,10 @@ data class BodyWeightLog(
 )
 
 @Immutable
-@Entity(tableName = "chat_sessions")
+@Entity(
+    tableName = "chat_sessions",
+    indices = [Index(value = ["lastUpdatedAt"])]
+)
 data class ChatSession(
     @PrimaryKey
     val id: String = java.util.UUID.randomUUID().toString(),
@@ -308,7 +341,13 @@ data class ChatSession(
 )
 
 @Immutable
-@Entity(tableName = "chat_messages")
+@Entity(
+    tableName = "chat_messages",
+    indices = [
+        Index(value = ["sessionId"]),
+        Index(value = ["timestamp"])
+    ]
+)
 data class ChatMessageEntity(
     @PrimaryKey
     val id: String = java.util.UUID.randomUUID().toString(),

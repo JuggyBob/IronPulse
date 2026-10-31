@@ -124,7 +124,7 @@ import com.example.data.model.WeightUnit
 import com.example.data.model.MuscleCategory
 import com.example.ui.components.DayDropdown
 import com.example.ui.components.MuscleSelectorDialog
-import com.example.ui.components.AutoSaveIndicator
+import com.example.ui.components.WorkoutTimerBadge
 import com.example.ui.components.ExerciseDetailDialog
 import com.example.ui.components.ExerciseEditorDialog
 import com.example.ui.components.CustomExerciseDialog
@@ -643,7 +643,7 @@ fun LogWorkoutScreen(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = if (filteredExercises.isEmpty()) {
-                                    "No AI generated exercise yet. They appear here when Gemini adds a new one to a routine."
+                                    "No AI generated exercise yet. They appear here when the AI adds a new one to a routine."
                                 } else {
                                     "Showing ${filteredExercises.size} AI generated exercise${if (filteredExercises.size == 1) "" else "s"} - not made by you, but you can edit or delete them"
                                 },
@@ -991,10 +991,6 @@ fun LogWorkoutScreen(
                                             maxLines = 1,
                                             softWrap = false
                                         )
-                                        AutoSaveIndicator(
-                                            lastAutoSaveAt = lastAutoSaveAt,
-                                            modifier = Modifier.padding(top = 2.dp)
-                                        )
                                     }
                                 }
 
@@ -1021,24 +1017,14 @@ fun LogWorkoutScreen(
                                             .background(TextMuted.copy(alpha = 0.5f), RoundedCornerShape(2.dp))
                                     )
                                     Spacer(modifier = Modifier.height(3.dp))
-                                    // Centered Timer under the centered bar
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(6.dp)
-                                                .background(MintGreen, CircleShape)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            text = timerFormatted,
-                                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                            color = MintGreen,
-                                            maxLines = 1,
-                                            softWrap = false
-                                        )
-                                    }
+                                    // The timer and the auto save cloud share one badge. The cloud
+                                    // is inside the timer box, which is where the athlete already
+                                    // looks to check that the session is running.
+                                    WorkoutTimerBadge(
+                                        timerText = timerFormatted,
+                                        lastAutoSaveAt = lastAutoSaveAt,
+                                        timerColor = MintGreen
+                                    )
                                 }
 
                                 // Right: 3 Mode Buttons (NO CIRCLES!)

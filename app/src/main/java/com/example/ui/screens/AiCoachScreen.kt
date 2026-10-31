@@ -4,8 +4,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -17,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -149,7 +155,7 @@ fun AiCoachScreen(
             .background(DarkBg)
     ) {
         // Sub-Tab Switcher - Evenly Distributed Layout with equal weight tabs
-        Row(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(DarkSurface)
@@ -157,46 +163,64 @@ fun AiCoachScreen(
                     width = 1.dp,
                     color = DarkBorder,
                     shape = RoundedCornerShape(0.dp)
-                ),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
+                )
         ) {
-            subTabs.forEachIndexed { index, title ->
-                val isSelected = selectedSubTab == index
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable { selectedSubTab = index }
-                        .padding(vertical = 12.dp, horizontal = 4.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
+            val tabWidth = maxWidth / subTabs.size
+            val underlineWidth = tabWidth * 0.55f
+            // A single underline that slides from tab to tab, instead of one line disappearing and
+            // another appearing. It is the same idea as the bottom navigation indicator.
+            val underlineOffset by animateDpAsState(
+                targetValue = tabWidth * selectedSubTab.toFloat() +
+                    (tabWidth - underlineWidth) / 2,
+                animationSpec = tween(300, easing = FastOutSlowInEasing),
+                label = "ai_tab_underline_offset"
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                subTabs.forEachIndexed { index, title ->
+                    val isSelected = selectedSubTab == index
+                    val titleColor by animateColorAsState(
+                        targetValue = if (isSelected) ElectricCyan else TextMuted,
+                        animationSpec = tween(220),
+                        label = "ai_tab_title_$index"
+                    )
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { selectedSubTab = index }
+                            .padding(vertical = 12.dp, horizontal = 4.dp),
+                        contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = title,
                             style = MaterialTheme.typography.labelMedium.copy(
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                             ),
-                            color = if (isSelected) ElectricCyan else TextMuted,
+                            color = titleColor,
                             textAlign = TextAlign.Center,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(0.85f)
-                                .height(3.dp)
-                                .background(
-                                    if (isSelected) ElectricCyan else Color.Transparent,
-                                    RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp)
-                                )
-                        )
                     }
                 }
             }
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .offset(x = underlineOffset)
+                    .width(underlineWidth)
+                    .height(3.dp)
+                    .background(
+                        ElectricCyan,
+                        RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp)
+                    )
+                    .testTag("ai_tab_indicator")
+            )
         }
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -615,7 +639,7 @@ fun AiChatView(viewModel: MainViewModel) {
                     OutlinedTextField(
                         value = inputQuery,
                         onValueChange = { inputQuery = it },
-                        placeholder = { Text("Ask Coach Gemini...", color = TextMuted) },
+                        placeholder = { Text("Ask IronPulse AI...", color = TextMuted) },
                         modifier = Modifier
                             .weight(1f)
                             .testTag("ai_chat_input"),

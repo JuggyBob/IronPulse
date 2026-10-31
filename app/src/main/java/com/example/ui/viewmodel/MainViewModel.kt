@@ -1,13 +1,23 @@
 package com.example.ui.viewmodel
 
 import android.app.Application
+import android.net.Uri
 import android.util.Log
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
-import com.example.data.api.GeminiClient
-import com.example.data.api.GeminiModelInfo
+import com.example.data.ai.AiConfigurationRepository
+import com.example.data.ai.AiErrorKind
+import com.example.data.ai.AiException
+import com.example.data.ai.AiMessage
+import com.example.data.ai.AiModelDescriptor
+import com.example.data.ai.AiProviderConfiguration
+import com.example.data.ai.AiProviderId
+import com.example.data.ai.AiRole
+import com.example.data.ai.AiService
+import com.example.data.ai.AiToolMode
+import com.example.data.ai.RepositoryAiDataAccess
 import com.example.data.api.ReleaseApi
 import com.example.data.db.AppDatabase
 import com.example.data.model.ActiveRoutineWorkoutState
@@ -23,6 +33,7 @@ import com.example.data.model.GibberishNameDetector
 import com.example.data.seed.DatasetSeeder
 import com.example.data.seed.LibraryEditTracker
 import com.example.util.ProfileMediaStore
+import com.example.util.WidgetPhotoStore
 import com.example.data.model.ExerciseFilters
 import com.example.data.model.ExerciseSchema
 import com.example.data.seed.toJsonArray
@@ -63,9 +74,11 @@ import com.example.data.model.WorkoutDraft
 import com.example.data.model.WorkoutDraftCodec
 import com.example.data.model.WorkoutMetrics
 import com.example.data.model.WorkoutSession
+import com.example.data.preferences.HomeWidgetConfig
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.repository.FitnessRepository
 import com.example.ui.components.ChartPoint
+import com.example.ui.components.HomeWidget
 import com.example.util.ExerciseMediaStore
 import com.example.util.ApkInstaller
 import com.example.util.VibrationHelper
@@ -151,77 +164,257 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             initialValue = ""
         )
 
-    private val _availableModels = MutableStateFlow<List<GeminiModelInfo>>(GeminiClient.getCuratedModelList())
-    val availableModels: StateFlow<List<GeminiModelInfo>> = _availableModels.asStateFlow()
+    private val aiConfigurationRepository = AiConfigurationRepository(application)
+    private val aiService = AiService(
+        configurationRepository = aiConfigurationRepository,
+        dataAccess = RepositoryAiDataAccess(repository)
+    )
+
+    val activeAiProvider: StateFlow<AiProviderId> = aiService.activeProviderFlow
+        .flowOn(Dispatchers.IO)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = AiProviderId.GOOGLE
+        )
+
+    val aiConfiguration: StateFlow<AiProviderConfiguration> =
+        aiConfigurationRepository.activeConfigurationFlow
+            .flowOn(Dispatchers.IO)
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.Eagerly,
+                initialValue = AiProviderConfiguration(provider = AiProviderId.GOOGLE)
+            )
+
+    private val _availableModels = MutableStateFlow(
+        aiService.knownModels(AiProviderId.GOOGLE)
+    )
+    val availableModels: StateFlow<List<AiModelDescriptor>> = _availableModels.asStateFlow()
 
     private val _isLoadingModels = MutableStateFlow(false)
     val isLoadingModels: StateFlow<Boolean> = _isLoadingModels.asStateFlow()
 
+    private val _modelDiscoveryError = MutableStateFlow<String?>(null)
+    val modelDiscoveryError: StateFlow<String?> = _modelDiscoveryError.asStateFlow()
+
+    /** Models to show for a provider: its known fallback plus the model already saved. */
+    private fun modelsFor(configuration: AiProviderConfiguration): List<AiModelDescriptor> {
+        val saved = configuration.model.trim().takeIf { it.isNotBlank() }?.let {
+            AiModelDescriptor(id = it, displayName = it)
+        }
+        return (aiService.knownModels(configuration.provider) + listOfNotNull(saved))
+            .distinctBy { it.id }
+    }
+
+    /**
+     * Fetches the active provider's live catalog.
+     *
+     * A failure never wipes a working selection: the saved model and the provider's known models
+     * stay selectable, and the error is shown next to the refresh button. An empty successful
+     * catalog is reported as empty, not replaced with invented entries.
+     */
     fun loadAvailableModels() {
         viewModelScope.launch(Dispatchers.IO) {
             _isLoadingModels.value = true
-            val activeKey = when {
-                geminiApiKey.value.isNotBlank() -> geminiApiKey.value.trim()
-                userProfile.value.customApiKey?.isNotBlank() == true -> userProfile.value.customApiKey!!.trim()
-                BuildConfig.GEMINI_API_KEY.isNotBlank() && BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY" -> BuildConfig.GEMINI_API_KEY
-                else -> ""
+            _modelDiscoveryError.value = null
+            val provider = aiService.activeProviderFlow.first()
+            val stored = aiService.configuration(provider)
+            val config = stored.copy(
+                apiKey = stored.apiKey.ifBlank { fallbackApiKey(provider) }
+            )
+            if (config.apiKey.isBlank() && !provider.isCustomEndpoint) {
+                _availableModels.value = modelsFor(config)
+                _modelDiscoveryError.value =
+                    "Add and save an API key for ${provider.displayName} to load its model list."
+                _isLoadingModels.value = false
+                return@launch
             }
-            val models = GeminiClient.fetchAvailableModels(activeKey)
-            _availableModels.value = models
+
+            aiService.discoverModels(provider, config).fold(
+                onSuccess = { models ->
+                    _availableModels.value = (models + modelsFor(config)).distinctBy { it.id }
+                    if (models.isEmpty()) {
+                        _modelDiscoveryError.value =
+                            "${provider.displayName} returned an empty model list. You can still " +
+                                "type a model id manually."
+                    }
+                },
+                onFailure = { error ->
+                    _availableModels.value = modelsFor(config)
+                    _modelDiscoveryError.value = aiErrorMessage(error, "The model list")
+                }
+            )
             _isLoadingModels.value = false
         }
     }
 
-    fun saveGeminiApiKey(apiKey: String) {
+    fun selectAiProvider(provider: AiProviderId) {
+        viewModelScope.launch(Dispatchers.IO) {
+            aiService.setActiveProvider(provider)
+            val config = aiService.configuration(provider)
+            _availableModels.value = modelsFor(config)
+            _modelDiscoveryError.value = null
+            loadAvailableModels()
+        }
+    }
+
+    fun saveAiApiKey(apiKey: String) {
         val cleanKey = apiKey.trim()
+        val provider = activeAiProvider.value
         viewModelScope.launch(Dispatchers.IO) {
-            userPreferencesRepo.saveGeminiApiKey(cleanKey)
-            val current = repository.getUserProfile().firstOrNull() ?: userProfile.value
-            repository.saveUserProfile(current.copy(customApiKey = cleanKey))
+            aiService.saveApiKey(provider, cleanKey)
+            // The profile copy is the legacy location the old Gemini build read. It is only kept in
+            // sync for Google; another provider's key must never overwrite it.
+            if (provider == AiProviderId.GOOGLE) {
+                val current = repository.getUserProfile().firstOrNull() ?: userProfile.value
+                repository.saveUserProfile(current.copy(customApiKey = cleanKey))
+            }
         }
     }
 
-    fun saveGeminiModel(modelName: String) {
+    fun saveAiModel(modelName: String) {
+        val cleanModel = modelName.trim().removePrefix("models/")
+        val provider = activeAiProvider.value
         viewModelScope.launch(Dispatchers.IO) {
-            userPreferencesRepo.saveGeminiModel(modelName)
+            aiService.saveModel(provider, cleanModel)
+            if (cleanModel.isNotBlank()) {
+                val saved = AiModelDescriptor(id = cleanModel, displayName = cleanModel)
+                _availableModels.value = (_availableModels.value + saved).distinctBy { it.id }
+            }
         }
     }
 
-    suspend fun validateAndSaveGeminiModel(modelName: String): Result<Unit> = withContext(Dispatchers.IO) {
+    /**
+     * Tests the model with a real generation request before saving it.
+     *
+     * Manual model ids are essential for custom endpoints, so this is a separate action: the
+     * settings screen can save an id without a network round trip, and the athlete can ask for a
+     * live check whenever the endpoint is reachable.
+     */
+    suspend fun validateAndSaveAiModel(modelName: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val provider = activeAiProvider.value
         val cleanModel = modelName.trim().removePrefix("models/")
         if (cleanModel.isBlank()) {
-            userPreferencesRepo.saveGeminiModel("")
+            aiService.saveModel(provider, "")
             return@withContext Result.success(Unit)
         }
 
-        val activeKey = when {
-            geminiApiKey.value.isNotBlank() -> geminiApiKey.value.trim()
-            userProfile.value.customApiKey?.isNotBlank() == true -> userProfile.value.customApiKey!!.trim()
-            BuildConfig.GEMINI_API_KEY.isNotBlank() && BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY" -> BuildConfig.GEMINI_API_KEY
-            else -> ""
-        }
+        val stored = aiService.configuration(provider)
+        val config = stored.copy(
+            model = cleanModel,
+            apiKey = stored.apiKey.ifBlank { fallbackApiKey(provider) }
+        )
+        aiService.testConnection(provider, config).fold(
+            onSuccess = {
+                aiService.saveModel(provider, cleanModel)
+                val saved = AiModelDescriptor(id = cleanModel, displayName = cleanModel)
+                _availableModels.value = (_availableModels.value + saved).distinctBy { it.id }
+                Result.success(Unit)
+            },
+            onFailure = { Result.failure(it) }
+        )
+    }
 
-        if (activeKey.isBlank()) {
-            return@withContext Result.failure(
-                IllegalStateException("No Gemini API key available. Please enter and save your API Key in Profile first to test custom models.")
-            )
-        }
+    suspend fun testAiConnection(): Result<Unit> = withContext(Dispatchers.IO) {
+        val provider = activeAiProvider.value
+        val stored = aiService.configuration(provider)
+        aiService.testConnection(
+            provider,
+            stored.copy(apiKey = stored.apiKey.ifBlank { fallbackApiKey(provider) })
+        )
+    }
 
-        val testResult = GeminiClient.validateModel(cleanModel, activeKey)
-        if (testResult.isSuccess) {
-            userPreferencesRepo.saveGeminiModel(cleanModel)
-            Result.success(Unit)
-        } else {
-            Result.failure(testResult.exceptionOrNull() ?: Exception("Failed to reach model '$cleanModel'"))
+    /**
+     * Saves the key (and a custom endpoint, when one was typed) and immediately tests it.
+     *
+     * The test uses exactly what was just persisted, so the athlete never sees a stale result from
+     * an older key or an unacknowledged endpoint.
+     */
+    suspend fun saveAndTestAiConnection(
+        apiKey: String,
+        baseUrl: String? = null,
+        acknowledgeEndpoint: Boolean = false
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        val provider = activeAiProvider.value
+        aiService.saveApiKey(provider, apiKey)
+        if (provider.isCustomEndpoint && baseUrl != null) {
+            aiService.saveBaseUrl(baseUrl)
+            if (acknowledgeEndpoint) {
+                aiService.acknowledgeCustomEndpoint(baseUrl)
+            }
+        }
+        val stored = aiService.configuration(provider)
+        aiService.testConnection(
+            provider,
+            stored.copy(apiKey = stored.apiKey.ifBlank { fallbackApiKey(provider) })
+        )
+    }
+
+    fun saveAiBaseUrl(baseUrl: String, acknowledge: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            aiService.saveBaseUrl(baseUrl)
+            if (acknowledge) {
+                aiService.acknowledgeCustomEndpoint(baseUrl)
+            } else {
+                aiService.clearCustomEndpointAcknowledgement()
+            }
         }
     }
+
+    fun acknowledgeAiCustomEndpoint(baseUrl: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            aiService.acknowledgeCustomEndpoint(baseUrl)
+        }
+    }
+
+    fun saveAiToolMode(mode: AiToolMode) {
+        val provider = activeAiProvider.value
+        viewModelScope.launch(Dispatchers.IO) {
+            aiService.saveToolMode(provider, mode)
+        }
+    }
+
+    /** Key available for the active provider, including the legacy Google fallbacks. */
+    private fun fallbackApiKey(provider: AiProviderId): String {
+        if (provider != AiProviderId.GOOGLE) return ""
+        return geminiApiKey.value.trim()
+            .ifBlank { userProfile.value.customApiKey.trim() }
+            .ifBlank {
+                BuildConfig.GEMINI_API_KEY.takeIf {
+                    it.isNotBlank() && it != "MY_GEMINI_API_KEY"
+                }.orEmpty()
+            }
+    }
+
+    // Legacy names kept so existing call sites and installations keep working. They now route to
+    // the active provider instead of assuming Google.
+    fun saveGeminiApiKey(apiKey: String) = saveAiApiKey(apiKey)
+
+    fun saveGeminiModel(modelName: String) = saveAiModel(modelName)
+
+    suspend fun validateAndSaveGeminiModel(modelName: String): Result<Unit> =
+        validateAndSaveAiModel(modelName)
 
     // === USER PROFILE ===
     val userProfile: StateFlow<UserProfile> = combine(
         repository.getUserProfile(),
         userPreferencesRepo.userProfileFlow
     ) { roomProfile, prefProfile ->
-        prefProfile ?: roomProfile ?: UserProfile(id = 1)
+        when {
+            // The DataStore copy is the live one (it is what onboarding and the profile editor
+            // write), but its weight can be 0 when an upgraded install never stored the key. In
+            // that case the Room row is the only real source of the athlete's weight, and letting
+            // the zero win made every new set stamp 0 kg. The other fields still come from the
+            // live profile.
+            prefProfile != null -> prefProfile.copy(
+                currentWeightKg = prefProfile.currentWeightKg.takeIf { it > 0.0 }
+                    ?: roomProfile?.currentWeightKg?.takeIf { it > 0.0 }
+                    ?: 0.0
+            )
+            roomProfile != null -> roomProfile
+            else -> UserProfile(id = 1)
+        }
     }
         .flowOn(Dispatchers.IO)
         .stateIn(
@@ -231,13 +424,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
 
     /**
-     * The athlete's body weight right now, in kilograms, or 0 when the profile has no usable weight.
+     * The newest usable weigh-in, kept eagerly so a body weight can be stamped without blocking a
+     * tap.
+     *
+     * This is only a fallback for when both stored profiles have no usable weight. The profile is
+     * still the required source for bodyweight work; a weigh-in is never allowed to rewrite a
+     * snapshot that already exists.
+     */
+    private val latestWeighInKg: StateFlow<Double?> = repository.getAllWeightLogs()
+        .map { logs ->
+            logs.maxByOrNull { it.timestamp }?.weightKg?.takeIf { it > 0.0 }
+        }
+        .flowOn(Dispatchers.IO)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /**
+     * The athlete's body weight right now, in kilograms, or 0 when there is no usable value.
      *
      * Taken when a set is created, so the set carries the weight it was done at. A later weigh-in
-     * must not rewrite it.
+     * must not rewrite it. The fallback order is the merged profile, then the newest weigh-in.
      */
     private fun currentBodyWeightKg(): Double =
-        BodyWeightTimeline.currentWeightOrNull(userProfile.value.currentWeightKg) ?: 0.0
+        userProfile.value.currentWeightKg.takeIf { it > 0.0 }
+            ?: latestWeighInKg.value
+            ?: 0.0
+
+    /**
+     * The same value, read from disk when the in-memory flows have not caught up yet.
+     *
+     * Finishing a workout is the one moment a missing weight is written permanently, so it cannot
+     * rely on an eagerly started StateFlow that may still hold its initial value. DataStore is
+     * checked first (including the no-default accessor), then Room, then the in-memory profile, and
+     * only then the newest weigh-in. The in-memory value comes after the stored ones because its
+     * initial value is the `UserProfile` default, not a weight the athlete entered.
+     */
+    private suspend fun resolveBodyWeightKg(): Double {
+        val liveProfileWeight = runCatching { userPreferencesRepo.storedProfileWeightKg() }.getOrNull()
+        val roomProfileWeight = repository.getUserProfile()
+            .firstOrNull()
+            ?.currentWeightKg
+            ?.takeIf { it > 0.0 }
+        val latestLoggedWeight = latestWeighInKg.value
+            ?: repository.getAllWeightLogs()
+                .first()
+                .maxByOrNull { it.timestamp }
+                ?.weightKg
+                ?.takeIf { it > 0.0 }
+
+        return liveProfileWeight
+            ?: roomProfileWeight
+            ?: userProfile.value.currentWeightKg.takeIf { it > 0.0 }
+            ?: latestLoggedWeight
+            ?: 0.0
+    }
 
     /**
      * The athlete's profile picture, as a path inside the app's own storage.
@@ -403,12 +642,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         "is worse than no exercise at all.\n")
             }
 
-            val customKey = geminiApiKey.value.ifBlank { userProfile.value.customApiKey }
-            val result = GeminiClient.generateContent(
-                prompt = prompt,
-                userCustomKey = customKey,
-                customModel = geminiModelName.value.ifBlank { null }
-            )
+            val result = runCatching { generateAiText(prompt) }
 
             result.fold(
                 onSuccess = { rawResponse ->
@@ -475,17 +709,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // reader of the row. The AI is asked for the dataset's ten body parts and a target muscle;
         // anything else it invents is dropped rather than stored, because the body map and the
         // TARGETS section both filter on exact values.
-        val bodyPart = obj.optString("bodyPart", "").trim().lowercase()
-            .takeIf { it in ExerciseSchema.DATASET_BODY_PARTS }
-            ?: ExerciseSchema.categoryToBodyPart(validCategory)
+        val rawBodyPart = obj.optString("bodyPart", "").trim()
+        val bodyPart = if (ExerciseSchema.isKnownBodyPart(rawBodyPart)) {
+            ExerciseSchema.canonicalBodyPart(rawBodyPart)
+        } else {
+            ExerciseSchema.categoryToBodyPart(validCategory)
+        }
         // The prompt asks for a primary target muscle and for secondary muscles, and the model
         // usually supplies them. When it does not, the TARGETS section of the detail dialog is
         // skipped entirely ÔÇö the row saves fine, looks complete, and simply says nothing about what
         // the movement trains. Falling back to the category keeps the section populated with
         // something true, because the category was already validated against the fixed seven.
-        val target = obj.optString("target", "").trim().ifBlank { fallbackTargetForCategory(validCategory) }
+        val target = ExerciseSchema.canonicalTarget(
+            obj.optString("target", "").trim().ifBlank { fallbackTargetForCategory(validCategory) }
+        )
         val secondary = obj.optJSONArray("secondaryMuscles")?.let { arr ->
-            (0 until arr.length()).mapNotNull { arr.optString(it).trim().takeIf(String::isNotBlank) }
+            (0 until arr.length())
+                .mapNotNull { ExerciseSchema.canonicalTarget(arr.optString(it)).takeIf(String::isNotBlank) }
         }.orEmpty()
 
         return Exercise(
@@ -1406,12 +1646,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         stopRestTimer()
         // Only sets the user explicitly ticked as "done" are saved. Default rep/weight/hold values
         // are just placeholders, so saving them would pollute history, volume and progress analytics.
-        val savedAt = System.currentTimeMillis()
-        val setsToSave = currentSets
-            .filter { it.isCompleted }
-            .mapIndexed { index, set -> set.copy(timestamp = savedAt + index) }
-
         viewModelScope.launch(Dispatchers.IO) {
+            val savedAt = System.currentTimeMillis()
+            // The body weight is frozen at the moment the workout is finished and copied onto every
+            // saved set. Sets made earlier in the same session may have been stamped with an older
+            // profile weight if the athlete updated it mid workout; the finished workout must read as
+            // one body weight, and that weight must never follow a later profile edit.
+            val finalBodyWeightKg = resolveBodyWeightKg()
+            val setsToSave = currentSets
+                .filter { it.isCompleted }
+                .mapIndexed { index, set ->
+                    set.copy(
+                        timestamp = savedAt + index,
+                        bodyWeightKg = finalBodyWeightKg.takeIf { it > 0.0 } ?: set.bodyWeightKg
+                    )
+                }
+
             if (setsToSave.isNotEmpty()) {
                 val finalSession = currentSession.copy(
                     endTime = System.currentTimeMillis(),
@@ -1460,6 +1710,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** When the workout in progress was last written to disk, for the "auto saved" indicator. */
     private val _lastAutoSaveAt = MutableStateFlow<Long?>(null)
     val lastAutoSaveAt: StateFlow<Long?> = _lastAutoSaveAt.asStateFlow()
+
+    /**
+     * How often the auto save loop runs, in seconds, as chosen in the settings.
+     *
+     * Eager rather than while-subscribed because the loop runs for the whole app session and has
+     * no screen subscription of its own to keep it alive.
+     */
+    private val autoSaveIntervalSeconds: StateFlow<Int> =
+        userPreferencesRepo.autoSaveIntervalSecondsFlow
+            .stateIn(
+                viewModelScope,
+                SharingStarted.Eagerly,
+                UserPreferencesRepository.DEFAULT_AUTO_SAVE_INTERVAL_SECONDS
+            )
 
     /**
      * Writes the workout in progress to disk.
@@ -1652,10 +1916,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         // 2. Body weight sets: tagged with the body weight that applied when they were logged.
         //    Each set carries its own, so a set from last month keeps its own tag after a weigh-in
-        //    today, and two sets done at different body weights are two different tags. A plain
-        //    0.0 entry is never added here, it used to appear next to it as a misleading "BW: 0 kg".
+        //    today, and two sets done at different body weights are two different tags. Only the
+        //    bodyweight types qualify: a zero-load barbell set is an empty bar, and giving it the
+        //    athlete's weight used to add a ghost "BW: 80 kg" chip. A plain 0.0 entry is never
+        //    added either, it used to appear as a misleading "BW: 0 kg".
         for (set in sets) {
-            if (set.weight == 0.0 && set.addedWeight == 0.0) {
+            if (BodyWeightTimeline.isBodyweightTagCandidate(set)) {
                 BodyWeightTimeline.bodyWeightForSet(set, profile.currentWeightKg)?.let { weights.add(it) }
             }
         }
@@ -1694,9 +1960,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // rather than by value, so the tag is unwrapped before it is compared.
         val filteredSets = addedWeightFilter?.let { tag ->
             sets.filter { set ->
-                set.weight == tag ||
-                set.addedWeight == tag ||
-                (set.weight == 0.0 && set.addedWeight == 0.0 && bodyWeightOf(set) == tag)
+                BodyWeightTimeline.matchesIsolatedWeight(set, tag, bodyWeightOf(set))
             }
         } ?: sets
 
@@ -1779,10 +2043,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // saving. This one cannot miss any of them.
         viewModelScope.launch {
             while (isActive) {
-                delay(AUTO_SAVE_INTERVAL_MS)
+                // Read the setting on every turn of the loop, so changing it takes effect without
+                // restarting the app or waiting a whole old interval.
+                delay(autoSaveIntervalSeconds.value.coerceIn(5, 300) * 1_000L)
                 saveActiveWorkoutDraftNow()
             }
         }
+
+        // The update check at startup is deliberately quiet: it never reports a network failure,
+        // and it only surfaces a dialog when there is actually a newer release to offer.
+        viewModelScope.launch { maybeCheckForUpdatesOnStart() }
 
         viewModelScope.launch {
             RestTimerEventManager.timerFinishedFlow.collect {
@@ -1975,15 +2245,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         generatedRoutine.value = ""
         _unstructuredParseState.value = UnstructuredParseState.Idle
         _customRoutinePromptState.value = CustomRoutinePromptState.Idle
-        _availableModels.value = GeminiClient.getCuratedModelList()
+        _availableModels.value = aiService.knownModels(activeAiProvider.value)
+        _modelDiscoveryError.value = null
 
         viewModelScope.launch(Dispatchers.IO) {
             repository.clearAllUserData()
-            userPreferencesRepo.clearAllPreferences()
-            // The profile picture is a file in the app's own storage, not a row in the database,
-            // so the database wipe does not touch it. It has to go explicitly, or "delete all app
-            // data" would leave a copy of the athlete's photo behind.
-            ProfileMediaStore.delete(getApplication())
+            // Hold the photo lock so a picker result cannot land after the wipe and write a new
+            // widget photo path into preferences that were just cleared.
+            widgetPhotoMutex.withLock {
+                userPreferencesRepo.clearAllPreferences()
+                // The profile picture is a file in the app's own storage, not a row in the
+                // database, so the database wipe does not touch it. It has to go explicitly, or
+                // "delete all app data" would leave a copy of the athlete's photo behind.
+                ProfileMediaStore.delete(getApplication())
+                // Widget photos are app-private files too, and the preference reset has just
+                // removed their only references.
+                WidgetPhotoStore.deleteUnreferenced(getApplication(), emptySet())
+            }
             // Hand the coach a brand new, empty session so the chat stays usable after the wipe.
             val freshSession = ensureDefaultChatSession()
             withContext(Dispatchers.Main) {
@@ -2110,13 +2388,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             val prompt = buildMonthlySummaryPrompt(summary)
-            val customKey = geminiApiKey.value.ifBlank { userProfile.value.customApiKey }
-
-            val result = GeminiClient.generateContent(
-                prompt = prompt,
-                userCustomKey = customKey,
-                customModel = geminiModelName.value.ifBlank { null }
-            )
+            val result = runCatching { generateAiText(prompt) }
 
             if (requestId != monthlySummaryRequestId) return@launch
 
@@ -2148,20 +2420,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun monthlySummaryErrorMessage(error: Throwable): String {
-        val raw = error.message.orEmpty()
-        return when {
-            raw.contains("API key", ignoreCase = true) -> MISSING_API_KEY_MESSAGE
-            raw.contains("401") || raw.contains("403") ->
-                "Gemini rejected your API key. Open the Profile tab and check the key saved there."
-            raw.contains("429") ->
-                "Gemini is rate limiting your requests right now. Wait about a minute and try again."
-            raw.contains("400") ->
-                "Gemini could not process the request. Please try again."
-            raw.isBlank() -> "The monthly summary could not be generated. Please try again."
-            else -> "The monthly summary could not be generated: $raw"
-        }
-    }
+    private fun monthlySummaryErrorMessage(error: Throwable): String =
+        aiErrorMessage(error, "The monthly summary")
 
     // === SHARED AI ERROR DIALOG (no mock/offline data anywhere in the app) ===
     data class AiErrorDialogState(val title: String, val message: String)
@@ -2177,36 +2437,80 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _aiErrorDialog.value = null
     }
 
-    /** True when an API key is available from either the preferences or the profile. */
-    fun hasGeminiApiKey(): Boolean =
-        geminiApiKey.value.isNotBlank() ||
-                userProfile.value.customApiKey?.isNotBlank() == true ||
-                (BuildConfig.GEMINI_API_KEY.isNotBlank() && BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY")
+    /** Runs a plain-text generation through the shared AI service. */
+    private suspend fun generateAiText(prompt: String): String {
+        val provider = aiService.activeProviderFlow.first()
+        return aiService.completeText(
+            prompt = prompt,
+            provider = provider,
+            apiKeyFallback = fallbackApiKey(provider)
+        )
+    }
+
+    /** True when the active provider has a usable key, including the legacy Google fallbacks. */
+    fun hasGeminiApiKey(): Boolean {
+        val config = aiConfiguration.value
+        if (config.provider.isCustomEndpoint) return config.baseUrl.isNotBlank()
+        if (config.apiKey.isNotBlank()) return true
+        return config.provider == AiProviderId.GOOGLE &&
+            fallbackApiKey(AiProviderId.GOOGLE).isNotBlank()
+    }
 
     /**
-     * Shows the "missing API key" dialog when the app cannot reach Gemini.
+     * Shows the "missing API key" dialog when the active provider cannot be reached.
      * @return true when the caller must abort the request.
      */
     private fun ensureApiKeyOrExplain(featureName: String): Boolean {
         if (hasGeminiApiKey()) return false
         showAiError("API Key Required", MISSING_API_KEY_MESSAGE)
-        Log.w("MainViewModel", "$featureName requires a Gemini API key")
+        Log.w("MainViewModel", "$featureName requires an AI API key")
         return true
     }
 
-    /** Translates a Gemini failure into a message the user can act on. */
-    private fun geminiErrorMessage(error: Throwable, featureName: String): String {
-        val raw = error.message.orEmpty()
-        return when {
-            raw.contains("API key", ignoreCase = true) -> MISSING_API_KEY_MESSAGE
-            raw.contains("401") || raw.contains("403") ->
-                "Gemini rejected your API key. Open the Profile tab and check the key saved there."
-            raw.contains("429") ->
-                "Gemini is rate limiting your requests right now. Wait about a minute and try again."
-            raw.isBlank() -> "$featureName could not be generated. Please try again."
-            else -> "$featureName failed: $raw"
+    /** Translates a normalized provider failure into a message the athlete can act on. */
+    private fun aiErrorMessage(error: Throwable, featureName: String): String {
+        val ai = error as? AiException
+        if (ai == null) {
+            val raw = error.message.orEmpty()
+            return if (raw.isBlank()) "$featureName failed. Please try again."
+            else "$featureName failed: $raw"
+        }
+        return when (ai.kind) {
+            AiErrorKind.CONFIGURATION -> ai.message.ifBlank { MISSING_API_KEY_MESSAGE }
+            AiErrorKind.CONSENT_REQUIRED -> ai.message
+            AiErrorKind.AUTHENTICATION ->
+                "The AI provider rejected your API key. Open Profile & Settings and check the key " +
+                    "saved for ${activeAiProvider.value.displayName}."
+            AiErrorKind.PERMISSION ->
+                "The saved API key is not allowed to use this model. Choose another model or check " +
+                    "the key's permissions."
+            AiErrorKind.RATE_LIMIT ->
+                "The AI provider is rate limiting requests right now. Wait about a minute and try again."
+            AiErrorKind.MODEL_NOT_FOUND ->
+                "The selected model or endpoint was not found. Refresh the model list in Profile & Settings."
+            AiErrorKind.INVALID_REQUEST ->
+                "The AI provider could not process the request. ${ai.message}"
+            AiErrorKind.UNSUPPORTED_CAPABILITY ->
+                "The selected model does not support this feature. ${ai.message}"
+            AiErrorKind.NETWORK ->
+                "Could not reach the AI provider. Check your connection and the endpoint URL."
+            AiErrorKind.TIMEOUT ->
+                "The AI provider took too long to answer. Please try again."
+            AiErrorKind.CANCELLED -> "The request was cancelled."
+            AiErrorKind.SERVER ->
+                "The AI provider is temporarily unavailable. Please try again."
+            AiErrorKind.PARSE ->
+                "The AI provider returned an answer the app could not read. Please try again."
+            AiErrorKind.TOOL_EXECUTION -> ai.message
+            AiErrorKind.UNKNOWN ->
+                if (ai.message.isBlank()) "$featureName failed. Please try again."
+                else "$featureName failed: ${ai.message}"
         }
     }
+
+    /** Legacy name kept for the existing call sites; all providers now share one error mapping. */
+    private fun geminiErrorMessage(error: Throwable, featureName: String): String =
+        aiErrorMessage(error, featureName)
 
     /**
      * Prompt that pins the response to the markdown subset the in-app renderer supports
@@ -2280,6 +2584,182 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * and the AI import all agree on where the week begins.
      */
     fun weekStartsOnMonday(): Boolean = appSettings.value.weekStartsOnMonday
+
+    /** How often the in-progress workout is written to disk, in seconds. */
+    fun setAutoSaveIntervalSeconds(seconds: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.setAutoSaveIntervalSeconds(seconds)
+        }
+    }
+
+    /** Whether a newer release is looked up automatically when the app starts. */
+    fun setAutoCheckUpdatesOnStart(enabled: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.setAutoCheckUpdatesOnStart(enabled)
+        }
+    }
+
+    /**
+     * The athlete's Home widget configuration.
+     *
+     * The Home screen resolves this with the widgets it knows about, so removing a widget from a
+     * release does not leave a hole and adding one does not drop it from the page.
+     */
+    val homeWidgetConfig: StateFlow<HomeWidgetConfig> = userPreferencesRepo.homeWidgetConfigFlow
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            HomeWidgetConfig()
+        )
+
+    /** Kept for the drag gesture, which only changes the visible order. */
+    val homeWidgetOrder: StateFlow<List<String>> = homeWidgetConfig
+        .map { it.order }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** The app-private motivation photo, or blank when none is selected. */
+    val homeWidgetPhotoPath: StateFlow<String> = userPreferencesRepo.homeWidgetPhotoPathFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
+
+    /** The target number of workouts per week shown by the goal widget. */
+    val homeWidgetWeeklyGoal: StateFlow<Int> = userPreferencesRepo.homeWidgetWeeklyGoalFlow
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            UserPreferencesRepository.DEFAULT_HOME_WIDGET_WEEKLY_GOAL
+        )
+
+    private val _widgetPhotoError = MutableStateFlow<String?>(null)
+
+    /** A human-readable reason the last picked photo was not kept, or null. */
+    val widgetPhotoError: StateFlow<String?> = _widgetPhotoError.asStateFlow()
+
+    // Serializes picking, removing and resetting the widget photo. Without this, a picker result
+    // could land after a removal and leave a file nothing references.
+    private val widgetPhotoMutex = Mutex()
+
+    fun setHomeWidgetOrder(order: List<String>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                userPreferencesRepo.setHomeWidgetOrder(order)
+            } catch (e: Exception) {
+                // The local order stays on screen; the next successful write or the next launch
+                // simply reads the last durable order.
+                Log.w("MainViewModel", "could not save the Home widget order", e)
+            }
+        }
+    }
+
+    /**
+     * Writes the visible order and the removed-widget set in one DataStore edit.
+     *
+     * The Home screen keeps an optimistic local copy for immediate feedback; this is the durable
+     * half, and the single edit is what makes an add or a removal survive a process death intact.
+     */
+    fun setHomeWidgetConfig(order: List<String>, hiddenIds: Set<String>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                userPreferencesRepo.setHomeWidgetConfig(order, hiddenIds)
+            } catch (e: Exception) {
+                Log.w("MainViewModel", "could not save the Home widget configuration", e)
+            }
+        }
+    }
+
+    fun setHomeWidgetWeeklyGoal(goal: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                userPreferencesRepo.setHomeWidgetWeeklyGoal(goal)
+            } catch (e: Exception) {
+                Log.w("MainViewModel", "could not save the weekly goal", e)
+            }
+        }
+    }
+
+    /**
+     * Copies a picked picture into app storage and makes it the photo widget's image.
+     *
+     * The previous copy is deleted only after the new path has been written, so a failed import
+     * leaves the card exactly as it was. The widget being hidden is treated as a cancelled pick:
+     * the new file is discarded instead of becoming an unreferenced orphan.
+     */
+    fun importWidgetPhoto(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            widgetPhotoMutex.withLock {
+                _widgetPhotoError.value = null
+                val path = WidgetPhotoStore.import(getApplication(), uri)
+                if (path == null) {
+                    _widgetPhotoError.value =
+                        "That image could not be read. Choose a different photo."
+                    return@withLock
+                }
+
+                val config = userPreferencesRepo.homeWidgetConfigFlow.first()
+                val hidden = config.hiddenIds ?: HomeWidget.defaultHiddenIds
+                if (HomeWidget.PHOTO.id in hidden) {
+                    WidgetPhotoStore.delete(getApplication(), path)
+                    return@withLock
+                }
+
+                try {
+                    userPreferencesRepo.setHomeWidgetPhotoPath(path)
+                } catch (e: Exception) {
+                    Log.w("MainViewModel", "could not save the widget photo path", e)
+                    WidgetPhotoStore.delete(getApplication(), path)
+                    _widgetPhotoError.value = "The photo could not be saved. Try again."
+                    return@withLock
+                }
+
+                // The new path is durable now; every other widget photo is unreferenced.
+                WidgetPhotoStore.deleteUnreferenced(getApplication(), setOf(path))
+            }
+        }
+    }
+
+    /** Removes the widget photo and every file that is no longer referenced. */
+    fun clearWidgetPhoto() {
+        viewModelScope.launch(Dispatchers.IO) {
+            widgetPhotoMutex.withLock {
+                try {
+                    userPreferencesRepo.setHomeWidgetPhotoPath("")
+                    WidgetPhotoStore.deleteUnreferenced(getApplication(), emptySet())
+                    _widgetPhotoError.value = null
+                } catch (e: Exception) {
+                    // The card falls back to its empty state if the path was cleared but the
+                    // files could not be removed; the next cleanup finishes the job.
+                    Log.w("MainViewModel", "could not remove the widget photo", e)
+                }
+            }
+        }
+    }
+
+    fun clearWidgetPhotoError() {
+        _widgetPhotoError.value = null
+    }
+
+    /**
+     * Restores the stock Home widgets and removes the widget photos.
+     *
+     * The preference reset is a single DataStore edit, so the configuration is either the old one
+     * or the default one. The files are cleaned afterwards; if that cleanup fails the app is still
+     * in a valid state and the next reset or app-data wipe removes the leftovers.
+     */
+    fun restoreDefaultHomeWidgets(onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val restored = widgetPhotoMutex.withLock {
+                try {
+                    userPreferencesRepo.resetHomeWidgets()
+                    WidgetPhotoStore.deleteUnreferenced(getApplication(), emptySet())
+                    _widgetPhotoError.value = null
+                    true
+                } catch (e: Exception) {
+                    Log.w("MainViewModel", "could not restore the default Home widgets", e)
+                    false
+                }
+            }
+            withContext(Dispatchers.Main) { onResult(restored) }
+        }
+    }
 
     /** Where a week begins, as a flow for the screens that redraw when the setting changes. */
     val weekStartFlow: StateFlow<Boolean> = appSettings
@@ -2893,9 +3373,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Only the sets the user ticked as "done" are saved. Prescribed target values
             // (reps / weight / hold) are only defaults and must never be counted as logged work.
             val savedAt = System.currentTimeMillis()
+            // One body weight for the whole finished workout, taken at the moment it is saved.
+            // See finishAndSaveActiveSession: a later profile edit must not rewrite history.
+            val finalBodyWeightKg = resolveBodyWeightKg()
             val setsToSave = current.sets
                 .filter { it.isCompleted }
-                .mapIndexed { index, set -> set.copy(timestamp = savedAt + index) }
+                .mapIndexed { index, set ->
+                    set.copy(
+                        timestamp = savedAt + index,
+                        bodyWeightKg = finalBodyWeightKg.takeIf { it > 0.0 } ?: set.bodyWeightKg
+                    )
+                }
 
             // A workout without any logged set is not a workout, so nothing is persisted.
             if (setsToSave.isNotEmpty()) {
@@ -3036,20 +3524,38 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             val allDbMessages = repository.getMessagesListForSession(session.id)
-            val historyPairs = allDbMessages.map { msg ->
-                (if (msg.sender == "USER") "user" else "model") to msg.text
-            }
+            val conversation = allDbMessages
+                .filter { it.text.isNotBlank() }
+                .map { msg ->
+                    AiMessage(
+                        role = if (msg.sender == "USER") AiRole.USER else AiRole.ASSISTANT,
+                        text = msg.text
+                    )
+                }
 
-            val customKey = geminiApiKey.value.ifBlank { userProfile.value.customApiKey }
-            val result = GeminiClient.generateChat(
-                conversationHistory = historyPairs,
-                userCustomKey = customKey,
-                customModel = geminiModelName.value.ifBlank { null },
-                athleteContext = athleteContextPromptBlock(
-                    includeBenchmarks = true,
-                    purpose = "tailored coaching answers"
-                )
-            )
+            val result = runCatching {
+                val provider = aiService.activeProviderFlow.first()
+                aiService.complete(
+                    systemInstruction = buildString {
+                        append(AiService.DEFAULT_COACH_SYSTEM)
+                        append("\n\n")
+                        append(
+                            athleteContextPromptBlock(
+                                includeBenchmarks = true,
+                                purpose = "tailored coaching answers"
+                            )
+                        )
+                        append("\n\nTOOL USE:\n")
+                        append("- The read-only tools return the athlete's real exercise library and saved routines.\n")
+                        append("- Use them when the answer depends on a catalog name, exercise instructions, or an existing routine.\n")
+                        append("- Never invent an exercise name or claim a routine exists without checking.\n")
+                    },
+                    messages = conversation,
+                    enableTools = true,
+                    provider = provider,
+                    apiKeyFallback = fallbackApiKey(provider)
+                ).text
+            }
 
             result.fold(
                 onSuccess = { replyText ->
@@ -3223,12 +3729,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 append(weekdayPromptRules())
             }
 
-            val customKey = geminiApiKey.value.ifBlank { userProfile.value.customApiKey }
-            val result = GeminiClient.generateContent(
-                prompt = prompt,
-                userCustomKey = customKey,
-                customModel = geminiModelName.value.ifBlank { null }
-            )
+            val result = runCatching { generateAiText(prompt) }
             result.fold(
                 onSuccess = { rawResponse ->
                     // The model may still wrap the object in prose: parse it, never store it raw
@@ -3326,7 +3827,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         "Back" -> "Lats"
         "Shoulders" -> "Deltoids"
         "Arms" -> "Biceps"
-        "Core" -> "Abs"
+        "Core" -> "Abdominals"
         "Legs" -> "Quadriceps"
         else -> "Quadriceps"
     }
@@ -3474,12 +3975,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                   ]
                 }
             """.trimIndent() + "\n" + weekdayPromptRules(usesDaysArray = false)
-            val customKey = geminiApiKey.value.ifBlank { userProfile.value.customApiKey }
-            val geminiResult = GeminiClient.generateContent(
-                prompt = prompt,
-                userCustomKey = customKey,
-                customModel = geminiModelName.value.ifBlank { null }
-            )
+            val geminiResult = runCatching { generateAiText(prompt) }
 
             if (geminiResult.isSuccess) {
                 val rawResponse = geminiResult.getOrThrow()
@@ -3762,12 +4258,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             """.trimIndent() + "\n" + weekdayPromptRules()
 
-            val customKey = geminiApiKey.value.ifBlank { userProfile.value.customApiKey }
-            val geminiResult = GeminiClient.generateContent(
-                prompt = prompt,
-                userCustomKey = customKey,
-                customModel = geminiModelName.value.ifBlank { null }
-            )
+            val geminiResult = runCatching { generateAiText(prompt) }
 
             if (geminiResult.isSuccess) {
                 val rawResponse = geminiResult.getOrThrow()
@@ -3908,6 +4399,57 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val updateState: StateFlow<UpdateState> = _updateState.asStateFlow()
 
     /**
+     * The release the startup check found, while its prompt is on screen.
+     *
+     * Kept apart from [updateState] so the prompt only ever appears for an automatic check, never
+     * when the athlete pressed "Check for updates" in the settings themselves.
+     */
+    private val _startupUpdate = MutableStateFlow<GithubRelease?>(null)
+    val startupUpdate: StateFlow<GithubRelease?> = _startupUpdate.asStateFlow()
+
+    /**
+     * Looks for a newer release when the app starts, unless the athlete turned that off or already
+     * asked not to be reminded for this installed version.
+     *
+     * A failure is swallowed on purpose: a workout app must not open on an error about GitHub.
+     */
+    private suspend fun maybeCheckForUpdatesOnStart() {
+        if (!userPreferencesRepo.autoCheckUpdatesOnStartFlow.first()) return
+        val dismissedFor = userPreferencesRepo.dismissedUpdatePromptVersionFlow.first()
+        if (dismissedFor == BuildConfig.VERSION_NAME) return
+
+        releaseApi.fetchLatestRelease()
+            .onSuccess { release ->
+                cacheRelease(release)
+                val state = evaluateRelease(release)
+                // Only a real, newer release opens the prompt. Up to date and unreadable versions
+                // stay silent at startup.
+                if (state is UpdateState.Available) {
+                    if (_updateState.value is UpdateState.Idle) {
+                        _updateState.value = state
+                    }
+                    _startupUpdate.value = release
+                }
+            }
+    }
+
+    /**
+     * Closes the startup update prompt.
+     *
+     * Closing without [dontShowAgain] is not remembered: the prompt is meant to come back on the
+     * next start until the athlete either updates or asks it to stop. The "do not show again"
+     * suppression is stored against the running version, so it lapses by itself after an update.
+     */
+    fun closeStartupUpdatePrompt(dontShowAgain: Boolean = false) {
+        if (dontShowAgain) {
+            viewModelScope.launch(Dispatchers.IO) {
+                userPreferencesRepo.dismissUpdatePromptForVersion(BuildConfig.VERSION_NAME)
+            }
+        }
+        _startupUpdate.value = null
+    }
+
+    /**
      * The release information the About screen shows.
      *
      * It starts from the cached copy, so the screen has something to say before the network has
@@ -3963,7 +4505,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * own storage, where nothing else on the device can read it.
      */
     fun downloadUpdate() {
-        val available = _updateState.value as? UpdateState.Available ?: return
+        // A retry from the startup prompt can happen after a failed download, when the shared
+        // state is no longer Available. The release the prompt is showing is still the target.
+        val available = _updateState.value as? UpdateState.Available
+            ?: _startupUpdate.value?.let { release ->
+                release.installableApk()?.let { UpdateState.Available(release, it) }
+            }
+            ?: return
         val asset = available.asset ?: return
         updateJob?.cancel()
         updateJob = viewModelScope.launch {
@@ -4121,14 +4669,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         /** Longest name a workout in progress can be given. */
         const val MAX_WORKOUT_NAME_LENGTH = 60
 
-        /**
-         * How often the workout in progress is written to disk.
-         *
-         * Ten seconds is short enough that a closed app costs at most ten seconds of work, and long
-         * enough that a phone in a pocket is not writing to storage the whole time.
-         */
-        const val AUTO_SAVE_INTERVAL_MS = 10_000L
-
         /** Timeline note used for a body weight the athlete entered through "Log Today". */
         const val WEIGH_IN_NOTE_MORNING = "Morning weigh-in"
 
@@ -4139,8 +4679,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         const val WEIGH_IN_NOTE_PROFILE_UPDATE = "Profile update"
 
         private const val MISSING_API_KEY_MESSAGE =
-            "No Gemini API key configured. Open the Profile tab, tap the \"?\" next to the AI coach API key " +
-                    "to learn how to get a free key, then paste it there and save it."
+            "No AI API key configured. Open Profile & Settings, choose your AI provider, and save " +
+                "its API key."
 
         private val DATE_FORMAT_DAY = object : ThreadLocal<SimpleDateFormat>() {
             override fun initialValue() = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())

@@ -49,6 +49,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -1203,7 +1204,7 @@ private fun NoExerciseFoundCard(
 
         Text(
             text = if (isAiWorking) {
-                "Gemini is filling in the exercise fields..."
+                "Your AI provider is filling in the exercise fields..."
             } else {
                 "Ask AI to generate it, or create it yourself."
             },
@@ -1301,6 +1302,29 @@ fun SelectedRoutineExerciseRow(
                                         modifier = Modifier
                                             .padding(horizontal = 5.dp, vertical = 2.dp)
                                             .testTag("routine_added_weight_badge_$index")
+                                    )
+                                }
+                            }
+                            // The routine's rest default, when there is one. Small badge rather than a
+                            // field, so the setting is visible without opening anything.
+                            if (item.restSeconds > 0) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    color = MintGreen.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(4.dp),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp, MintGreen.copy(alpha = 0.4f)
+                                    )
+                                ) {
+                                    Text(
+                                        text = "${item.restSeconds}s rest",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = MintGreen,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        modifier = Modifier
+                                            .padding(horizontal = 5.dp, vertical = 2.dp)
+                                            .testTag("routine_rest_badge_$index")
                                     )
                                 }
                             }
@@ -1501,6 +1525,78 @@ fun SelectedRoutineExerciseRow(
                         onKgChanged = { onUpdate(item.copy(targetAddedWeightKg = it)) },
                         modifier = Modifier.testTag("routine_added_weight_field_$index")
                     )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = DarkBorder)
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Text(
+                        text = "Default rest after each set",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = TextWhite
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = if (item.restSeconds > 0) {
+                            "Starts automatically when you tick a set in this routine. Manual timer changes never rewrite it."
+                        } else {
+                            "Off: the rest timer stays manual for this exercise."
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .background(DarkSurface, RoundedCornerShape(6.dp))
+                                .border(1.dp, DarkBorder, RoundedCornerShape(6.dp)),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    onUpdate(
+                                        item.copy(restSeconds = (item.restSeconds - 15).coerceIn(0, 600))
+                                    )
+                                },
+                                modifier = Modifier.size(30.dp)
+                            ) {
+                                Text("-", color = TextWhite, fontWeight = FontWeight.Bold)
+                            }
+                            Text(
+                                text = if (item.restSeconds > 0) "${item.restSeconds}s" else "Off",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = if (item.restSeconds > 0) MintGreen else TextMuted,
+                                modifier = Modifier
+                                    .padding(horizontal = 8.dp)
+                                    .testTag("routine_rest_seconds_$index")
+                            )
+                            IconButton(
+                                onClick = {
+                                    val next = if (item.restSeconds <= 0) 30 else item.restSeconds + 15
+                                    onUpdate(item.copy(restSeconds = next.coerceIn(0, 600)))
+                                },
+                                modifier = Modifier.size(30.dp)
+                            ) {
+                                Text("+", color = TextWhite, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        if (item.restSeconds > 0) {
+                            Text(
+                                text = "Clear",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = FireRed,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { onUpdate(item.copy(restSeconds = 0)) }
+                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                                    .testTag("routine_rest_clear_$index")
+                            )
+                        }
+                    }
                 }
             }
         }

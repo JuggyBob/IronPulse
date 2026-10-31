@@ -38,6 +38,15 @@ class FitnessRepository(
     suspend fun getEditableExerciseById(id: Long): Exercise? = exerciseDao.getEditableExerciseById(id)
     suspend fun getUserCreatedExerciseById(id: Long): Exercise? = exerciseDao.getUserCreatedExerciseById(id)
 
+    /** One exercise by stable row id, for the AI tool layer. */
+    suspend fun getExerciseById(id: Long): Exercise? = exerciseDao.getExerciseById(id)
+
+    /** One exercise by exact name (case insensitive), for the AI tool layer. */
+    suspend fun getExerciseByName(name: String): Exercise? = exerciseDao.getExerciseByName(name)
+
+    /** Every exercise in one snapshot, used by the bounded tool search. */
+    suspend fun getAllExercisesOnce(): List<Exercise> = exerciseDao.getAllExercisesList()
+
     /**
      * The exercise DAO itself, for the dataset seeder to drive directly.
      *
@@ -212,6 +221,8 @@ class FitnessRepository(
 
     // Saved Routines
     fun getAllSavedRoutines(): Flow<List<SavedRoutine>> = savedRoutineDao.getAllRoutines()
+    suspend fun getSavedRoutineById(id: Long): SavedRoutine? = savedRoutineDao.getRoutineById(id)
+    suspend fun getAllSavedRoutinesOnce(): List<SavedRoutine> = savedRoutineDao.getAllRoutinesOnce()
     suspend fun saveRoutine(routine: SavedRoutine): Long = savedRoutineDao.insertRoutine(routine)
     suspend fun deleteRoutine(routine: SavedRoutine) = savedRoutineDao.deleteRoutine(routine)
 
@@ -250,8 +261,7 @@ class FitnessRepository(
     suspend fun insertChatSession(session: ChatSession) = chatDao.insertSession(session)
     suspend fun updateChatSession(session: ChatSession) = chatDao.updateSession(session)
     suspend fun deleteChatSession(sessionId: String) {
-        chatDao.deleteMessagesForSession(sessionId)
-        chatDao.deleteSession(sessionId)
+        chatDao.deleteSessionWithMessages(sessionId)
     }
     fun getMessagesForSession(sessionId: String): Flow<List<ChatMessageEntity>> = chatDao.getMessagesForSession(sessionId)
     suspend fun getMessagesListForSession(sessionId: String): List<ChatMessageEntity> = chatDao.getMessagesListForSession(sessionId)

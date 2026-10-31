@@ -200,7 +200,7 @@ fun UnstructuredWorkoutDialog(
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "Type or paste your unstructured workout (e.g. \"exercise a = 8 reps x 4 sets\", shorthand, or bulleted notes). If any exercise isn't in your database yet, Gemini AI will automatically generate and register it to your local database!",
+                                    text = "Type or paste your unstructured workout (e.g. \"exercise a = 8 reps x 4 sets\", shorthand, or bulleted notes). If any exercise isn't in your database yet, the AI coach will automatically generate and register it to your local database!",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = TextMuted,
                                     lineHeight = 18.sp

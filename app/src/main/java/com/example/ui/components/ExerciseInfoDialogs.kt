@@ -54,6 +54,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.data.model.Exercise
+import com.example.data.model.ExerciseInstructions
+import com.example.data.model.ExerciseSchema
 import com.example.data.model.ExerciseType
 import com.example.data.model.MusclePart
 import com.example.data.model.MusclePartResolver
@@ -507,18 +509,33 @@ fun ExerciseDetailDialog(
 
                 // ---------------- Instructions ----------------
                 // Dataset exercises carry their real coaching text in `instructions`; the user's
-                // own exercises only ever had the free text `description` box.
+                // own exercises only ever had the free text `description` box. The dataset writes
+                // one paragraph per exercise, so it is split into steps here instead of being
+                // shown as a wall of text.
                 val guidance = exercise.instructions.ifBlank { exercise.description }
-                if (guidance.isNotBlank()) {
+                val steps = remember(guidance) { ExerciseInstructions.steps(guidance) }
+                if (steps.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(14.dp))
                     SectionTitle("INSTRUCTIONS")
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = guidance,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextWhite,
-                        lineHeight = 18.sp
-                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        steps.forEach { step ->
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                Text(
+                                    text = "•",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                    color = ElectricCyan,
+                                    modifier = Modifier.width(14.dp)
+                                )
+                                Text(
+                                    text = step,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TextWhite,
+                                    lineHeight = 18.sp
+                                )
+                            }
+                        }
+                    }
                 }
 
                 // ---------------- Target muscles ----------------
@@ -530,8 +547,9 @@ fun ExerciseDetailDialog(
                     Spacer(modifier = Modifier.height(6.dp))
                     TagFlow {
                         (listOf(exercise.target) + secondary)
+                            .map { ExerciseSchema.canonicalTarget(it) }
                             .filter { it.isNotBlank() }
-                            .distinct()
+                            .distinctBy { it.lowercase() }
                             .forEach { muscleName ->
                                 Surface(
                                     shape = RoundedCornerShape(6.dp),

@@ -1,8 +1,22 @@
 package com.example.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,25 +26,31 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.ShowChart
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -40,13 +60,22 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -56,15 +85,28 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.foundation.text.KeyboardOptions
+import com.example.data.model.BodyWeightTimeline
+import com.example.data.model.ExerciseType
 import com.example.data.model.HomeDashboard
+import com.example.data.model.LoggedSet
 import com.example.data.model.RoutineDay
 import com.example.data.model.Weekday
 import com.example.data.model.WeightConversion
 import com.example.data.model.WeightUnit
+import com.example.data.model.WorkoutMetrics
+import com.example.data.model.describeCardioSet
+import com.example.data.model.describeLoggedSetEffort
+import com.example.ui.components.AppVersionFooter
 import com.example.ui.components.HomeHeatmap
 import com.example.ui.components.HomeHeatmapMetric
+import com.example.ui.components.HomePhotoWidget
 import com.example.ui.components.HomeStatTile
+import com.example.ui.components.HomeWeeklyGoalWidget
+import com.example.ui.components.HomeWidget
+import com.example.ui.components.HomeWidgetManagerSheet
+import com.example.ui.components.HomeWidgetsEmptyState
 import com.example.ui.components.TrainingQuotes
+import com.example.ui.components.WeeklyGoalDialog
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.DarkSurface
@@ -77,9 +119,11 @@ import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import com.example.ui.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * The Home dashboard.
@@ -134,205 +178,666 @@ fun HomeScreen(
 
     val latestWeight = remember(weightLogs) { weightLogs.maxByOrNull { it.timestamp } }
 
-    LazyColumn(
-        modifier = modifier
-            .fillMaxSize()
-            .background(DarkBg)
-            .testTag("home_screen"),
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        // === Greeting ===
-        item {
-            Column {
-                Text(
-                    text = "Welcome to IronPulse, ${userProfile.name.ifBlank { "Athlete" }}",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                    color = TextWhite,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.testTag("home_greeting")
+    // === Widget configuration ===
+    //
+    // Every card on Home is a widget with a stable id. The athlete's order and the set of cards
+    // they removed are kept together in DataStore, so the two can never disagree after a crash.
+    // The saved list is merged with the known ids on read: a widget added in a new release appears
+    // at its default place, while a removed one stays removed until it is added back.
+    val widgetConfig by viewModel.homeWidgetConfig.collectAsStateWithLifecycle()
+    val widgetPhotoPath by viewModel.homeWidgetPhotoPath.collectAsStateWithLifecycle()
+    val weeklyGoal by viewModel.homeWidgetWeeklyGoal.collectAsStateWithLifecycle()
+    val widgetPhotoError by viewModel.widgetPhotoError.collectAsStateWithLifecycle()
+    var showWidgetManager by remember { mutableStateOf(false) }
+    var showGoalDialog by remember { mutableStateOf(false) }
+
+    val widgetPhotoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) viewModel.importWidgetPhoto(uri)
+    }
+
+    var orderedWidgets by remember {
+        mutableStateOf(HomeWidget.resolve(widgetConfig.order, widgetConfig.hiddenIds))
+    }
+    var hiddenWidgetIds by remember {
+        mutableStateOf(widgetConfig.hiddenIds ?: HomeWidget.defaultHiddenIds)
+    }
+    // The week card only exists when a routine is scheduled, so it is filtered out of the drag
+    // list rather than occupying an invisible slot.
+    val hasWeekWidget = activeRoutine != null && activeRoutineDays.isNotEmpty()
+    val visibleWidgets = remember(orderedWidgets, hasWeekWidget) {
+        orderedWidgets.filter { it != HomeWidget.WEEK || hasWeekWidget }
+    }
+    val listState = rememberLazyListState()
+    var draggingWidgetId by remember { mutableStateOf<String?>(null) }
+    // Set for the short glide between the card under the finger and the slot it is released into.
+    // While it is non-null the card still floats and the auto-scroll loop is stopped.
+    var droppingWidgetId by remember { mutableStateOf<String?>(null) }
+    // The finger's position in the list viewport, and where the widget would land if released now.
+    // Both are kept as state so the preview gap can be kept under the card while the finger is held
+    // still and the list auto-scrolls underneath it.
+    var dragPointerY by remember { mutableFloatStateOf(0f) }
+    var insertionIndex by remember { mutableStateOf<Int?>(null) }
+    // The floating card's geometry relative to the finger, taken when the drag begins. The card is
+    // lifted from its list slot, so once the slot scrolls out of the viewport the layout can no
+    // longer describe where the card is; these keep the insertion index and the preview line
+    // tracking the card under the finger anyway.
+    //
+    // The centre offset is where the finger touched within the card: centre - touch, so
+    // cardCentre = finger + offset. The top offset is the inverse of the touch point, so
+    // cardTop = finger + topOffset.
+    var draggedCardCentreOffsetPx by remember { mutableFloatStateOf(0f) }
+    var draggedCardTopOffsetPx by remember { mutableFloatStateOf(0f) }
+    var draggedCardHeightPx by remember { mutableFloatStateOf(0f) }
+    // The last-workout card expands in place, and the floating copy must match it pixel for pixel.
+    var recentWorkoutExpanded by remember(
+        recentWorkout?.session?.title,
+        recentWorkout?.session?.startTime,
+        recentWorkout?.sets?.size
+    ) { mutableStateOf(false) }
+    val haptics = LocalHapticFeedback.current
+    val density = LocalDensity.current
+    val autoScrollEdgePx = remember(density) { with(density) { 88.dp.toPx() } }
+
+    // While a card is held, the list is laid out in the order it would have if the finger were
+    // lifted: the dragged card keeps a slot of its own height at the insertion point, but it is
+    // invisible there and drawn under the finger as an overlay. The other cards animate around the
+    // gap, so the athlete sees the new arrangement before releasing.
+    val previewWidgets = remember(visibleWidgets, draggingWidgetId, insertionIndex) {
+        val id = draggingWidgetId
+        val target = insertionIndex
+        if (id == null || target == null) visibleWidgets
+        else HomeWidget.previewOrder(visibleWidgets, id, target)
+    }
+
+    LaunchedEffect(widgetConfig) {
+        // The manager and the drag write the list locally first and then to disk; this keeps a
+        // later external change (a reset or "delete app data") in sync without fighting an
+        // in-flight drag.
+        if (draggingWidgetId == null) {
+            hiddenWidgetIds = widgetConfig.hiddenIds ?: HomeWidget.defaultHiddenIds
+            orderedWidgets = HomeWidget.resolve(widgetConfig.order, widgetConfig.hiddenIds)
+        }
+    }
+
+    /**
+     * Where the dragged widget would be inserted in [visibleWidgets] if the finger were lifted.
+     *
+     * The compared position is the card's current *screen* centre. The list may have scrolled since
+     * the gesture began, so the centre is measured from the finger and the card geometry captured at
+     * drag start rather than from the card's original list slot: while the finger is held at an edge
+     * the slot itself can scroll away, and the card stays under the finger while the other cards
+     * move past it. That is what makes the insertion index advance without moving the finger.
+     *
+     * Only the cards other than the dragged one take part in the comparison. The dragged card
+     * already has a slot at [insertionIndex] and its own midpoint must not vote for a position.
+     */
+    fun currentInsertionIndex(): Int? {
+        val id = draggingWidgetId ?: return null
+        val layout = listState.layoutInfo
+        val cardCentre = dragPointerY + draggedCardCentreOffsetPx
+
+        val remaining = visibleWidgets.filter { it.id != id }
+        if (remaining.isEmpty()) return 0
+        val firstVisibleIndex = remaining.indexOfFirst { candidate ->
+            layout.visibleItemsInfo.any { it.key == "widget_${candidate.id}" }
+        }
+        // Everything above the first visible card is off screen but still above the finger.
+        if (firstVisibleIndex < 0) return insertionIndex
+
+        var above = firstVisibleIndex
+        for (index in firstVisibleIndex until remaining.size) {
+            val candidate = remaining[index]
+            val info = layout.visibleItemsInfo
+                .firstOrNull { it.key == "widget_${candidate.id}" }
+                ?: continue
+            if (info.offset + info.size / 2f < cardCentre) above++
+        }
+        return above
+    }
+
+    /**
+     * Finishes a drag: move the widget to the slot nearest the finger and remember it.
+     *
+     * The list already shows that slot as the gap the athlete has been dragging around, so the
+     * commit changes the data behind the same picture. [finishWidgetDrag] is what usually calls
+     * this, after the floating card has glided into the gap.
+     */
+    fun commitWidgetDrag() {
+        val id = draggingWidgetId
+        val target = insertionIndex
+        if (id != null && target != null) {
+            val from = visibleWidgets.indexOfFirst { it.id == id }
+            if (from >= 0 && target != from) {
+                val next = HomeWidget.moveToInsertion(
+                    full = orderedWidgets,
+                    visible = visibleWidgets,
+                    draggedId = id,
+                    insertionIndex = target
                 )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = dateFormat.format(Date(now)),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextMuted,
-                    modifier = Modifier.testTag("home_date")
-                )
+                if (next != orderedWidgets) {
+                    orderedWidgets = next
+                    viewModel.setHomeWidgetOrder(next.map { it.id })
+                }
             }
         }
+        draggingWidgetId = null
+        dragPointerY = 0f
+        insertionIndex = null
+    }
 
-        // === Today's workout ===
-        item {
-            val routine = activeRoutine
-            TodayWorkoutCard(
-                activeRoutineName = routine?.name,
-                todayDay = activeRoutineDays.firstOrNull { it.weekday == today },
-                todayWeekday = today,
-                hasRoutines = savedRoutines.isNotEmpty(),
-                hasActiveRoutine = routine != null,
-                workoutInProgress = activeRoutineWorkout != null || activeSession != null,
-                hasPendingDraft = pendingDraft != null,
-                onStart = { day ->
-                    viewModel.startRoutineWorkout(routine ?: return@TodayWorkoutCard, targetWeekday = day.weekday)
-                },
-                onChooseRoutine = onOpenSavedRoutines,
-                onResume = onOpenLogWorkout
-            )
+    // === The drop ===
+    //
+    // The list is already in its final order while the card is held. On release the only thing
+    // left is to bring the floating card down into the gap; the list slot stays invisible until
+    // the glide finishes, so the card cannot flash at the old position.
+    LaunchedEffect(droppingWidgetId) {
+        val id = droppingWidgetId ?: return@LaunchedEffect
+        // Let the final insertion index reach the list before asking where its slot is.
+        withFrameNanos { }
+        withFrameNanos { }
+        val slot = listState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.key == "widget_$id" }
+        if (slot != null) {
+            animate(
+                initialValue = dragPointerY,
+                targetValue = slot.offset - draggedCardTopOffsetPx,
+                animationSpec = tween(durationMillis = 170, easing = FastOutSlowInEasing)
+            ) { value, _ -> dragPointerY = value }
         }
+        commitWidgetDrag()
+        droppingWidgetId = null
+    }
 
-        // === Quick actions ===
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                HomeActionButton(
-                    label = "Saved Routines",
-                    icon = Icons.Default.FitnessCenter,
-                    modifier = Modifier.weight(1f),
-                    onClick = onOpenSavedRoutines
-                )
-                HomeActionButton(
-                    label = "Progress",
-                    icon = Icons.Default.ShowChart,
-                    modifier = Modifier.weight(1f),
-                    onClick = onOpenProgress
-                )
+    // === Edge auto-scroll ===
+    //
+    // A long list cannot be reordered by dragging alone: the widget could never reach a slot that
+    // is off screen. While a card is held within 88dp of the top or bottom edge the list scrolls
+    // in that direction, faster the closer the finger is to the edge. The card stays under the
+    // finger, the other cards move past it and the preview gap follows them.
+    LaunchedEffect(draggingWidgetId) {
+        if (draggingWidgetId == null) return@LaunchedEffect
+        var previousFrame = withFrameNanos { it }
+        while (isActive && draggingWidgetId != null && droppingWidgetId == null) {
+            val frame = withFrameNanos { it }
+            val dt = ((frame - previousFrame) / 1_000_000_000f).coerceIn(0f, 0.05f)
+            previousFrame = frame
+
+            val viewportHeight = listState.layoutInfo.viewportSize.height
+            if (viewportHeight > 0) {
+                val edge = autoScrollEdgePx.coerceAtMost(viewportHeight / 3f)
+                val fingerY = dragPointerY
+                val direction = when {
+                    fingerY < edge -> -1f
+                    fingerY > viewportHeight - edge -> 1f
+                    else -> 0f
+                }
+                if (direction != 0f) {
+                    val depth = if (direction < 0f) {
+                        (edge - fingerY) / edge
+                    } else {
+                        (fingerY - (viewportHeight - edge)) / edge
+                    }.coerceIn(0f, 1f)
+                    val speed = direction * (280f + 1100f * depth) * dt
+                    // dispatchRawDelta applies the scroll straight to the list instead of going
+                    // through the suspend scroll mutex, which the drag gesture holds. It returns
+                    // the consumed portion, so the floating card can be kept under the finger.
+                    val consumed = listState.dispatchRawDelta(speed)
+                    if (consumed != 0f) {
+                        val next = currentInsertionIndex()
+                        if (next != null && next != insertionIndex) {
+                            insertionIndex = next
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        }
+                    }
+                }
             }
         }
+    }
 
-        // === The week of the scheduled routine ===
-        if (activeRoutine != null && activeRoutineDays.isNotEmpty()) {
-            item {
-                val routine = activeRoutine
-                WeekScheduleCard(
-                    days = activeRoutineDays,
-                    today = today,
+    // The card content, shared by its slot in the list and the copy that follows the finger
+    // during a drag. Both are composed from the same Home state, so the floating card never
+    // disagrees with the card it was lifted from.
+    val widgetContent: @Composable (HomeWidget) -> Unit = { widget ->
+        when (widget) {
+                HomeWidget.TODAY -> {
+                    val routine = activeRoutine
+                    TodayWorkoutCard(
+                        activeRoutineName = routine?.name,
+                        todayDay = activeRoutineDays.firstOrNull { it.weekday == today },
+                        todayWeekday = today,
+                        hasRoutines = savedRoutines.isNotEmpty(),
+                        hasActiveRoutine = routine != null,
+                        workoutInProgress = activeRoutineWorkout != null || activeSession != null,
+                        hasPendingDraft = pendingDraft != null,
+                        onStart = { day ->
+                            viewModel.startRoutineWorkout(
+                                routine ?: return@TodayWorkoutCard,
+                                targetWeekday = day.weekday
+                            )
+                        },
+                        onChooseRoutine = onOpenSavedRoutines,
+                        onResume = onOpenLogWorkout
+                    )
+                }
+
+                HomeWidget.ACTIONS -> Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    HomeActionButton(
+                        label = "Saved Routines",
+                        icon = Icons.Default.FitnessCenter,
+                        modifier = Modifier.weight(1f),
+                        onClick = onOpenSavedRoutines
+                    )
+                    HomeActionButton(
+                        label = "Progress",
+                        icon = Icons.Default.ShowChart,
+                        modifier = Modifier.weight(1f),
+                        onClick = onOpenProgress
+                    )
+                }
+
+                HomeWidget.WEEK -> activeRoutine?.let { routine ->
+                    WeekScheduleCard(
+                        days = activeRoutineDays,
+                        today = today,
+                        now = now,
+                        weekStartsOnMonday = weekStartsOnMonday,
+                        trainedDays = trainedDays,
+                        shortDateFormat = shortDateFormat,
+                        onStartDay = { day ->
+                            viewModel.startRoutineWorkout(
+                                routine,
+                                targetWeekday = day.weekday
+                            )
+                        }
+                    )
+                }
+
+                HomeWidget.STATS -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        HomeStatTile(
+                            value = lifetimeDays.toString(),
+                            label = "Training days",
+                            accent = GoldenAmber,
+                            modifier = Modifier.weight(1f),
+                            onClick = { showTrainingDayInfo = true }
+                        )
+                        HomeStatTile(
+                            value = weekTotals.workouts.toString(),
+                            label = "Workouts this week",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        HomeStatTile(
+                            value = formatMinutes(weekTotals.minutes),
+                            label = "Time this week",
+                            modifier = Modifier.weight(1f)
+                        )
+                        HomeStatTile(
+                            // The unit is in the label: the number is kilogram-reps, not a weight.
+                            value = WeightConversion.format(
+                                weekTotals.volume,
+                                unit,
+                                decimals = 0,
+                                withUnit = false
+                            ),
+                            label = "${unit.suffix}-reps this week",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                HomeWidget.HEATMAP -> Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("home_heatmap_card"),
+                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                    shape = RoundedCornerShape(16.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        HomeHeatmap(
+                            cells = heatmap,
+                            metric = heatmapMetric,
+                            onMetricChange = { heatmapMetric = it },
+                            weightUnit = unit
+                        )
+                    }
+                }
+
+                HomeWidget.WEIGHT -> BodyWeightCard(
+                    latestWeightKg = latestWeight?.weightKg,
+                    latestWeightAt = latestWeight?.timestamp,
+                    previousWeightKg = remember(weightLogs) {
+                        weightLogs.sortedByDescending { it.timestamp }.getOrNull(1)?.weightKg
+                    },
+                    weightUnit = unit,
                     now = now,
-                    weekStartsOnMonday = weekStartsOnMonday,
-                    trainedDays = trainedDays,
                     shortDateFormat = shortDateFormat,
-                    onStartDay = { day ->
-                        viewModel.startRoutineWorkout(routine ?: return@WeekScheduleCard, targetWeekday = day.weekday)
+                    onLogWeight = { showWeightDialog = true }
+                )
+
+                HomeWidget.RECENT -> RecentWorkoutCard(
+                    title = recentWorkout?.session?.title,
+                    startedAt = recentWorkout?.session?.startTime,
+                    minutes = recentWorkout?.let {
+                        HomeDashboard.minutes(it.session, it.sets)
+                    } ?: 0,
+                    setCount = recentWorkout?.sets?.size ?: 0,
+                    sets = recentWorkout?.sets.orEmpty(),
+                    weightUnit = unit,
+                    profileWeightKg = userProfile.currentWeightKg,
+                    // Held here so the floating copy reads the same expansion as the card in the
+                    // list; otherwise the card would change size as soon as it was picked up.
+                    expanded = recentWorkoutExpanded,
+                    onExpandedChange = { recentWorkoutExpanded = it },
+                    onOpen = onOpenProgress
+                )
+
+                HomeWidget.QUOTE -> Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
+                    shape = RoundedCornerShape(14.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text(
+                            text = "TODAY'S LINE",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = TextMuted
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = TrainingQuotes.forDay(now),
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = TextWhite,
+                            modifier = Modifier.testTag("home_quote")
+                        )
+                    }
+                }
+
+                HomeWidget.PHOTO -> HomePhotoWidget(
+                    photoPath = widgetPhotoPath,
+                    onChoosePhoto = {
+                        widgetPhotoPicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
                     }
                 )
-            }
-        }
 
-        // === The numbers ===
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                HomeStatTile(
-                    value = lifetimeDays.toString(),
-                    label = "Training days",
-                    accent = GoldenAmber,
-                    modifier = Modifier.weight(1f),
-                    onClick = { showTrainingDayInfo = true }
+                HomeWidget.GOAL -> HomeWeeklyGoalWidget(
+                    workouts = weekTotals.workouts,
+                    goal = weeklyGoal,
+                    onCustomize = { showGoalDialog = true }
                 )
-                HomeStatTile(
-                    value = weekTotals.workouts.toString(),
-                    label = "Workouts this week",
-                    modifier = Modifier.weight(1f)
-                )
-            }
         }
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                HomeStatTile(
-                    value = formatMinutes(weekTotals.minutes),
-                    label = "Time this week",
-                    modifier = Modifier.weight(1f)
-                )
-                HomeStatTile(
-                    // The unit is in the label: the number is kilogram-reps, not a weight.
-                    value = WeightConversion.format(weekTotals.volume, unit, decimals = 0, withUnit = false),
-                    label = "${unit.suffix}-reps this week",
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
+    }
 
-        // === The rolling heat map ===
-        item {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("home_heatmap_card"),
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(16.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    HomeHeatmap(
-                        cells = heatmap,
-                        metric = heatmapMetric,
-                        onMetricChange = { heatmapMetric = it },
-                        weightUnit = unit
-                    )
-                }
-            }
-        }
-
-        // === Body weight ===
-        item {
-            BodyWeightCard(
-                latestWeightKg = latestWeight?.weightKg,
-                latestWeightAt = latestWeight?.timestamp,
-                previousWeightKg = remember(weightLogs) {
-                    weightLogs.sortedByDescending { it.timestamp }.getOrNull(1)?.weightKg
-                },
-                weightUnit = unit,
-                now = now,
-                shortDateFormat = shortDateFormat,
-                onLogWeight = { showWeightDialog = true }
-            )
-        }
-
-        // === The last workout ===
-        item {
-            RecentWorkoutCard(
-                title = recentWorkout?.session?.title,
-                startedAt = recentWorkout?.session?.startTime,
-                minutes = recentWorkout?.let {
-                    HomeDashboard.minutes(it.session, it.sets)
-                } ?: 0,
-                setCount = recentWorkout?.sets?.size ?: 0,
-                onOpen = onOpenProgress
-            )
-        }
-
-        // === A line for the day ===
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-                shape = RoundedCornerShape(14.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-            ) {
-                Column(modifier = Modifier.padding(14.dp)) {
+    Box(modifier = modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .background(DarkBg)
+                .testTag("home_screen"),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+        // === Greeting and widget management ===
+        item(key = "home_greeting") {
+            Row(verticalAlignment = Alignment.Top) {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "TODAY'S LINE",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = TextMuted
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = TrainingQuotes.forDay(now),
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        text = "Welcome to IronPulse, ${userProfile.name.ifBlank { "Athlete" }}",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
                         color = TextWhite,
-                        modifier = Modifier.testTag("home_quote")
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.testTag("home_greeting")
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = dateFormat.format(Date(now)),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted,
+                        modifier = Modifier.testTag("home_date")
+                    )
+                }
+                IconButton(
+                    onClick = { showWidgetManager = true },
+                    modifier = Modifier
+                        .size(44.dp)
+                        .testTag("home_widget_manage_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Tune,
+                        contentDescription = "Customize Home widgets",
+                        tint = ElectricCyan,
+                        modifier = Modifier.size(22.dp)
                     )
                 }
             }
         }
+
+        // === The reorderable widgets ===
+        items(
+            items = previewWidgets,
+            key = { widget -> "widget_${widget.id}" }
+        ) { widget ->
+            val isDragging = draggingWidgetId == widget.id
+
+            Column(
+                modifier = Modifier
+                    .animateItem()
+                    .graphicsLayer {
+                        // The card is lifted out of its slot while it is being dragged: the slot
+                        // keeps its height (so the list does not jump) but shows nothing, and the
+                        // floating copy in the overlay is drawn under the finger instead. The slot
+                        // itself is placed at the insertion point by [previewWidgets], so the other
+                        // cards move aside live.
+                        if (isDragging) alpha = 0f
+                    }
+                    // Long press anywhere on a card starts the reorder, so every widget can be
+                    // moved without a separate grab strip taking up room on the page. A normal
+                    // tap and the controls inside the cards keep working: the drag only begins
+                    // after the hold.
+                    .pointerInput(widget.id, visibleWidgets) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { startOffset ->
+                                droppingWidgetId = null
+                                draggingWidgetId = widget.id
+                                val info = listState.layoutInfo.visibleItemsInfo
+                                    .firstOrNull { it.key == "widget_${widget.id}" }
+                                dragPointerY = (info?.offset ?: 0) + startOffset.y
+                                draggedCardHeightPx = (info?.size ?: 0).toFloat()
+                                draggedCardTopOffsetPx = -startOffset.y
+                                draggedCardCentreOffsetPx = draggedCardHeightPx / 2f - startOffset.y
+                                insertionIndex = visibleWidgets.indexOfFirst { it.id == widget.id }
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                            },
+                            onDrag = { change, amount ->
+                                change.consume()
+                                dragPointerY += amount.y
+                                val next = currentInsertionIndex()
+                                if (next != null && next != insertionIndex) {
+                                    insertionIndex = next
+                                    haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                }
+                            },
+                            onDragEnd = {
+                                insertionIndex = currentInsertionIndex()
+                                droppingWidgetId = widget.id
+                            },
+                            onDragCancel = {
+                                droppingWidgetId = null
+                                draggingWidgetId = null
+                                dragPointerY = 0f
+                                insertionIndex = null
+                            }
+                        )
+                    }
+                    .testTag("home_widget_${widget.id}")
+            ) {
+                widgetContent(widget)
+            }
+        }
+
+        // An empty Home is a valid configuration, not a broken one. The way back is right here.
+        if (orderedWidgets.isEmpty()) {
+            item(key = "home_widgets_empty") {
+                HomeWidgetsEmptyState(onOpenManager = { showWidgetManager = true })
+            }
+        }
+
+        // The build stamp belongs to the dashboard, not to a widget: it is always the last item,
+        // so it follows the cards when they are reordered and stays below them when one expands.
+        item(key = "app_version_footer", contentType = "footer") {
+            AppVersionFooter()
+        }
+        }
+
+        // The card under the finger. It is composed outside the list, so it survives even after the
+        // slot it was lifted from scrolls out of the viewport and the list disposes that item.
+        val draggedWidget = draggingWidgetId?.let { id ->
+            visibleWidgets.firstOrNull { it.id == id }
+        }
+        if (draggedWidget != null) {
+            Box(
+                modifier = Modifier
+                    .offset {
+                        // Keep the whole card on screen while it is held. Without this the top or
+                        // bottom edge cuts the card in half when the finger reaches the auto-scroll
+                        // zone, which hides the outline exactly when the drop target is at an end.
+                        val viewportHeight = listState.layoutInfo.viewportSize.height
+                        val maxTop = (viewportHeight - draggedCardHeightPx).coerceAtLeast(0f)
+                        val top = (dragPointerY + draggedCardTopOffsetPx).coerceIn(0f, maxTop)
+                        IntOffset(0, top.roundToInt())
+                    }
+                    .padding(horizontal = 16.dp)
+                    .fillMaxWidth()
+                    .graphicsLayer {
+                        scaleX = 1.02f
+                        scaleY = 1.02f
+                        shadowElevation = 20.dp.toPx()
+                        shape = RoundedCornerShape(18.dp)
+                    }
+                    // The stats grid and the quick actions are made of separate tiles, so the page
+                    // used to show through the gaps between them while the widget floated. Paint
+                    // the same page colour behind the whole widget, exactly as it is seen in the
+                    // list; the card then reads as one lifted object.
+                    .background(DarkBg, RoundedCornerShape(18.dp))
+                    // The card is the selected thing on the page while it is held. The full-strength
+                    // cyan outline matches the selected tab and makes it read as lifted, not just
+                    // duplicated.
+                    .border(2.dp, ElectricCyan, RoundedCornerShape(18.dp))
+                    .testTag("home_widget_drag_overlay")
+            ) {
+                widgetContent(draggedWidget)
+            }
+        }
+    }
+
+    // === Widget management ===
+    if (showWidgetManager) {
+        HomeWidgetManagerSheet(
+            enabled = orderedWidgets,
+            hasWeekRoutine = hasWeekWidget,
+            photoPath = widgetPhotoPath,
+            weeklyGoal = weeklyGoal,
+            photoError = widgetPhotoError,
+            onDismiss = {
+                showWidgetManager = false
+                viewModel.clearWidgetPhotoError()
+            },
+            onAdd = { widget ->
+                val next = HomeWidget.add(orderedWidgets, widget)
+                if (next != orderedWidgets) {
+                    val nextHidden = hiddenWidgetIds - widget.id
+                    orderedWidgets = next
+                    hiddenWidgetIds = nextHidden
+                    viewModel.setHomeWidgetConfig(next.map { it.id }, nextHidden)
+                }
+            },
+            onRemove = { widget ->
+                val next = HomeWidget.remove(orderedWidgets, widget)
+                if (next != orderedWidgets) {
+                    val nextHidden = hiddenWidgetIds + widget.id
+                    orderedWidgets = next
+                    hiddenWidgetIds = nextHidden
+                    viewModel.setHomeWidgetConfig(next.map { it.id }, nextHidden)
+                    if (widget == HomeWidget.PHOTO) {
+                        // The photo belongs to the widget, not to the athlete's gallery. Removing
+                        // the widget is the point at which its app-private copy stops being needed.
+                        viewModel.clearWidgetPhoto()
+                    }
+                }
+            },
+            onMove = { widget, delta ->
+                val next = HomeWidget.move(orderedWidgets, widget, delta)
+                if (next != orderedWidgets) {
+                    orderedWidgets = next
+                    viewModel.setHomeWidgetOrder(next.map { it.id })
+                }
+            },
+            onChoosePhoto = {
+                widgetPhotoPicker.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+            },
+            onRemovePhoto = { viewModel.clearWidgetPhoto() },
+            onGoalChange = { viewModel.setHomeWidgetWeeklyGoal(it) }
+        )
+    }
+
+    // === Weekly goal customization from the card itself ===
+    if (showGoalDialog) {
+        WeeklyGoalDialog(
+            goal = weeklyGoal,
+            onDismiss = { showGoalDialog = false },
+            onSave = { goal ->
+                viewModel.setHomeWidgetWeeklyGoal(goal)
+                showGoalDialog = false
+            }
+        )
+    }
+
+    // === A picked photo that could not be kept ===
+    if (widgetPhotoError != null) {
+        AlertDialog(
+            onDismissRequest = { viewModel.clearWidgetPhotoError() },
+            containerColor = DarkSurface,
+            modifier = Modifier.testTag("widget_photo_error_dialog"),
+            title = {
+                Text(
+                    text = "Photo not saved",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = TextWhite
+                )
+            },
+            text = {
+                Text(
+                    text = widgetPhotoError.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextMuted
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.clearWidgetPhotoError() }) {
+                    Text("OK", color = ElectricCyan, fontWeight = FontWeight.Bold)
+                }
+            }
+        )
     }
 
     // === What counts as a training day ===
@@ -729,6 +1234,11 @@ private fun BodyWeightCard(
 
 /**
  * The last workout the athlete finished.
+ *
+ * The summary is always visible; tapping it slides the saved sets open underneath, without leaving
+ * the Home page. That is the quickest way to answer "what did I actually do last time" before
+ * starting the next session. The exercise names are bold group headings and every set is one
+ * bullet, so a long workout still reads as a list instead of a paragraph.
  */
 @Composable
 private fun RecentWorkoutCard(
@@ -736,8 +1246,19 @@ private fun RecentWorkoutCard(
     startedAt: Long?,
     minutes: Int,
     setCount: Int,
+    sets: List<LoggedSet>,
+    weightUnit: WeightUnit,
+    profileWeightKg: Double,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
     onOpen: () -> Unit
 ) {
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(300),
+        label = "recent_workout_arrow"
+    )
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -747,30 +1268,38 @@ private fun RecentWorkoutCard(
         border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(
-                text = "LAST WORKOUT",
-                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                color = ElectricCyan
-            )
-            if (title == null) {
-                Text(
-                    text = "Nothing logged yet",
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                    color = TextWhite
-                )
-                Text(
-                    text = "Finish a workout and it shows up here with its time and its sets.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextMuted
-                )
-            } else {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { onOpen() },
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (title != null) {
+                            Modifier
+                                .clickable { onExpandedChange(!expanded) }
+                                .testTag("home_recent_workout_toggle")
+                        } else {
+                            Modifier
+                        }
+                    ),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "LAST WORKOUT",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = ElectricCyan
+                    )
+                    if (title == null) {
+                        Text(
+                            text = "Nothing logged yet",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                            color = TextWhite
+                        )
+                        Text(
+                            text = "Finish a workout and it shows up here with its time and its sets.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted
+                        )
+                    } else {
                         Text(
                             text = title,
                             style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
@@ -781,7 +1310,10 @@ private fun RecentWorkoutCard(
                         Text(
                             text = buildString {
                                 if (startedAt != null) {
-                                    append(SimpleDateFormat("d MMM, HH:mm", Locale.getDefault()).format(Date(startedAt)))
+                                    append(
+                                        SimpleDateFormat("d MMM, HH:mm", Locale.getDefault())
+                                            .format(Date(startedAt))
+                                    )
                                 }
                                 append(" • ")
                                 append(formatMinutes(minutes))
@@ -792,12 +1324,101 @@ private fun RecentWorkoutCard(
                             color = TextMuted
                         )
                     }
+                }
+                if (title != null) {
                     Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        tint = TextMuted,
-                        modifier = Modifier.size(18.dp)
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = if (expanded) {
+                            "Hide the sets of the last workout"
+                        } else {
+                            "Show the sets of the last workout"
+                        },
+                        tint = if (expanded) ElectricCyan else TextMuted,
+                        modifier = Modifier
+                            .size(22.dp)
+                            .rotate(arrowRotation)
                     )
+                }
+            }
+
+            AnimatedVisibility(
+                visible = expanded && title != null,
+                enter = expandVertically(
+                    animationSpec = tween(280),
+                    expandFrom = Alignment.Top
+                ) + fadeIn(tween(180)),
+                exit = shrinkVertically(
+                    animationSpec = tween(220),
+                    shrinkTowards = Alignment.Top
+                ) + fadeOut(tween(120))
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("home_recent_workout_details"),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(DarkBorder)
+                    )
+
+                    if (sets.isEmpty()) {
+                        Text(
+                            text = "This workout has no saved sets.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted
+                        )
+                    }
+
+                    // Grouping keeps the exercise as the heading and its sets as bullets. The map
+                    // preserves the order the exercises were performed in.
+                    sets.groupBy { it.exerciseName }.forEach { (exerciseName, exerciseSets) ->
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(
+                                text = exerciseName,
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                color = TextWhite
+                            )
+                            exerciseSets.sortedBy { it.setNumber }.forEach { set ->
+                                val bodyweight =
+                                    BodyWeightTimeline.bodyWeightForSet(set, profileWeightKg)
+                                val load = if (set.exerciseType == ExerciseType.CARDIO) {
+                                    describeCardioSet(set, weightUnit)
+                                } else {
+                                    "${WorkoutMetrics.loadLabel(set, bodyweight, weightUnit)} × " +
+                                        describeLoggedSetEffort(set)
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text(
+                                        text = "•",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = ElectricCyan
+                                    )
+                                    Text(
+                                        text = "Set ${set.setNumber} — $load",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextMuted
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    TextButton(
+                        onClick = onOpen,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("home_recent_workout_see_history")
+                    ) {
+                        Text(
+                            text = "See full history",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = ElectricCyan
+                        )
+                    }
                 }
             }
         }

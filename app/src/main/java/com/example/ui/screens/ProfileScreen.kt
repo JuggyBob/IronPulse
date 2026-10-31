@@ -7,6 +7,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -32,7 +34,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -103,10 +104,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
+import com.example.data.model.BodyWeightLog
 import com.example.data.model.WeightUnit
 import com.example.data.model.WeightConversion
 import com.example.data.model.UserProfile
@@ -575,7 +578,12 @@ fun ProfileScreen(
         // the athlete was looking at in a different place from the thing itself.
         item {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                // The Hide all button is only there when the list is open, but its 48 dp touch
+                // target must not push the heading down when it appears: the row keeps that height
+                // in both states, so the gap between the heading and the panel never changes.
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
@@ -604,99 +612,10 @@ fun ProfileScreen(
             }
         }
 
-        // One branch, not two. The collapsed summary and the "nothing yet" message used to be
-        // separate cards both keyed off an empty-ish state, so a new athlete with no weigh-ins got
-        // two full width cards stacked saying there was nothing, which is what the big empty row
-        // under the heading was. The summary is now a single compact line that doubles as the empty
-        // state, and it only renders when there is at least one entry to talk about.
-        if (weightLogs.isNotEmpty() && !weighInsExpanded) {
-            item {
-                // The same boxed style the "Support the Project" card uses: a surface with a hairline
-                // border, a round icon badge, a bold heading, the explanation, and the action.
-                //
-                // This used to be a bare line of text sitting between two cards, which is what read
-                // as being in a weird position. Giving it the card's own container puts it in the
-                // same place visually that it was already in structurally: beside the other panel on
-                // the page rather than floating loose under the log list.
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("weigh_in_logs_summary"),
-                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                    shape = RoundedCornerShape(16.dp),
-                    border = BorderStroke(1.dp, DarkBorder)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(28.dp)
-                                    .background(MintGreen.copy(alpha = 0.15f), CircleShape)
-                                    .border(1.dp, MintGreen.copy(alpha = 0.4f), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                // A scales emoji rather than an icon: the brief asked for an
-                                // emoticon, and it keeps this box visually related to the one it
-                                // copies without competing with it for the same artwork.
-                                Text(
-                                    text = "\u2696\uFE0F",
-                                    style = MaterialTheme.typography.labelMedium
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text(
-                                text = "${sortedWeightLogs.size} weigh-in" +
-                                        "${if (sortedWeightLogs.size == 1) "" else "s"} recorded",
-                                style = MaterialTheme.typography.titleMedium.copy(
-                                    fontWeight = FontWeight.Bold
-                                ),
-                                color = TextWhite
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Text(
-                            text = "Tap view all to view all weigh in logs.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = TextMuted,
-                            lineHeight = 20.sp
-                        )
-
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        Button(
-                            onClick = { weighInsExpanded = true },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = ElectricCyan,
-                                contentColor = DarkBg
-                            ),
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("view_all_weigh_in_logs_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Visibility,
-                                contentDescription = null,
-                                tint = DarkBg,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "View all",
-                                color = DarkBg,
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = FontWeight.Bold
-                                )
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
+        // One panel in one slot. The collapsed summary and the expanded log list used to be two
+        // separate branches of this list: the list occupied the summary's place, and each entry
+        // brought its own card and its own gap. Now the panel stays in the same slot and animates
+        // open, so the spacing above and below it never changes and the entries share one card.
         if (weightLogs.isEmpty()) {
             item {
                 Text(
@@ -708,92 +627,16 @@ fun ProfileScreen(
                         .testTag("weigh_in_logs_empty")
                 )
             }
-        } else if (weighInsExpanded) {
-            items(items = sortedWeightLogs, key = { it.id }, contentType = { "weight_log_card" }) { log ->
-                // A weight changed in the "Edit Athlete Profile" popup is a profile update, not a
-                // morning weigh-in: it is labelled differently so the two are never confused.
-                val isProfileUpdate = log.note == MainViewModel.WEIGH_IN_NOTE_PROFILE_UPDATE
-                val entryColor = if (isProfileUpdate) ElectricCyan else MintGreen
-                val entryTypeLabel = when {
-                    isProfileUpdate -> "Profile update"
-                    log.note.isBlank() -> "Weigh-in"
-                    else -> log.note
-                }
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                    shape = RoundedCornerShape(12.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            modifier = Modifier.weight(1f),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .background(entryColor.copy(alpha = 0.15f), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = if (isProfileUpdate) {
-                                        Icons.Default.Person
-                                    } else {
-                                        Icons.Default.MonitorWeight
-                                    },
-                                    contentDescription = null,
-                                    tint = entryColor,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "${WeightConversion.format(log.weightKg, weightUnit)}",
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = TextWhite
-                                )
-                                Text(
-                                    text = entryTypeLabel,
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        fontWeight = FontWeight.SemiBold
-                                    ),
-                                    color = entryColor,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = weightDateFormat.format(Date(log.timestamp)),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = TextMuted
-                                )
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.width(8.dp))
-
-                        IconButton(
-                            onClick = { viewModel.deleteWeightLog(log) },
-                            modifier = Modifier
-                                .size(36.dp)
-                                .testTag("delete_weigh_in_${log.id}")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Delete weigh-in",
-                                tint = FireRed.copy(alpha = 0.85f),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                }
+        } else {
+            item(key = "weigh_in_logs_panel", contentType = "weigh_in_logs_panel") {
+                WeighInLogsPanel(
+                    expanded = weighInsExpanded,
+                    logs = sortedWeightLogs,
+                    weightUnit = weightUnit,
+                    dateFormat = weightDateFormat,
+                    onShowAll = { weighInsExpanded = true },
+                    onDelete = { viewModel.deleteWeightLog(it) }
+                )
             }
         }
 
@@ -1091,6 +934,257 @@ fun ProfileScreen(
     }
 }
 
+/**
+ * The weigh-in panel on the profile page.
+ *
+ * The summary and the full log share one slot in the surrounding LazyColumn. Whichever one is
+ * showing animates its height from that slot, so the gap above and below the panel is the same in
+ * both states and the page underneath slides as the list opens instead of jumping.
+ */
+@Composable
+internal fun WeighInLogsPanel(
+    expanded: Boolean,
+    logs: List<BodyWeightLog>,
+    weightUnit: WeightUnit,
+    dateFormat: SimpleDateFormat,
+    onShowAll: () -> Unit,
+    onDelete: (BodyWeightLog) -> Unit
+) {
+    // Identical timing in both directions makes the combined height move monotonically: the
+    // summary gives up exactly as much height as the list takes, so the card never bounces.
+    val resize = tween<IntSize>(durationMillis = 280, easing = FastOutSlowInEasing)
+    Column(modifier = Modifier.fillMaxWidth()) {
+        AnimatedVisibility(
+            visible = !expanded,
+            enter = expandVertically(animationSpec = resize, expandFrom = Alignment.Top) +
+                fadeIn(tween(durationMillis = 200)),
+            exit = shrinkVertically(animationSpec = resize, shrinkTowards = Alignment.Top) +
+                fadeOut(tween(durationMillis = 160))
+        ) {
+            WeighInSummaryCard(count = logs.size, onShowAll = onShowAll)
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(animationSpec = resize, expandFrom = Alignment.Top) +
+                fadeIn(tween(durationMillis = 220)),
+            exit = shrinkVertically(animationSpec = resize, shrinkTowards = Alignment.Top) +
+                fadeOut(tween(durationMillis = 160))
+        ) {
+            WeighInLogCard(
+                logs = logs,
+                weightUnit = weightUnit,
+                dateFormat = dateFormat,
+                onDelete = onDelete
+            )
+        }
+    }
+}
+
+/**
+ * The collapsed weigh-in panel: the count and the way into the full log.
+ */
+@Composable
+private fun WeighInSummaryCard(count: Int, onShowAll: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("weigh_in_logs_summary"),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, DarkBorder)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .background(MintGreen.copy(alpha = 0.15f), CircleShape)
+                        .border(1.dp, MintGreen.copy(alpha = 0.4f), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "\u2696\uFE0F",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = "$count weigh-in${if (count == 1) "" else "s"} recorded",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = TextWhite
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Tap view all to view all weigh in logs.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextMuted,
+                lineHeight = 20.sp
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Button(
+                onClick = onShowAll,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = ElectricCyan,
+                    contentColor = DarkBg
+                ),
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("view_all_weigh_in_logs_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Visibility,
+                    contentDescription = null,
+                    tint = DarkBg,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "View all",
+                    color = DarkBg,
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Every weigh-in in one card, in the order the profile has always shown them (newest first).
+ *
+ * Rows are separated by the same hairline the cards use, so the eye reads one list instead of a
+ * stack of separate cards and the card grows or shrinks with the number of entries by itself.
+ */
+@Composable
+private fun WeighInLogCard(
+    logs: List<BodyWeightLog>,
+    weightUnit: WeightUnit,
+    dateFormat: SimpleDateFormat,
+    onDelete: (BodyWeightLog) -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("weigh_in_logs_card"),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, DarkBorder)
+    ) {
+        Column {
+            logs.forEachIndexed { index, log ->
+                if (index > 0) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                        thickness = 1.dp,
+                        color = DarkBorder
+                    )
+                }
+                WeighInLogRow(
+                    log = log,
+                    weightUnit = weightUnit,
+                    dateFormat = dateFormat,
+                    onDelete = onDelete
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One weigh-in inside [WeighInLogCard].
+ *
+ * A weight changed in the "Edit Athlete Profile" popup is a profile update, not a morning
+ * weigh-in: it is labelled differently so the two are never confused.
+ */
+@Composable
+private fun WeighInLogRow(
+    log: BodyWeightLog,
+    weightUnit: WeightUnit,
+    dateFormat: SimpleDateFormat,
+    onDelete: (BodyWeightLog) -> Unit
+) {
+    val isProfileUpdate = log.note == MainViewModel.WEIGH_IN_NOTE_PROFILE_UPDATE
+    val entryColor = if (isProfileUpdate) ElectricCyan else MintGreen
+    val entryTypeLabel = when {
+        isProfileUpdate -> "Profile update"
+        log.note.isBlank() -> "Weigh-in"
+        else -> log.note
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 12.dp)
+            .testTag("weigh_in_row_${log.id}"),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(entryColor.copy(alpha = 0.15f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = if (isProfileUpdate) {
+                        Icons.Default.Person
+                    } else {
+                        Icons.Default.MonitorWeight
+                    },
+                    contentDescription = null,
+                    tint = entryColor,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = WeightConversion.format(log.weightKg, weightUnit),
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = TextWhite
+                )
+                Text(
+                    text = entryTypeLabel,
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = entryColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = dateFormat.format(Date(log.timestamp)),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextMuted
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        IconButton(
+            onClick = { onDelete(log) },
+            modifier = Modifier
+                .size(36.dp)
+                .testTag("delete_weigh_in_${log.id}")
+        ) {
+            Icon(
+                imageVector = Icons.Default.Delete,
+                contentDescription = "Delete weigh-in",
+                tint = FireRed.copy(alpha = 0.85f),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
 @Composable
 fun ProfileMetricBox(
     label: String,
@@ -1246,14 +1340,14 @@ private fun AthleteAiDataInfoDialog(onDismiss: () -> Unit) {
                 )
                 Text(
                     text = "Your athlete profile (name, age, height, weight, target weight, skill level) " +
-                            "and these three records are sent silently to Gemini with the AI coach chat, " +
+                            "and these three records are sent silently to your selected AI provider with the AI coach chat, " +
                             "the routine generator and the routine prompter, so the advice and the programs " +
                             "are tailored to you. Nothing is shown on screen when this happens.",
                     style = MaterialTheme.typography.bodySmall,
                     color = TextMuted
                 )
                 Text(
-                    text = "They are never sent with the Gemini monthly summary, which only analyses one " +
+                    text = "They are never sent with the AI monthly summary, which only analyses one " +
                             "exercise at a time.",
                     style = MaterialTheme.typography.labelSmall,
                     color = TextDim

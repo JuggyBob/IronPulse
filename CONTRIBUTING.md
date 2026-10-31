@@ -284,10 +284,23 @@ you may be wrong. Report unacceptable behaviour to the maintainer privately.
 
 Releases are published **manually**, not by CI. This is deliberate.
 
-A release build needs the upload keystore (``my-upload-key.jks``), which lives on the maintainer's
-machine and is never committed -- that is the whole point of it. A workflow cannot sign an APK with a
-key it does not have, so an automated release job can only ever fail on that step. Rather than leave a
-workflow that reddens on every tag, the release is built and attached by hand.
+A release build needs the release keystore, which lives on the maintainer's machine and is never
+committed -- that is the whole point of it. A workflow cannot sign an APK with a key it does not
+have, so an automated release job can only ever fail on that step. Rather than leave a workflow that
+reddens on every tag, the release is built and attached by hand.
+
+The build reads the signing inputs from the environment, so the secret values never need to appear
+in a command line, a Gradle property or the repository:
+
+| Variable | Purpose |
+|---|---|
+| `KEYSTORE_PATH` | Absolute path to the release keystore (PKCS#12). |
+| `STORE_PASSWORD` | Keystore password. |
+| `KEY_ALIAS` | Key alias; defaults to `ironpulsekey`. |
+| `KEY_PASSWORD` | Key password. |
+
+Pass them to the build process without echoing them. Never commit the keystore, a password file, a
+Gradle property containing a password, or a build log that could contain one.
 
 To cut a release:
 
@@ -296,16 +309,24 @@ To cut a release:
 2. **Tag it.** The tag drives the version:
 
    ```bash
-   git tag -a v2.0.0 -m "IronPulse 2.0.0"
-   git push origin v2.0.0
+   git tag -a v3.0.0 -m "IronPulse 3.0.0"
+   git push origin v3.0.0
    ```
 
-3. **Build the release APK** locally with the upload key and record its checksum.
+3. **Build the signed release APK** locally with the release key and record its checksum:
+
+   ```bash
+   ./gradlew :app:assembleRelease
+   sha256sum app/build/outputs/apk/release/app-release.apk
+   ```
+
+   Rename the artefact to the release convention (`IronPulse3.0.0-release.apk`) and write the
+   checksum to `IronPulse3.0.0-release.apk.sha256`.
 4. **Attach both to the release**, writing the notes from ``CHANGELOG.md``:
 
    ```bash
-   gh release create v2.0.0 IronPulse2.0.0-release.apk IronPulse2.0.0-release.apk.sha256 \
-     --title "IronPulse 2.0.0" \
+   gh release create v3.0.0 IronPulse3.0.0-release.apk IronPulse3.0.0-release.apk.sha256 \
+     --title "IronPulse 3.0.0" \
      --notes-file CHANGELOG.md \
      --verify-tag
    ```

@@ -23,6 +23,15 @@ data class RoutineExerciseItem(
      */
     val targetAddedWeightKg: Double = 0.0,
     val targetHoldSeconds: Int = 0,
+    /**
+     * The default rest between sets of this exercise *in this routine*, in seconds.
+     *
+     * It belongs to the routine entry, not to the exercise: the same movement can want 60 seconds
+     * in a hypertrophy block and 180 in a strength block. 0 means "no routine default", which keeps
+     * the old behaviour (the athlete opens the timer manually). The value never overwrites the
+     * global rest timer presets.
+     */
+    val restSeconds: Int = 0,
     val prescription: String = "",
     /**
      * The weekday this exercise belongs to: 1 = Monday ... 7 = Sunday.
@@ -310,6 +319,8 @@ object RoutineParser {
                 // Backward compatible: routines saved before this field simply have no added weight
                 put("addedWeight", item.targetAddedWeightKg)
                 put("holdSeconds", item.targetHoldSeconds)
+                // Backward compatible: routines saved before this field simply have no rest default.
+                if (item.restSeconds > 0) put("restSeconds", item.restSeconds)
                 put("prescription", item.prescription)
                 // The weekday this exercise belongs to. A routine saved before the seven day model
                 // existed has no "weekday" key, and the parser reads the old "day" slot instead.
@@ -665,6 +676,9 @@ object RoutineParser {
         // taken from the matched exercise.
         val addedWeight = obj.optDouble("addedWeight", 0.0)
         val hold = obj.optInt("holdSeconds", 0)
+        // Missing, null, negative or absurd values all fall back to "no routine default" instead of
+        // letting a corrupt JSON blob start a ten hour timer.
+        val restSeconds = obj.optInt("restSeconds", 0).coerceIn(0, 600)
         val rawPrescription = obj.optString("prescription", "")
         val matchedEquipment = matched?.equipment ?: obj.optString("equipment", "")
         val prescription = shortPrescription(rawPrescription, matchedEquipment).ifBlank {
@@ -696,6 +710,7 @@ object RoutineParser {
                 targetWeight = weight,
                 targetAddedWeightKg = addedWeight,
                 targetHoldSeconds = hold,
+                restSeconds = restSeconds,
                 prescription = prescription,
                 weekday = weekday,
                 dayTitle = dayTitle,
@@ -713,6 +728,7 @@ object RoutineParser {
                 targetWeight = weight,
                 targetAddedWeightKg = addedWeight,
                 targetHoldSeconds = hold,
+                restSeconds = restSeconds,
                 prescription = prescription,
                 weekday = weekday,
                 dayTitle = dayTitle,

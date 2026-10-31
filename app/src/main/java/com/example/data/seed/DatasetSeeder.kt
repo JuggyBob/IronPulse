@@ -4,6 +4,7 @@ import android.content.Context
 import com.example.data.dao.DatasetExerciseUpdate
 import com.example.data.dao.ExerciseDao
 import com.example.data.model.Exercise
+import com.example.data.model.ExerciseSchema
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -80,8 +81,14 @@ object DatasetSeeder {
      * Version 3 added the CARDIO type: the previous build logged running and the machine based
      * movements as barbell work, so every installed app has rows with the wrong type that only a
      * refresh can correct.
+     *
+     * Version 4 canonicalises body parts and target muscles. The asset's lower case `"pectorals"`
+     * and its `"abs"` / `"delts"` / `"quads"` synonyms did not match the Title Case vocabulary the
+     * editor offers, which is why the exercise page showed a lower case first muscle that the
+     * dropdown could not reproduce. The rows already on disk need the same correction, so the
+     * reseed has to run once more.
      */
-    const val DATASET_VERSION = 3
+    const val DATASET_VERSION = 4
 
     private const val PREFS = "ironpulse_dataset"
     private const val KEY_VERSION = "dataset_version"
@@ -168,10 +175,14 @@ object DatasetSeeder {
                 id = o.getString("id"),
                 name = o.getString("name"),
                 category = o.getString("category"),
-                bodyPart = o.optString("bodyPart", ""),
+                // The asset speaks the dataset's lower case keys. Fold them into the one display
+                // vocabulary here, so every row written to the library is a value the editor's
+                // dropdown can show and the detail page can label properly.
+                bodyPart = ExerciseSchema.canonicalBodyPart(o.optString("bodyPart", "")),
                 equipment = o.optString("equipment", "Bodyweight"),
-                target = o.optString("target", ""),
-                secondaryMuscles = (0 until secondary.length()).map { secondary.getString(it) },
+                target = ExerciseSchema.canonicalTarget(o.optString("target", "")),
+                secondaryMuscles = (0 until secondary.length())
+                    .map { ExerciseSchema.canonicalTarget(secondary.getString(it)) },
                 instructions = o.optString("instructions", ""),
                 gifUrl = o.optString("gifUrl", ""),
                 exerciseType = o.optString("exerciseType", "STANDARD_WEIGHT")

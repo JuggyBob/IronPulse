@@ -1,13 +1,17 @@
 package com.example
 
 import android.content.Context
+import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.db.AppDatabase
+import com.example.data.model.BodyWeightLog
 import com.example.data.model.ExerciseType
+import com.example.data.model.LoggedSet
+import com.example.data.model.WorkoutSession
 import com.example.data.seed.DatasetSeeder
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -68,8 +72,10 @@ class DatabaseUpgradePathTest {
             AppDatabase.MIGRATION_5_6,
             AppDatabase.MIGRATION_6_7,
             AppDatabase.MIGRATION_7_8,
-                AppDatabase.MIGRATION_8_9,
-    AppDatabase.MIGRATION_9_10
+            AppDatabase.MIGRATION_8_9,
+            AppDatabase.MIGRATION_9_10,
+            AppDatabase.MIGRATION_10_11,
+            AppDatabase.MIGRATION_11_12
         )
 
         /** The target version, taken from the last registered step rather than hardcoded. */
@@ -337,6 +343,9 @@ class DatabaseUpgradePathTest {
             assertEquals("Pull-up", sets.first().exerciseName)
             assertEquals(10, sets.first().reps)
             assertEquals(80.0, sets.first().weight, 0.001)
+            // Migration 10 -> 11 fills the body weight snapshot from the latest weigh-in at or
+            // before the workout ended (77.5 kg at t=900, session end t=2000).
+            assertEquals(77.5, sets.first().bodyWeightKg, 0.001)
             assertEquals(1, db.bodyWeightDao().getAllWeightLogs().first().size)
             assertEquals("Alex Stone", db.userProfileDao().getProfileDirect()!!.name)
         } finally {
@@ -399,6 +408,128 @@ class DatabaseUpgradePathTest {
             assertEquals("Alex Stone", db.userProfileDao().getProfileDirect()!!.name)
         } finally {
             db.close()
+        }
+    }
+
+    /**
+     * The 10 -> 11 step on its own.
+     *
+     * The v6 test above also runs it, but only as the tail of a long chain; this isolates the
+     * backfill so a failure points at the body weight snapshot instead of any earlier migration.
+     * The database is built at the current schema, filled the way the previous release would have
+     * left it (bodyWeightKg = 0), then stamped back to version 10 so Room takes the real upgrade.
+     */
+    @Test
+    fun `migration 10 to 11 stamps the historical body weight on old sets`() = runBlocking {
+        val created = openCurrent()
+        created.workoutDao().insertSession(
+            WorkoutSession(title = "Old Pull Day", startTime = 1000, endTime = 2000)
+        )
+        created.workoutDao().insertSet(
+            LoggedSet(
+                sessionId = 1,
+                exerciseId = 1,
+                exerciseName = "Pull-up",
+                exerciseType = ExerciseType.PURE_BODYWEIGHT,
+                setNumber = 1,
+                reps = 10,
+                timestamp = 1500,
+                bodyWeightKg = 0.0
+            )
+        )
+        created.bodyWeightDao().insertWeightLog(
+            BodyWeightLog(weightKg = 81.5, timestamp = 900, note = "Morning weigh-in")
+        )
+        created.close()
+
+        // What the shipped v2.0.1 database looked like: same tables, version 10, no snapshots.
+        val file = context.getDatabasePath(DB_NAME)
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE).use { raw ->
+            raw.execSQL("PRAGMA user_version = 10")
+        }
+
+        val upgraded = openCurrent()
+        try {
+            // The 10 -> 11 step is isolated by stamping 10, but every later migration still runs, so
+            // the version is read from the registered chain instead of being pinned to 11.
+            assertEquals(currentVersion(), versionOf(upgraded))
+            val set = upgraded.workoutDao().getAllSets().single()
+            assertEquals(81.5, set.bodyWeightKg, 0.001)
+            // The set's own load is untouched: only the snapshot is filled.
+            assertEquals(0.0, set.weight, 0.001)
+            assertEquals(10, set.reps)
+        } finally {
+            upgraded.close()
+        }
+    }
+
+    /**
+     * The 11 -> 12 step on its own: the hot-query indexes.
+     *
+     * The database is created at the current schema, the new indexes are dropped and the version is
+     * stamped back to 11. Reopening must recreate them, because Room validates the entity's declared
+     * indexes at open time and would otherwise throw on the first query.
+     */
+    @Test
+    fun `migration 11 to 12 adds the hot query indexes`() = runBlocking {
+        val created = openCurrent()
+        created.workoutDao().insertSession(
+            WorkoutSession(title = "Indexed Session", startTime = 1000, endTime = 2000)
+        )
+        created.workoutDao().insertSet(
+            LoggedSet(
+                sessionId = 1,
+                exerciseId = 1,
+                exerciseName = "Pull-up",
+                exerciseType = ExerciseType.PURE_BODYWEIGHT,
+                setNumber = 1,
+                reps = 8,
+                timestamp = 1500
+            )
+        )
+        created.close()
+
+        val expected = listOf(
+            "index_workout_sessions_startTime",
+            "index_logged_sets_sessionId",
+            "index_logged_sets_exerciseName",
+            "index_logged_sets_timestamp",
+            "index_saved_routines_createdAt",
+            "index_body_weight_logs_timestamp",
+            "index_chat_sessions_lastUpdatedAt",
+            "index_chat_messages_sessionId",
+            "index_chat_messages_timestamp"
+        )
+
+        val file = context.getDatabasePath(DB_NAME)
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE).use { raw ->
+            expected.forEach { raw.execSQL("DROP INDEX IF EXISTS `$it`") }
+            raw.execSQL("PRAGMA user_version = 11")
+        }
+
+        val upgraded = openCurrent()
+        try {
+            assertEquals(12, versionOf(upgraded))
+            val indexes = mutableSetOf<String>()
+            upgraded.query("SELECT name FROM sqlite_master WHERE type = 'index'", emptyArray()).use { cursor ->
+                while (cursor.moveToNext()) indexes.add(cursor.getString(0))
+            }
+            expected.forEach { index ->
+                assertTrue("migration 11 -> 12 must create $index", index in indexes)
+            }
+
+            // The index must cover the column the DAO actually filters on, not merely exist.
+            val columns = mutableListOf<String>()
+            upgraded.query("PRAGMA index_info(`index_logged_sets_sessionId`)", emptyArray()).use { cursor ->
+                while (cursor.moveToNext()) columns.add(cursor.getString(2))
+            }
+            assertEquals(listOf("sessionId"), columns)
+
+            // The data the athlete already had is still there after the index rebuild.
+            assertEquals(1, upgraded.workoutDao().getAllSets().size)
+            assertEquals("Indexed Session", upgraded.workoutDao().getAllSessions().first().single().title)
+        } finally {
+            upgraded.close()
         }
     }
 }

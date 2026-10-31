@@ -13,6 +13,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -83,6 +84,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -93,6 +95,8 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -100,7 +104,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
+import com.example.data.ai.AiEndpointValidator
+import com.example.data.ai.AiModelDescriptor
+import com.example.data.ai.AiProviderId
+import com.example.data.ai.AiToolMode
 import com.example.data.model.UserProfile
+import com.example.data.preferences.UserPreferencesRepository
 import com.example.ui.components.ProgressionLineChart
 import com.example.ui.components.AboutDialog
 import com.example.ui.components.UpdateDialog
@@ -129,8 +138,8 @@ import androidx.compose.material3.SwitchDefaults
 /**
  * Settings page, opened from the gear icon in the top right corner of the profile tab.
  *
- * Everything that configures the app lives here: weight unit, rest timer alerts, the Gemini
- * model and API key, supporting the project and the data management actions.
+ * Everything that configures the app lives here: weight unit, rest timer alerts, the AI provider,
+ * model and credentials, supporting the project and the data management actions.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -140,8 +149,22 @@ fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
+    // Read once at the top: the autosave interval lives in the Preferences card and the update
+    // toggle in the IronPulse card, and both have to see the same settings.
+    val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
 
     var showClearDataDialog by remember { mutableStateOf(false) }
+    var showRestoreWidgetsDialog by remember { mutableStateOf(false) }
+    var widgetsRestored by remember { mutableStateOf(false) }
+    var widgetsRestoreFailed by remember { mutableStateOf(false) }
+
+    LaunchedEffect(widgetsRestored, widgetsRestoreFailed) {
+        if (widgetsRestored || widgetsRestoreFailed) {
+            delay(4_000)
+            widgetsRestored = false
+            widgetsRestoreFailed = false
+        }
+    }
 
     // The update checker and the About sheet.
     var showUpdateDialog by remember { mutableStateOf(false) }
@@ -151,13 +174,16 @@ fun SettingsScreen(
     // Shown when Android will not let the app install a package yet.
     var installPermissionNeeded by remember { mutableStateOf(false) }
 
-    // API Key & Model in settings
-    val persistedApiKey by viewModel.geminiApiKey.collectAsStateWithLifecycle()
-    val persistedModelName by viewModel.geminiModelName.collectAsStateWithLifecycle()
+    // AI provider, key, endpoint and model configuration
+    val activeAiProvider by viewModel.activeAiProvider.collectAsStateWithLifecycle()
+    val aiConfiguration by viewModel.aiConfiguration.collectAsStateWithLifecycle()
     val availableModels by viewModel.availableModels.collectAsStateWithLifecycle()
     val isLoadingModels by viewModel.isLoadingModels.collectAsStateWithLifecycle()
+    val modelDiscoveryError by viewModel.modelDiscoveryError.collectAsStateWithLifecycle()
     var customApiKeyInput by remember { mutableStateOf("") }
+    var customBaseUrlInput by remember { mutableStateOf("") }
     var showApiKeyConfirmedBadge by remember { mutableStateOf(false) }
+    var showApiKeyValue by remember { mutableStateOf(false) }
 
     var showModelConfigDialog by remember { mutableStateOf(false) }
     var showApiKeyHelpDialog by remember { mutableStateOf(false) }
@@ -165,16 +191,28 @@ fun SettingsScreen(
     var modelInputText by remember { mutableStateOf("") }
     var isValidatingModel by remember { mutableStateOf(false) }
     var modelValidationErrorMessage by remember { mutableStateOf<String?>(null) }
+    var isTestingConnection by remember { mutableStateOf(false) }
+    var connectionTestMessage by remember { mutableStateOf<String?>(null) }
+    var connectionTestSucceeded by remember { mutableStateOf(false) }
+    var showEndpointConsentDialog by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
-    LaunchedEffect(persistedApiKey, userProfile.customApiKey) {
-        val storedKey = persistedApiKey.ifBlank { userProfile.customApiKey ?: "" }
-        if (storedKey.isBlank()) {
-            // The key was cleared (e.g. "Delete App Data") -> drop it from the field & badge too
-            customApiKeyInput = ""
+    // Switching provider must never leave another provider's key or endpoint in the fields.
+    LaunchedEffect(activeAiProvider) {
+        customApiKeyInput = ""
+        customBaseUrlInput = ""
+        modelInputText = ""
+        showApiKeyConfirmedBadge = false
+        showApiKeyValue = false
+        connectionTestMessage = null
+        connectionTestSucceeded = false
+    }
+
+    LaunchedEffect(aiConfiguration) {
+        customApiKeyInput = aiConfiguration.apiKey
+        customBaseUrlInput = aiConfiguration.baseUrl
+        if (aiConfiguration.apiKey.isBlank()) {
             showApiKeyConfirmedBadge = false
-        } else if (customApiKeyInput.isBlank()) {
-            customApiKeyInput = storedKey
         }
     }
 
@@ -315,7 +353,6 @@ fun SettingsScreen(
 
         // ==================== PREFERENCES ====================
         item {
-            val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
             val shareAthleteDataWithAi by viewModel.shareAthleteDataWithAi.collectAsStateWithLifecycle()
     val autoplayExerciseDemos by viewModel.autoplayExerciseDemos.collectAsStateWithLifecycle()
             Card(
@@ -442,6 +479,58 @@ fun SettingsScreen(
                     HorizontalDivider(color = DarkBorder)
                     Spacer(modifier = Modifier.height(2.dp))
 
+                    // The workout in progress is written to disk on this cadence. A short interval
+                    // costs almost nothing and loses less work; a long one keeps a phone in a
+                    // pocket quieter. The athlete knows which matters more for their session.
+                    Text(
+                        text = "Autosave interval",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                        color = TextWhite
+                    )
+                    Text(
+                        text = "How often the workout in progress is saved. The timer in the workout " +
+                            "flashes its cloud on every save.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(DarkBg, RoundedCornerShape(10.dp))
+                            .padding(3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        UserPreferencesRepository.AUTO_SAVE_INTERVAL_OPTIONS.forEach { seconds ->
+                            val isSelected = appSettings.autoSaveIntervalSeconds == seconds
+                            val label = if (seconds < 60) "${seconds}s" else "${seconds / 60}m"
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .background(
+                                        if (isSelected) MintGreen else Color.Transparent,
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable { viewModel.setAutoSaveIntervalSeconds(seconds) }
+                                    .padding(vertical = 10.dp)
+                                    .testTag("settings_autosave_${seconds}s"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                    ),
+                                    color = if (isSelected) DarkBg else TextMuted
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    HorizontalDivider(color = DarkBorder)
+                    Spacer(modifier = Modifier.height(2.dp))
+
                     SettingSwitchRow(
                         title = "Rest timer vibration",
                         subtitle = "Vibrate when a rest period finishes.",
@@ -476,7 +565,7 @@ fun SettingsScreen(
                     HorizontalDivider(color = DarkBorder)
                     Spacer(modifier = Modifier.height(2.dp))
 
-                    // The athlete decides whether their profile may be sent to Gemini at all.
+                    // The athlete decides whether their profile may be sent to the AI provider at all.
                     // Off means the prompts carry no personal data: no name, no weight, no records.
                     SettingSwitchRow(
                         title = "Share athlete data with AI",
@@ -493,7 +582,7 @@ fun SettingsScreen(
             }
         }
 
-        // Gemini AI Settings Card
+        // AI provider settings card
         item {
             Card(
                 modifier = Modifier
@@ -516,67 +605,11 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "AI Fitness Coach API Key",
+                            text = "AI Fitness Coach",
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             color = TextWhite
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        IconButton(
-                            onClick = {
-                                modelInputText = persistedModelName
-                                modelValidationErrorMessage = null
-                                showModelsListDropdown = false
-                                showModelConfigDialog = true
-                                viewModel.loadAvailableModels()
-                            },
-                            modifier = Modifier
-                                .size(28.dp)
-                                .testTag("ai_model_info_button")
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(22.dp)
-                                    .background(ElectricCyan.copy(alpha = 0.15f), CircleShape)
-                                    .border(1.dp, ElectricCyan.copy(alpha = 0.5f), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Info,
-                                    contentDescription = "Configure AI Model",
-                                    tint = ElectricCyan,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(4.dp))
-                        IconButton(
-                            onClick = {
-                                modelInputText = persistedModelName
-                                modelValidationErrorMessage = null
-                                showModelsListDropdown = false
-                                showModelConfigDialog = true
-                                viewModel.loadAvailableModels()
-                            },
-                            modifier = Modifier
-                                .size(28.dp)
-                                .testTag("ai_model_warning_button")
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(22.dp)
-                                    .background(GoldenAmber.copy(alpha = 0.15f), CircleShape)
-                                    .border(1.dp, GoldenAmber.copy(alpha = 0.5f), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Warning,
-                                    contentDescription = "AI Model Selection Warning",
-                                    tint = GoldenAmber,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.width(4.dp))
+                        Spacer(modifier = Modifier.weight(1f))
                         // "?" opens ONLY the step by step guide on how to obtain an API key
                         IconButton(
                             onClick = { showApiKeyHelpDialog = true },
@@ -601,37 +634,96 @@ fun SettingsScreen(
                     }
 
                     Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "The provider and model used for coaching, workout generation and routine parsing.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted
+                    )
 
+                    Spacer(modifier = Modifier.height(10.dp))
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(vertical = 2.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
-                            text = "Model: ",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextMuted
-                        )
-                        Text(
-                            text = if (persistedModelName.isNotBlank()) persistedModelName else "gemini-3.5-flash-lite (Default)",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = ElectricCyan
-                        )
+                        AiProviderId.entries.forEach { provider ->
+                            FilterChip(
+                                selected = provider == activeAiProvider,
+                                onClick = { viewModel.selectAiProvider(provider) },
+                                label = {
+                                    Text(provider.displayName, fontSize = 11.sp)
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = ElectricCyan.copy(alpha = 0.18f),
+                                    selectedLabelColor = ElectricCyan,
+                                    containerColor = DarkSurfaceVariant,
+                                    labelColor = TextMuted
+                                ),
+                                modifier = Modifier.testTag("ai_provider_${provider.storageKey}")
+                            )
+                        }
                     }
 
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Model",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted
+                            )
+                            Text(
+                                text = aiConfiguration.model.ifBlank {
+                                    if (activeAiProvider == AiProviderId.GOOGLE) {
+                                        "gemini-3.5-flash-lite (default)"
+                                    } else {
+                                        "Not selected"
+                                    }
+                                },
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = ElectricCyan
+                            )
+                        }
+                        TextButton(
+                            onClick = {
+                                modelInputText = aiConfiguration.model
+                                modelValidationErrorMessage = null
+                                showModelsListDropdown = false
+                                showModelConfigDialog = true
+                                viewModel.loadAvailableModels()
+                            },
+                            modifier = Modifier.testTag("ai_model_info_button")
+                        ) {
+                            Text(
+                                text = "Choose model",
+                                color = ElectricCyan,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
 
-                    val isKeyConfirmed = persistedApiKey.isNotBlank() || (userProfile.customApiKey?.isNotBlank() == true)
-                    val hasBuiltinKey = BuildConfig.GEMINI_API_KEY.isNotBlank() && BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY"
-
+                    val hasBuiltinKey = activeAiProvider == AiProviderId.GOOGLE &&
+                        BuildConfig.GEMINI_API_KEY.isNotBlank() &&
+                        BuildConfig.GEMINI_API_KEY != "MY_GEMINI_API_KEY"
+                    val isKeyConfirmed = aiConfiguration.apiKey.isNotBlank() || hasBuiltinKey
                     val statusText = when {
-                        isKeyConfirmed -> "Status: API Key Confirmed"
-                        hasBuiltinKey -> "Status: Pre-configured via Secrets Panel (Active). You can optionally override it below."
-                        else -> "Status: Not configured in secrets. Enter your Google AI Studio Gemini API key below to enable live responses."
+                        activeAiProvider.isCustomEndpoint && aiConfiguration.baseUrl.isBlank() ->
+                            "Status: endpoint not configured"
+                        activeAiProvider.isCustomEndpoint && !aiConfiguration.isEndpointAcknowledged() ->
+                            "Status: endpoint needs privacy confirmation"
+                        isKeyConfirmed -> "Status: API key saved"
+                        activeAiProvider.isCustomEndpoint ->
+                            "Status: endpoint ready; no key (optional for local servers)"
+                        else -> "Status: not configured"
                     }
-
                     val statusColor = when {
-                        isKeyConfirmed -> Color.Green
-                        hasBuiltinKey -> MintGreen
+                        statusText == "Status: API key saved" -> Color.Green
+                        statusText.contains("ready") -> MintGreen
                         else -> GoldenAmber
                     }
 
@@ -655,18 +747,142 @@ fun SettingsScreen(
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
-
                     OutlinedTextField(
                         value = customApiKeyInput,
-                        onValueChange = { customApiKeyInput = it },
-                        placeholder = { Text("AIzaSy...", color = TextMuted) },
-                        modifier = Modifier.fillMaxWidth().testTag("gemini_api_key_input"),
+                        onValueChange = {
+                            customApiKeyInput = it
+                            connectionTestMessage = null
+                        },
+                        placeholder = {
+                            Text(
+                                when {
+                                    activeAiProvider == AiProviderId.GOOGLE -> "AIzaSy..."
+                                    activeAiProvider.isCustomEndpoint ->
+                                        "API key (optional for a local endpoint)"
+                                    else -> "API key"
+                                },
+                                color = TextMuted
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("gemini_api_key_input"),
                         colors = profileFieldColors(),
-                        singleLine = true
+                        singleLine = true,
+                        visualTransformation = if (showApiKeyValue) {
+                            VisualTransformation.None
+                        } else {
+                            PasswordVisualTransformation()
+                        },
+                        trailingIcon = {
+                            TextButton(onClick = { showApiKeyValue = !showApiKeyValue }) {
+                                Text(
+                                    text = if (showApiKeyValue) "Hide" else "Show",
+                                    color = ElectricCyan,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
                     )
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    if (activeAiProvider.isCustomEndpoint) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        OutlinedTextField(
+                            value = customBaseUrlInput,
+                            onValueChange = {
+                                customBaseUrlInput = it
+                                connectionTestMessage = null
+                            },
+                            label = { Text("Endpoint base URL") },
+                            placeholder = { Text("https://host/v1", color = TextMuted) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("ai_custom_base_url_input"),
+                            colors = profileFieldColors(),
+                            singleLine = true
+                        )
 
+                        val endpointCheck = remember(customBaseUrlInput) {
+                            if (customBaseUrlInput.isBlank()) {
+                                null
+                            } else {
+                                AiEndpointValidator.validateCustomBaseUrl(customBaseUrlInput)
+                            }
+                        }
+                        endpointCheck?.exceptionOrNull()?.let { error ->
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = error.message ?: "Invalid endpoint URL.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = FireRed,
+                                lineHeight = 15.sp,
+                                modifier = Modifier.testTag("ai_custom_endpoint_error")
+                            )
+                        }
+                        val endpoint = endpointCheck?.getOrNull()
+                        if (endpoint != null && !endpoint.isHttps) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Plain HTTP is allowed only for a local or private-network host. " +
+                                    "Prompts and credentials are not encrypted on this connection.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = GoldenAmber,
+                                lineHeight = 15.sp,
+                                modifier = Modifier.testTag("ai_custom_http_warning")
+                            )
+                        }
+                        val acknowledged = endpoint != null &&
+                            endpoint.baseUrl == aiConfiguration.acknowledgedEndpoint &&
+                            endpoint.baseUrl == AiEndpointValidator.endpointIdentity(aiConfiguration.baseUrl)
+                        if (endpoint != null && !acknowledged) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(GoldenAmber.copy(alpha = 0.10f), RoundedCornerShape(8.dp))
+                                    .border(1.dp, GoldenAmber.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+                                    .padding(10.dp)
+                            ) {
+                                Column {
+                                    Text(
+                                        text = "Privacy & security confirmation required",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = GoldenAmber
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Nothing is sent to this endpoint until you review where your " +
+                                            "prompts, athlete context and tool results go.",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = TextWhite,
+                                        lineHeight = 15.sp
+                                    )
+                                    TextButton(
+                                        onClick = { showEndpointConsentDialog = true },
+                                        modifier = Modifier.testTag("ai_custom_endpoint_warning")
+                                    ) {
+                                        Text("Review warning", color = GoldenAmber, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.saveAiBaseUrl(customBaseUrlInput, acknowledge = false)
+                                connectionTestSucceeded = false
+                                connectionTestMessage =
+                                    "Endpoint saved. Confirm the privacy warning before sending data."
+                            },
+                            enabled = endpoint != null,
+                            modifier = Modifier.testTag("save_ai_endpoint_button")
+                        ) {
+                            Text("Save endpoint", color = ElectricCyan, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -674,7 +890,7 @@ fun SettingsScreen(
                     ) {
                         Button(
                             onClick = {
-                                viewModel.saveGeminiApiKey(customApiKeyInput)
+                                viewModel.saveAiApiKey(customApiKeyInput)
                                 showApiKeyConfirmedBadge = true
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
@@ -684,35 +900,105 @@ fun SettingsScreen(
                             Text("Save API Key", color = DarkBg, fontWeight = FontWeight.Bold)
                         }
 
-                        AnimatedVisibility(
-                            visible = showApiKeyConfirmedBadge || isKeyConfirmed,
-                            enter = fadeIn() + scaleIn(),
-                            exit = fadeOut()
-                        ) {
-                            Surface(
-                                color = Color.Green.copy(alpha = 0.15f),
-                                shape = RoundedCornerShape(8.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, Color.Green.copy(alpha = 0.6f))
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                                        .testTag("api_key_confirmed_badge"),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = "Confirmed",
-                                        tint = Color.Green,
-                                        modifier = Modifier.size(16.dp)
+                        OutlinedButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    isTestingConnection = true
+                                    connectionTestMessage = null
+                                    val result = viewModel.saveAndTestAiConnection(
+                                        apiKey = customApiKeyInput,
+                                        baseUrl = if (activeAiProvider.isCustomEndpoint) customBaseUrlInput else null,
+                                        acknowledgeEndpoint = activeAiProvider.isCustomEndpoint &&
+                                            aiConfiguration.isEndpointAcknowledged()
                                     )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "API key confirmed",
-                                        color = Color.Green,
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                    isTestingConnection = false
+                                    connectionTestSucceeded = result.isSuccess
+                                    connectionTestMessage = result.fold(
+                                        onSuccess = {
+                                            "${activeAiProvider.displayName} answered with " +
+                                                aiConfiguration.model.ifBlank { "the selected model" } + "."
+                                        },
+                                        onFailure = { it.message ?: "The connection test failed." }
                                     )
                                 }
+                            },
+                            enabled = !isTestingConnection,
+                            modifier = Modifier.testTag("test_ai_connection_button")
+                        ) {
+                            if (isTestingConnection) {
+                                CircularProgressIndicator(
+                                    color = ElectricCyan,
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Testing...", color = ElectricCyan, fontSize = 12.sp)
+                            } else {
+                                Text("Save & test", color = ElectricCyan, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                            }
+                        }
+                    }
+
+                    AnimatedVisibility(
+                        visible = connectionTestMessage != null,
+                        enter = fadeIn() + expandVertically(),
+                        exit = fadeOut() + shrinkVertically()
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp)
+                                .background(
+                                    (if (connectionTestSucceeded) MintGreen else FireRed).copy(alpha = 0.12f),
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .border(
+                                    1.dp,
+                                    (if (connectionTestSucceeded) MintGreen else FireRed).copy(alpha = 0.6f),
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .padding(10.dp)
+                                .testTag("ai_connection_test_result")
+                        ) {
+                            Text(
+                                text = connectionTestMessage ?: "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextWhite,
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+
+                    AnimatedVisibility(
+                        visible = showApiKeyConfirmedBadge || isKeyConfirmed,
+                        enter = fadeIn() + scaleIn(),
+                        exit = fadeOut()
+                    ) {
+                        Surface(
+                            modifier = Modifier.padding(top = 8.dp),
+                            color = Color.Green.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color.Green.copy(alpha = 0.6f))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .padding(horizontal = 10.dp, vertical = 6.dp)
+                                    .testTag("api_key_confirmed_badge"),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = "Confirmed",
+                                    tint = Color.Green,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "API key saved",
+                                    color = Color.Green,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold)
+                                )
                             }
                         }
                     }
@@ -787,6 +1073,20 @@ fun SettingsScreen(
                         }
                     }
 
+                    // The startup half of the update checker. The manual entry above always works;
+                    // this decides whether opening the app is enough to hear about a release.
+                    SettingSwitchRow(
+                        title = "Check for updates on app start",
+                        subtitle = if (appSettings.autoCheckUpdatesOnStart) {
+                            "A new release is looked up when IronPulse opens, and its changes are shown once."
+                        } else {
+                            "Updates are only looked up when you tap Check for updates."
+                        },
+                        checked = appSettings.autoCheckUpdatesOnStart,
+                        onCheckedChange = { viewModel.setAutoCheckUpdatesOnStart(it) },
+                        tag = "settings_auto_check_updates"
+                    )
+
                     Spacer(modifier = Modifier.height(6.dp))
                     androidx.compose.material3.HorizontalDivider(color = DarkBorder)
                     Spacer(modifier = Modifier.height(6.dp))
@@ -834,6 +1134,92 @@ fun SettingsScreen(
             )
         }
 
+        // Home widget layout. This is configuration, not user data: resetting it restores the
+        // stock dashboard and leaves every workout, weigh-in, routine and profile row alone.
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("home_widgets_settings_card"),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                shape = RoundedCornerShape(16.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = null,
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Home Widgets",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = TextWhite
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Choose, arrange and personalize the cards on your Home tab. " +
+                            "Restoring the defaults brings back IronPulse's original dashboard.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    OutlinedButton(
+                        onClick = { showRestoreWidgetsDialog = true },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = GoldenAmber),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            GoldenAmber.copy(alpha = 0.65f)
+                        ),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("restore_default_widgets_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.RestartAlt,
+                            contentDescription = null,
+                            tint = GoldenAmber,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Restore Default Home Widgets",
+                            color = GoldenAmber,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    if (widgetsRestored) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Default Home widgets restored.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MintGreen,
+                            modifier = Modifier.testTag("widgets_restored_message")
+                        )
+                    }
+
+                    if (widgetsRestoreFailed) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "The Home widgets could not be restored. Your current setup was kept. Try again.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = FireRed,
+                            modifier = Modifier.testTag("widgets_restore_failed_message")
+                        )
+                    }
+                }
+            }
+        }
+
         // Data Management & Danger Zone Card
         item {
             Card(
@@ -862,7 +1248,7 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Permanently erase every piece of data you have stored in this app: workout sessions, logged sets, saved routines, weigh-ins, AI coach chat history, your Gemini monthly summaries, your Gemini API key, your profile and rest timer presets.",
+                        text = "Permanently erase every piece of data you have stored in this app: workout sessions, logged sets, saved routines, weigh-ins, AI coach chat history, your AI monthly summaries, your saved AI provider settings and API keys, your profile, rest timer presets, your Home widget layout and the widget photos saved on this phone.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted
                     )
@@ -974,6 +1360,85 @@ fun SettingsScreen(
         )
     }
 
+    // Restore Default Home Widgets confirmation.
+    if (showRestoreWidgetsDialog) {
+        AlertDialog(
+            onDismissRequest = { showRestoreWidgetsDialog = false },
+            containerColor = DarkSurface,
+            modifier = Modifier.testTag("restore_widgets_dialog"),
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = FireRed,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Restore default Home widgets?",
+                        color = TextWhite,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "This permanently discards your current Home widget configuration:",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = TextWhite,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "• Your widget selection and order\n" +
+                            "• Your weekly goal target\n" +
+                            "• Your photo widget image and its app-private copy",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted,
+                        lineHeight = 18.sp
+                    )
+                    Text(
+                        text = "Your workouts, weigh-ins, profile, routines, exercise library and " +
+                            "every other setting are not touched.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MintGreen
+                    )
+                    Text(
+                        text = "This cannot be undone.",
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                        color = FireRed
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showRestoreWidgetsDialog = false
+                        widgetsRestoreFailed = false
+                        viewModel.restoreDefaultHomeWidgets { success ->
+                            widgetsRestored = success
+                            widgetsRestoreFailed = !success
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = FireRed),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.testTag("confirm_restore_widgets")
+                ) {
+                    Text("Restore Defaults", color = TextWhite, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showRestoreWidgetsDialog = false },
+                    modifier = Modifier.testTag("cancel_restore_widgets")
+                ) {
+                    Text("Cancel", color = TextMuted)
+                }
+            }
+        )
+    }
+
     // Delete All App Data Confirmation Dialog
     if (showClearDataDialog) {
         AlertDialog(
@@ -1005,9 +1470,10 @@ fun SettingsScreen(
                                     "• All saved & AI generated routines\n" +
                                     "• All body weight entries and profile data (name, height, weights, age)\n" +
                                     "• The entire AI coach chat history\n" +
-                                    "• All saved Gemini monthly summaries\n" +
-                                    "• Your Gemini API key and selected AI model\n" +
-                                    "• Your custom rest timer presets and any running rest timer",
+                                    "• All saved AI monthly summaries\n" +
+                                    "• Your AI provider settings, API keys and selected model\n" +
+                                    "• Your custom rest timer presets and any running rest timer\n" +
+                                    "• Your Home widget layout, customizations and saved widget photos",
                             style = MaterialTheme.typography.bodySmall,
                             color = TextMuted,
                             lineHeight = 18.sp
@@ -1044,8 +1510,10 @@ fun SettingsScreen(
             }
         )
     }
-    // Step by step guide: how to get a Google AI Studio API key
+    // Provider-aware guide: each service issues keys in its own console, and a custom endpoint
+    // may not need a key at all.
     if (showApiKeyHelpDialog) {
+        val help = aiKeyHelp(activeAiProvider)
         AlertDialog(
             onDismissRequest = { showApiKeyHelpDialog = false },
             containerColor = DarkSurface,
@@ -1081,91 +1549,81 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
-                        text = "IronPulse uses a free Google Gemini API key. It is free, takes about a minute and unlocks the AI coach, the routine generator and the AI parser.",
+                        text = help.intro,
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted
                     )
 
                     // Step 1 - the link opens in the default browser, never inside the app
-                    ApiKeyHelpStep(number = 1, text = "Open Google AI Studio by tapping the link below:")
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(ElectricCyan.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
-                            .border(1.dp, ElectricCyan.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
-                            .clickable { openExternalUrl("https://aistudio.google.com/apikey") }
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
-                            .testTag("google_ai_studio_link"),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "Google AI Studio",
-                            style = MaterialTheme.typography.bodyMedium.copy(
-                                fontWeight = FontWeight.Bold,
-                                textDecoration = TextDecoration.Underline
-                            ),
-                            color = ElectricCyan
-                        )
-                        Text(
-                            text = "opens in your browser",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextMuted
-                        )
-                    }
-
-                    ApiKeyHelpStep(
-                        number = 2,
-                        text = "Sign in with your Google account (a free Gmail account is enough)."
-                    )
-                    ApiKeyHelpStep(
-                        number = 3,
-                        text = "Click \"Create API key\", then choose an existing Google Cloud project or create a new one."
-                    )
-                    ApiKeyHelpStep(
-                        number = 4,
-                        text = "Google will show you the generated key. Copy it with the copy button next to it."
-                    )
-                    ApiKeyHelpStep(
-                        number = 5,
-                        text = "Paste the key in the API Key field above and tap \"Save API Key\". Leave the model as default unless you want a different one."
-                    )
-
-                    // Google requires a verified phone number before it will issue an API key
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(GoldenAmber.copy(alpha = 0.14f), RoundedCornerShape(10.dp))
-                            .border(1.dp, GoldenAmber.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
-                            .padding(10.dp)
-                            .testTag("api_key_verified_phone_warning"),
-                        verticalAlignment = Alignment.Top
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Warning,
-                            contentDescription = "Important",
-                            tint = GoldenAmber,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
+                    ApiKeyHelpStep(number = 1, text = help.firstStep)
+                    if (help.consoleUrl != null) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(ElectricCyan.copy(alpha = 0.12f), RoundedCornerShape(8.dp))
+                                .border(1.dp, ElectricCyan.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+                                .clickable { openExternalUrl(help.consoleUrl) }
+                                .padding(horizontal = 10.dp, vertical = 8.dp)
+                                .testTag("ai_provider_key_link"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
                             Text(
-                                text = "You need a verified phone number",
-                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                color = GoldenAmber
+                                text = help.consoleName ?: help.consoleUrl,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontWeight = FontWeight.Bold,
+                                    textDecoration = TextDecoration.Underline
+                                ),
+                                color = ElectricCyan
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "Google requires a phone number verified on your Google account before it lets you create an API key. If key creation is blocked, add and verify a phone number in your Google account settings and try again.",
+                                text = "opens in your browser",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = TextWhite,
-                                lineHeight = 16.sp
+                                color = TextMuted
                             )
                         }
                     }
 
+                    help.steps.forEachIndexed { index, step ->
+                        ApiKeyHelpStep(number = index + 2, text = step)
+                    }
+
+                    if (help.warningTitle != null && help.warningBody != null) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(GoldenAmber.copy(alpha = 0.14f), RoundedCornerShape(10.dp))
+                                .border(1.dp, GoldenAmber.copy(alpha = 0.55f), RoundedCornerShape(10.dp))
+                                .padding(10.dp)
+                                .testTag("api_key_verified_phone_warning"),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = "Important",
+                                tint = GoldenAmber,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = help.warningTitle,
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                    color = GoldenAmber
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = help.warningBody,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextWhite,
+                                    lineHeight = 16.sp
+                                )
+                            }
+                        }
+                    }
+
                     Text(
-                        text = "The key is stored only on your phone and is removed if you tap \"Delete App Data\".",
+                        text = help.storageNote,
                         style = MaterialTheme.typography.labelSmall,
                         color = MintGreen
                     )
@@ -1219,7 +1677,8 @@ fun SettingsScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
-                        text = "Configure the Gemini model used for AI coaching, workout generation, and routine parsing.",
+                        text = "Provider: ${activeAiProvider.displayName}. The model id is sent exactly " +
+                            "as written, so a manually typed id is never rewritten.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted
                     )
@@ -1233,13 +1692,22 @@ fun SettingsScreen(
                     ) {
                         Column {
                             Text(
-                                text = "💡 Default Model: gemini-3.5-flash-lite",
+                                text = if (activeAiProvider == AiProviderId.GOOGLE) {
+                                    "Default: gemini-3.5-flash-lite"
+                                } else {
+                                    "Live catalog: ${activeAiProvider.displayName}"
+                                },
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                 color = ElectricCyan
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = "If you don't type in anything (leave it blank), it automatically defaults to the current gemini-3.5-flash-lite model by Google.",
+                                text = if (activeAiProvider == AiProviderId.GOOGLE) {
+                                    "Leave the field blank to use Google's default model."
+                                } else {
+                                    "Refresh to load the provider's model list, or type a model id " +
+                                        "manually. An empty catalog does not prevent a manual id."
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = TextWhite,
                                 fontSize = 12.sp,
@@ -1267,13 +1735,15 @@ fun SettingsScreen(
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
                                 Text(
-                                    text = "⚠️ Model Compatibility Warning",
+                                    text = "Model Compatibility Warning",
                                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                     color = GoldenAmber
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = "Be aware that changing the model to a dumber one (that may not understand formatting requirements) may very well result in weird behaviour and unwanted bugs, and it is up to the user to be aware of them.",
+                                    text = "A smaller or older model may not follow the app's formatting " +
+                                        "requirements. Tools fall back to the text protocol automatically " +
+                                        "when native tool calling is unavailable.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = TextWhite,
                                     fontSize = 12.sp,
@@ -1289,8 +1759,14 @@ fun SettingsScreen(
                             modelInputText = it
                             modelValidationErrorMessage = null
                         },
-                        label = { Text("Gemini Model Name") },
-                        placeholder = { Text("gemini-3.5-flash-lite", color = TextMuted) },
+                        label = { Text("Model ID") },
+                        placeholder = {
+                            Text(
+                                if (activeAiProvider == AiProviderId.GOOGLE) "gemini-3.5-flash-lite"
+                                else "model-id",
+                                color = TextMuted
+                            )
+                        },
                         singleLine = true,
                         colors = profileFieldColors(),
                         modifier = Modifier
@@ -1318,7 +1794,7 @@ fun SettingsScreen(
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Info,
-                                        contentDescription = "Show Available Gemini & Gemma Models",
+                                        contentDescription = "Show available models",
                                         tint = ElectricCyan,
                                         modifier = Modifier.size(14.dp)
                                     )
@@ -1335,7 +1811,7 @@ fun SettingsScreen(
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .heightIn(max = 240.dp)
+                                .heightIn(max = 260.dp)
                                 .testTag("available_models_popup_card"),
                             colors = CardDefaults.cardColors(containerColor = DarkBg),
                             shape = RoundedCornerShape(12.dp),
@@ -1345,7 +1821,7 @@ fun SettingsScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                                        .padding(horizontal = 6.dp, vertical = 2.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -1355,7 +1831,6 @@ fun SettingsScreen(
                                         color = ElectricCyan,
                                         fontSize = 11.sp
                                     )
-
                                     if (isLoadingModels) {
                                         CircularProgressIndicator(
                                             color = ElectricCyan,
@@ -1363,13 +1838,42 @@ fun SettingsScreen(
                                             strokeWidth = 1.5.dp
                                         )
                                     } else {
+                                        TextButton(
+                                            onClick = { viewModel.loadAvailableModels() },
+                                            modifier = Modifier.testTag("refresh_models_button")
+                                        ) {
+                                            Text("Refresh", color = ElectricCyan, fontSize = 10.sp)
+                                        }
+                                    }
+                                }
+
+                                modelDiscoveryError?.let { message ->
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(FireRed.copy(alpha = 0.12f), RoundedCornerShape(6.dp))
+                                            .padding(8.dp)
+                                            .testTag("model_discovery_error")
+                                    ) {
                                         Text(
-                                            text = "Tap to select",
+                                            text = message,
                                             style = MaterialTheme.typography.labelSmall,
-                                            color = TextMuted,
-                                            fontSize = 10.sp
+                                            color = TextWhite,
+                                            fontSize = 10.5.sp,
+                                            lineHeight = 14.sp
                                         )
                                     }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                }
+
+                                if (!isLoadingModels && availableModels.isEmpty()) {
+                                    Text(
+                                        text = "No models were returned. Type a model id manually.",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = TextMuted,
+                                        fontSize = 10.5.sp,
+                                        modifier = Modifier.padding(6.dp)
+                                    )
                                 }
 
                                 HorizontalDivider(color = DarkBorder, thickness = 1.dp, modifier = Modifier.padding(vertical = 4.dp))
@@ -1380,21 +1884,25 @@ fun SettingsScreen(
                                         .weight(1f, fill = false),
                                     verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    items(availableModels, key = { it.apiName }) { model ->
-                                        val isSelected = modelInputText.trim().equals(model.apiName, ignoreCase = true)
+                                    items(availableModels, key = { it.id }) { model ->
+                                        val isSelected = modelInputText.trim().equals(model.id, ignoreCase = true)
                                         Surface(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clip(RoundedCornerShape(8.dp))
                                                 .clickable {
-                                                    modelInputText = model.apiName
+                                                    modelInputText = model.id
                                                     showModelsListDropdown = false
                                                     modelValidationErrorMessage = null
                                                 }
-                                                .testTag("select_model_${model.apiName}"),
+                                                .testTag("select_model_${model.id}"),
                                             color = if (isSelected) ElectricCyan.copy(alpha = 0.15f) else DarkSurfaceVariant,
                                             shape = RoundedCornerShape(8.dp),
-                                            border = if (isSelected) androidx.compose.foundation.BorderStroke(1.dp, ElectricCyan) else null
+                                            border = if (isSelected) {
+                                                androidx.compose.foundation.BorderStroke(1.dp, ElectricCyan)
+                                            } else {
+                                                null
+                                            }
                                         ) {
                                             Row(
                                                 modifier = Modifier
@@ -1412,9 +1920,9 @@ fun SettingsScreen(
                                                         overflow = TextOverflow.Ellipsis
                                                     )
                                                     Text(
-                                                        text = model.apiName,
+                                                        text = model.id,
                                                         style = MaterialTheme.typography.labelSmall,
-                                                        color = if (model.isGemma) GoldenAmber else ElectricCyan,
+                                                        color = if (model.isLive) ElectricCyan else TextMuted,
                                                         fontSize = 10.5.sp,
                                                         maxLines = 1,
                                                         overflow = TextOverflow.Ellipsis
@@ -1423,19 +1931,27 @@ fun SettingsScreen(
 
                                                 Spacer(modifier = Modifier.width(6.dp))
 
-                                                Box(
-                                                    modifier = Modifier
-                                                        .background(
-                                                            if (model.isGemma) GoldenAmber.copy(alpha = 0.2f) else ElectricCyan.copy(alpha = 0.2f),
-                                                            RoundedCornerShape(4.dp)
-                                                        )
-                                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                                ) {
+                                                Column(horizontalAlignment = Alignment.End) {
+                                                    val toolLabel = when (model.capabilities.nativeToolCalling) {
+                                                        com.example.data.ai.AiCapability.SUPPORTED -> "Native tools"
+                                                        com.example.data.ai.AiCapability.UNSUPPORTED -> "Text tools"
+                                                        com.example.data.ai.AiCapability.UNKNOWN -> "Tools ?"
+                                                    }
+                                                    val toolColor = when (model.capabilities.nativeToolCalling) {
+                                                        com.example.data.ai.AiCapability.SUPPORTED -> MintGreen
+                                                        com.example.data.ai.AiCapability.UNSUPPORTED -> GoldenAmber
+                                                        com.example.data.ai.AiCapability.UNKNOWN -> TextMuted
+                                                    }
                                                     Text(
-                                                        text = if (model.isGemma) "Gemma" else "Gemini",
+                                                        text = toolLabel,
                                                         fontSize = 9.sp,
                                                         fontWeight = FontWeight.Bold,
-                                                        color = if (model.isGemma) GoldenAmber else ElectricCyan
+                                                        color = toolColor
+                                                    )
+                                                    Text(
+                                                        text = if (model.isLive) "Live" else "Known",
+                                                        fontSize = 9.sp,
+                                                        color = if (model.isLive) MintGreen else TextMuted
                                                     )
                                                 }
                                             }
@@ -1445,6 +1961,52 @@ fun SettingsScreen(
                             }
                         }
                     }
+
+                    Text(
+                        text = "Tool calling",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = TextWhite
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        AiToolMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = aiConfiguration.toolMode == mode,
+                                onClick = { viewModel.saveAiToolMode(mode) },
+                                label = {
+                                    Text(
+                                        when (mode) {
+                                            AiToolMode.AUTO -> "Auto"
+                                            AiToolMode.NATIVE -> "Native only"
+                                            AiToolMode.COMPATIBILITY -> "Text fallback"
+                                        },
+                                        fontSize = 10.5.sp
+                                    )
+                                },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = ElectricCyan.copy(alpha = 0.18f),
+                                    selectedLabelColor = ElectricCyan,
+                                    containerColor = DarkSurfaceVariant,
+                                    labelColor = TextMuted
+                                ),
+                                modifier = Modifier.testTag("ai_tool_mode_${mode.name.lowercase()}")
+                            )
+                        }
+                    }
+                    Text(
+                        text = when (aiConfiguration.toolMode) {
+                            AiToolMode.AUTO -> "Try native tools first; fall back to the text protocol if the model rejects them."
+                            AiToolMode.NATIVE -> "Only the provider's structured tool protocol. A model without it reports an error."
+                            AiToolMode.COMPATIBILITY -> "Always use the bounded JSON text protocol, even if the model supports native tools."
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted,
+                        lineHeight = 15.sp
+                    )
 
                     if (modelValidationErrorMessage != null) {
                         Box(
@@ -1485,7 +2047,7 @@ fun SettingsScreen(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Validating model with Gemini API...",
+                                text = "Testing with ${activeAiProvider.displayName}...",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = ElectricCyan
                             )
@@ -1510,42 +2072,123 @@ fun SettingsScreen(
                         Text("Cancel", color = TextMuted, fontWeight = FontWeight.SemiBold)
                     }
 
-                    Button(
-                        onClick = {
-                            coroutineScope.launch {
-                                isValidatingModel = true
-                                modelValidationErrorMessage = null
-                                val result = viewModel.validateAndSaveGeminiModel(modelInputText)
-                                isValidatingModel = false
-                                if (result.isSuccess) {
-                                    showModelConfigDialog = false
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(
+                            onClick = {
+                                coroutineScope.launch {
+                                    isValidatingModel = true
                                     modelValidationErrorMessage = null
-                                } else {
-                                    modelValidationErrorMessage = result.exceptionOrNull()?.message
-                                        ?: "Could not verify model. Please check the model name or API key."
+                                    val result = viewModel.validateAndSaveAiModel(modelInputText)
+                                    isValidatingModel = false
+                                    if (result.isSuccess) {
+                                        showModelConfigDialog = false
+                                        modelValidationErrorMessage = null
+                                    } else {
+                                        modelValidationErrorMessage = result.exceptionOrNull()?.message
+                                            ?: "Could not verify the model. Check the model id and API key."
+                                    }
                                 }
-                            }
-                        },
-                        enabled = !isValidatingModel,
-                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.testTag("save_model_button")
-                    ) {
-                        if (isValidatingModel) {
-                            CircularProgressIndicator(
-                                color = DarkBg,
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Verifying...", color = DarkBg, fontWeight = FontWeight.Bold)
-                        } else {
-                            Text("Save Model", color = DarkBg, fontWeight = FontWeight.Bold)
+                            },
+                            enabled = !isValidatingModel,
+                            modifier = Modifier.testTag("test_model_button")
+                        ) {
+                            Text("Test & save", color = ElectricCyan, fontWeight = FontWeight.SemiBold)
+                        }
+
+                        Button(
+                            onClick = {
+                                viewModel.saveAiModel(modelInputText)
+                                showModelConfigDialog = false
+                                modelValidationErrorMessage = null
+                            },
+                            enabled = !isValidatingModel &&
+                                (modelInputText.isNotBlank() || activeAiProvider == AiProviderId.GOOGLE),
+                            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("save_model_button")
+                        ) {
+                            Text("Save model", color = DarkBg, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
             },
             dismissButton = null
+        )
+    }
+
+    if (showEndpointConsentDialog) {
+        val endpoint = AiEndpointValidator.validateCustomBaseUrl(customBaseUrlInput).getOrNull()
+        AlertDialog(
+            onDismissRequest = { showEndpointConsentDialog = false },
+            containerColor = DarkSurface,
+            shape = RoundedCornerShape(16.dp),
+            title = {
+                Text(
+                    text = "Custom endpoint warning",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = TextWhite
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "You are about to send data to:",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted
+                    )
+                    Text(
+                        text = endpoint?.baseUrl ?: customBaseUrlInput,
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                        color = ElectricCyan
+                    )
+                    Text(
+                        text = "• Your prompts and the athlete context you enabled in Settings.\n" +
+                            "• Tool results such as exercise names, instructions and saved routines.\n" +
+                            "• The API key, if one is set. It is sent only to this endpoint, never to another provider.\n" +
+                            "• IronPulse does not disable TLS certificate checks and does not follow redirects from this endpoint.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextWhite,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp
+                    )
+                    if (endpoint != null && !endpoint.isHttps) {
+                        Text(
+                            text = "This endpoint uses plain HTTP. Prompts and the key are not encrypted " +
+                                "in transit. Only continue on a local or private network you control.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = GoldenAmber,
+                            lineHeight = 15.sp
+                        )
+                    }
+                    Text(
+                        text = "Only continue if you control or trust this server.",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = GoldenAmber
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.saveAiBaseUrl(customBaseUrlInput, acknowledge = true)
+                        showEndpointConsentDialog = false
+                        connectionTestSucceeded = false
+                        connectionTestMessage =
+                            "Endpoint confirmed. Use Save & test to verify it before sending a real request."
+                    },
+                    modifier = Modifier.testTag("confirm_custom_endpoint")
+                ) {
+                    Text("I understand, use this endpoint", color = GoldenAmber, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showEndpointConsentDialog = false },
+                    modifier = Modifier.testTag("cancel_custom_endpoint")
+                ) {
+                    Text("Cancel", color = TextMuted)
+                }
+            }
         )
     }
 }
@@ -1574,6 +2217,108 @@ private fun updateStatusText(
 /**
  * One numbered line of the "How to get an API key" guide.
  */
+/**
+ * Provider-specific key instructions.
+ *
+ * The app has one AI layer, but the places that issue keys are genuinely different, so the help
+ * dialog follows the active provider instead of pretending every service works like Google.
+ */
+private data class AiKeyHelp(
+    val intro: String,
+    val firstStep: String,
+    val consoleName: String? = null,
+    val consoleUrl: String? = null,
+    val steps: List<String> = emptyList(),
+    val warningTitle: String? = null,
+    val warningBody: String? = null,
+    val storageNote: String = "The key is stored only on your phone and is removed if you tap \"Delete App Data\"."
+)
+
+private fun aiKeyHelp(provider: AiProviderId): AiKeyHelp = when (provider) {
+    AiProviderId.GOOGLE -> AiKeyHelp(
+        intro = "IronPulse can use a Google AI Studio API key. It takes about a minute and unlocks the AI coach, the routine generator and the AI parser.",
+        firstStep = "Open Google AI Studio by tapping the link below:",
+        consoleName = "Google AI Studio",
+        consoleUrl = "https://aistudio.google.com/apikey",
+        steps = listOf(
+            "Sign in with your Google account (a free Gmail account is enough).",
+            "Click \"Create API key\", then choose an existing Google Cloud project or create a new one.",
+            "Google will show you the generated key. Copy it with the copy button next to it.",
+            "Paste the key in the API Key field above and tap \"Save & test\". Leave the model as default unless you want a different one."
+        ),
+        warningTitle = "You need a verified phone number",
+        warningBody = "Google requires a phone number verified on your Google account before it lets you create an API key. If key creation is blocked, add and verify a phone number in your Google account settings and try again."
+    )
+
+    AiProviderId.OPENAI -> AiKeyHelp(
+        intro = "OpenAI keys are created in the OpenAI platform dashboard. Usage is billed by OpenAI according to your account plan.",
+        firstStep = "Open the OpenAI API keys page by tapping the link below:",
+        consoleName = "OpenAI API keys",
+        consoleUrl = "https://platform.openai.com/api-keys",
+        steps = listOf(
+            "Sign in or create an OpenAI account.",
+            "Tap \"Create new secret key\", name it and copy the key immediately; it is shown only once.",
+            "Paste the key in the API Key field above and tap \"Save & test\".",
+            "Use \"Choose model\" above to pick from your live model list, or type a model id manually."
+        ),
+        storageNote = "The key is stored only on your phone and is sent only to api.openai.com. It is removed if you tap \"Delete App Data\"."
+    )
+
+    AiProviderId.ANTHROPIC -> AiKeyHelp(
+        intro = "Anthropic keys are created in the Claude developer console. Usage is billed by Anthropic according to your account plan.",
+        firstStep = "Open the Anthropic API keys page by tapping the link below:",
+        consoleName = "Anthropic API keys",
+        consoleUrl = "https://console.anthropic.com/settings/keys",
+        steps = listOf(
+            "Sign in or create an Anthropic account.",
+            "Tap \"Create Key\", name it and copy the key immediately.",
+            "Paste the key in the API Key field above and tap \"Save & test\".",
+            "Use \"Choose model\" above to pick a Claude model, or type a model id manually."
+        ),
+        storageNote = "The key is stored only on your phone and is sent only to api.anthropic.com. It is removed if you tap \"Delete App Data\"."
+    )
+
+    AiProviderId.OPENROUTER -> AiKeyHelp(
+        intro = "OpenRouter gives you one key for models from many vendors. Usage is billed by OpenRouter according to your account balance.",
+        firstStep = "Open the OpenRouter keys page by tapping the link below:",
+        consoleName = "OpenRouter API keys",
+        consoleUrl = "https://openrouter.ai/keys",
+        steps = listOf(
+            "Sign in or create an OpenRouter account and add credit if needed.",
+            "Tap \"Create Key\", name it and copy the key immediately.",
+            "Paste the key in the API Key field above and tap \"Save & test\".",
+            "Use \"Choose model\" above to search the live catalog, or type a model id such as vendor/model-name."
+        ),
+        storageNote = "The key is stored only on your phone and is sent only to openrouter.ai. It is removed if you tap \"Delete App Data\"."
+    )
+
+    AiProviderId.XAI -> AiKeyHelp(
+        intro = "xAI keys are created in the xAI console. Usage is billed by xAI according to your account plan.",
+        firstStep = "Open the xAI console by tapping the link below:",
+        consoleName = "xAI console",
+        consoleUrl = "https://console.x.ai/",
+        steps = listOf(
+            "Sign in or create an xAI account.",
+            "Create an API key in the console and copy it immediately.",
+            "Paste the key in the API Key field above and tap \"Save & test\".",
+            "Use \"Choose model\" above to pick a Grok model, or type a model id manually."
+        ),
+        storageNote = "The key is stored only on your phone and is sent only to api.x.ai. It is removed if you tap \"Delete App Data\"."
+    )
+
+    AiProviderId.CUSTOM_OPENAI -> AiKeyHelp(
+        intro = "A custom endpoint is any server that speaks the OpenAI chat-completions API, such as a local LLM runner or your own gateway. You control where your data goes.",
+        firstStep = "Enter the endpoint base URL above, for example http://192.168.1.10:11434/v1 or https://ai.example.com/v1.",
+        steps = listOf(
+            "Start your local or hosted OpenAI-compatible server and make sure this phone can reach it.",
+            "Tap \"Save endpoint\". The first use of a custom endpoint requires the privacy confirmation shown above.",
+            "Most local servers need no key. If yours does, paste it in the API Key field and tap \"Save API Key\"; it is sent only to this endpoint.",
+            "Tap \"Save & test\", then choose a discovered model or type its id manually."
+        ),
+        storageNote = "The endpoint and any key stay on your phone. HTTP is allowed only for loopback and private-network hosts; use HTTPS for public hosts. TLS certificate checks are never disabled."
+    )
+}
+
 @Composable
 private fun ApiKeyHelpStep(number: Int, text: String) {
     Row(

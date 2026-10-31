@@ -10,6 +10,7 @@ else finds them.
 
 | Version | Supported |
 |---|---|
+| 3.0.x | ✅ |
 | 2.0.x | ✅ |
 | 1.1.x | ✅ |
 | 1.0.x | ✅ |
@@ -61,7 +62,7 @@ system, and no analytics. This shapes what can realistically be a vulnerability:
 | Asset | Where it lives | Threat |
 |---|---|---|
 | Workout history, weigh-ins, routines | SQLite in app-private storage | A backup being read; an exported file; a rooted device |
-| Gemini API key | DataStore, entered by the user | Leaking to a third party; committing it to a repo |
+| AI provider API keys and custom endpoint URL | DataStore, entered by the user | Leaking to another provider or host; committing a key to a repo |
 | Athlete profile | SQLite + DataStore | Exfiltration through an AI request the user did not consent to |
 | Gallery media | Copied into `filesDir/exercise_media/` | Leaving a user's photo on disk after they remove it |
 | Profile picture | Copied into `filesDir/profile_media/` | A copy of the user's photo outliving the app data wipe |
@@ -71,7 +72,7 @@ system, and no analytics. This shapes what can realistically be a vulnerability:
 - Any server-side component. There is no server.
 - Multi-user isolation. There is one user per install.
 - Physical access to an unlocked, unrooted device.
-- Attacks on the Gemini service itself.
+- Attacks on an external AI provider or a custom endpoint the user chooses.
 
 ---
 
@@ -81,6 +82,15 @@ Worth knowing, because they are deliberate and should stay that way:
 
 - **AI data sharing is off by default.** No profile data is sent with an AI request until the user
   explicitly enables it. `athleteContextPromptBlock()` returns an empty string while it is off.
+- **Credentials stay with their provider.** Each provider has its own key and model in DataStore.
+  A key is sent only to that provider's fixed host, or, for the custom endpoint, only to the exact
+  normalized URL the user confirmed. Changing the URL requires a new confirmation.
+- **Custom endpoints are opt-in and constrained.** The URL must be HTTP(S) with no embedded
+  credentials or fragment. Plain HTTP is accepted only for loopback and private-network hosts, with
+  an explicit warning. Redirects are not followed, and TLS certificate checks are never disabled.
+- **AI tools are read-only.** The canonical registry can search and read exercises, routines and
+  their entries through the repository. There is no SQL, filesystem, arbitrary network or code
+  execution tool, and every call is validated, byte-capped and bounded.
 - **The API key is never committed.** `.env`, `local.properties`, `*.jks` and `*.keystore` are
   gitignored, and CI scans every push for secrets.
 - **Release signing keys are not in the repository.**

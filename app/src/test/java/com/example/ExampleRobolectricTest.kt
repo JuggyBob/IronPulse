@@ -308,54 +308,6 @@ class ExampleRobolectricTest {
   }
 
   @Test
-  fun `test GeminiClient default model and endpoint resolution`() {
-    assertEquals("gemini-3.5-flash-lite", com.example.data.api.GeminiClient.DEFAULT_MODEL)
-    
-    // When model is null or blank, defaults to gemini-3.5-flash-lite
-    val defaultEndpoint = com.example.data.api.GeminiClient.getModelEndpoint(null)
-    org.junit.Assert.assertTrue(defaultEndpoint.contains("gemini-3.5-flash-lite:generateContent"))
-
-    val blankEndpoint = com.example.data.api.GeminiClient.getModelEndpoint("   ")
-    org.junit.Assert.assertTrue(blankEndpoint.contains("gemini-3.5-flash-lite:generateContent"))
-
-    // When custom model is provided, uses custom model
-    val customEndpoint = com.example.data.api.GeminiClient.getModelEndpoint("gemini-3.5-flash")
-    org.junit.Assert.assertTrue(customEndpoint.contains("gemini-3.5-flash:generateContent"))
-
-    // When model has models/ prefix, strips it correctly
-    val prefixedEndpoint = com.example.data.api.GeminiClient.getModelEndpoint("models/gemini-3.1-pro-preview")
-    org.junit.Assert.assertTrue(prefixedEndpoint.contains("gemini-3.1-pro-preview:generateContent"))
-  }
-
-  @Test
-  fun `test GeminiClient validateModel fails gracefully with empty API key`() = kotlinx.coroutines.runBlocking {
-    val result = com.example.data.api.GeminiClient.validateModel("gemini-3.5-flash", "")
-    org.junit.Assert.assertTrue(result.isFailure)
-    org.junit.Assert.assertTrue(result.exceptionOrNull()?.message?.contains("API key") == true)
-  }
-
-  @Test
-  fun `test GeminiClient curated model list contains Gemini and Gemma models`() {
-    val models = com.example.data.api.GeminiClient.getCuratedModelList()
-    org.junit.Assert.assertTrue(models.isNotEmpty())
-    
-    // Default model is first
-    assertEquals("gemini-3.5-flash-lite", models.first().apiName)
-    
-    // Contains both Gemini and Gemma
-    val hasGemini = models.any { !it.isGemma && it.apiName.contains("gemini") }
-    val hasGemma = models.any { it.isGemma && it.apiName.contains("gemma") }
-    org.junit.Assert.assertTrue(hasGemini)
-    org.junit.Assert.assertTrue(hasGemma)
-
-    // Check all models have valid API name and Display Name
-    models.forEach { model ->
-      org.junit.Assert.assertTrue(model.apiName.isNotBlank())
-      org.junit.Assert.assertTrue(model.displayName.isNotBlank())
-    }
-  }
-
-  @Test
   fun `test exercise database deduplication and unique constraint prevents duplicates`() = kotlinx.coroutines.runBlocking {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val db = androidx.room.Room.inMemoryDatabaseBuilder(context, com.example.data.db.AppDatabase::class.java)

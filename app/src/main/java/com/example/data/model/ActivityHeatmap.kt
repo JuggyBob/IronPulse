@@ -4,7 +4,7 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 
-/** Milliseconds in one day. */
+/** Milliseconds in one nominal day. Only for durations, never for moving between calendar dates. */
 const val DAY_MS: Long = 24L * 60L * 60L * 1000L
 
 /** One training day of the activity grid. */
@@ -28,7 +28,8 @@ data class ActivityWeek(
     fun dayAt(weekdayIndex: Int): Long = days[weekdayIndex.coerceIn(0, 6)]
 
     /** True when [dayStart] is inside this week. */
-    fun contains(dayStart: Long): Boolean = dayStart >= mondayStart && dayStart < mondayStart + 7 * DAY_MS
+    fun contains(dayStart: Long): Boolean =
+        ActivityHeatmap.startOfDay(dayStart) in days
 }
 
 /**
@@ -37,6 +38,12 @@ data class ActivityWeek(
  * Everything here is pure so the grid, the month labels and the colours can be verified without a
  * device: the previous version of this screen looked correct but never lit up, because the colours
  * were derived from a duration that is often still zero right after saving a workout.
+ *
+ * Every calendar step goes through [Calendar]. A fixed 24 hour arithmetic is wrong twice a year:
+ * on the daylight saving transition a "day" is 23 or 25 hours long, and subtracting milliseconds
+ * from a local timestamp lands at 23:00 or 01:00 of the neighbouring date. That is how a workout
+ * done on a Monday evening could paint the Sunday square, and why the first week of a month could
+ * lose its label.
  */
 object ActivityHeatmap {
 
@@ -58,7 +65,24 @@ object ActivityHeatmap {
     const val WEEK_COUNT = 53
 
     /** Local midnight of [timestamp]. */
-    fun startOfDay(timestamp: Long): Long = timestamp - Math.floorMod(timestamp, DAY_MS)
+    fun startOfDay(timestamp: Long): Long = Calendar.getInstance().apply {
+        timeInMillis = timestamp
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+
+    /**
+     * Moves [timestamp] by [days] calendar days in the local time zone.
+     *
+     * Not `timestamp + days * DAY_MS`: the local day length changes at a daylight saving
+     * transition, and the result must stay at the same wall-clock time on the target date.
+     */
+    fun addDays(timestamp: Long, days: Int): Long = Calendar.getInstance().apply {
+        timeInMillis = timestamp
+        add(Calendar.DAY_OF_MONTH, days)
+    }.timeInMillis
 
     /**
      * How vivid a day is, from 0 to 1.
@@ -83,7 +107,8 @@ object ActivityHeatmap {
     }
 
     /** Local midnight of the Monday of the week that contains [dayStart]. */
-    fun mondayOf(dayStart: Long): Long = dayStart - (isoDayOfWeek(dayStart) - 1) * DAY_MS
+    fun mondayOf(dayStart: Long): Long =
+        addDays(startOfDay(dayStart), -(isoDayOfWeek(dayStart) - 1))
 
     /**
      * The [weekCount] weeks ending with the week of [today].
@@ -93,10 +118,10 @@ object ActivityHeatmap {
     fun weeksEndingAt(today: Long, weekCount: Int = WEEK_COUNT): List<ActivityWeek> {
         val lastMonday = mondayOf(startOfDay(today))
         return (0 until weekCount).map { index ->
-            val monday = lastMonday - (weekCount - 1 - index) * 7 * DAY_MS
+            val monday = addDays(lastMonday, -(weekCount - 1 - index) * 7)
             ActivityWeek(
                 mondayStart = monday,
-                days = (0 until 7).map { monday + it * DAY_MS }
+                days = (0 until 7).map { addDays(monday, it) }
             )
         }
     }

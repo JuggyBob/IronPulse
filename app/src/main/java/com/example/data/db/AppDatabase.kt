@@ -23,6 +23,7 @@ import com.example.data.model.LoggedSet
 import com.example.data.model.SavedRoutine
 import com.example.data.model.UserProfile
 import com.example.data.model.WorkoutSession
+import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.seed.DatasetSeeder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,7 +43,7 @@ import kotlinx.coroutines.sync.withLock
         ChatMessageEntity::class,
         GeminiSummary::class
     ],
-    version = 10,
+    version = 12,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -230,9 +231,9 @@ abstract class AppDatabase : RoomDatabase() {
          * weight, so weighing in today rewrote what last month's pull-ups weighed. The snapshot
          * is what makes the isolated weight tag stable.
          *
-         * Existing rows default to 0, which reads as "not recorded" and falls back to the current
-         * profile weight. That is the best guess for a set logged before the snapshot existed, and
-         * it never invents a number.
+         * Existing rows default to 0, which reads as "not recorded". Migration 10 -> 11 then fills
+         * them with the best historical value available, so they never read the profile weight
+         * again.
          */
         val MIGRATION_8_9 = object : Migration(8, 9) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -263,6 +264,84 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Freezes the body weight of every set that was logged before snapshots existed.
+         *
+         * The reported bug was exactly this: changing the profile weight rewrote the body weight,
+         * the volume and the "isolated weight" tag of every older workout, while the newest one
+         * looked right. The cause was that rows written before the column existed carried 0, which
+         * the UI resolved through the *current* profile weight. A workout has to keep the weight it
+         * was done at forever, so 0 can no longer be left for the reader to guess.
+         *
+         * The value written is the latest weigh-in at or before that workout finished. If the
+         * athlete has no weigh-in that old, the earliest one they do have is the closest record to
+         * the session; the profile weight is the last resort, and 75 kg is only the column default
+         * when even the profile is empty. This is a one time best effort for history that never
+         * stored the number, not a recomputation: once written, the row is stable.
+         */
+        val MIGRATION_10_11 = object : Migration(10, 11) {            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    UPDATE `logged_sets`
+                    SET `bodyWeightKg` = COALESCE(
+                        (
+                            SELECT w.`weightKg`
+                            FROM `body_weight_logs` w
+                            WHERE w.`weightKg` > 0
+                              AND w.`timestamp` <= COALESCE(
+                                  (SELECT s.`endTime` FROM `workout_sessions` s
+                                   WHERE s.`id` = `logged_sets`.`sessionId`),
+                                  `logged_sets`.`timestamp`
+                              )
+                            ORDER BY w.`timestamp` DESC
+                            LIMIT 1
+                        ),
+                        (
+                            SELECT w.`weightKg`
+                            FROM `body_weight_logs` w
+                            WHERE w.`weightKg` > 0
+                            ORDER BY w.`timestamp` ASC
+                            LIMIT 1
+                        ),
+                        (
+                            SELECT p.`currentWeightKg`
+                            FROM `user_profile` p
+                            WHERE p.`id` = 1 AND p.`currentWeightKg` > 0
+                        ),
+                        75.0
+                    )
+                    WHERE `bodyWeightKg` <= 0
+                    """.trimIndent()
+                )
+            }
+        }
+
+        /**
+         * Adds the indexes every hot query already needed.
+         *
+         * None of these is a new feature; each one is a table scan the app was paying for:
+         *  - logged_sets.sessionId: every session-with-sets read and every session delete.
+         *  - logged_sets.exerciseName / timestamp: Progress history and the monthly analyzer.
+         *  - workout_sessions.startTime: the history list is ordered by it.
+         *  - chat_messages.sessionId: opening a coach conversation.
+         *  - saved_routines.createdAt / body_weight_logs.timestamp: routine list and weigh-in repair.
+         *
+         * No table is rebuilt and no row is rewritten, so the upgrade is fast and cannot lose data.
+         */
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_workout_sessions_startTime` ON `workout_sessions` (`startTime`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_logged_sets_sessionId` ON `logged_sets` (`sessionId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_logged_sets_exerciseName` ON `logged_sets` (`exerciseName`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_logged_sets_timestamp` ON `logged_sets` (`timestamp`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_saved_routines_createdAt` ON `saved_routines` (`createdAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_body_weight_logs_timestamp` ON `body_weight_logs` (`timestamp`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_chat_sessions_lastUpdatedAt` ON `chat_sessions` (`lastUpdatedAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_chat_messages_sessionId` ON `chat_messages` (`sessionId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_chat_messages_timestamp` ON `chat_messages` (`timestamp`)")
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -279,7 +358,9 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_6_7,
                         MIGRATION_7_8,
                         MIGRATION_8_9,
-                        MIGRATION_9_10
+                        MIGRATION_9_10,
+                        MIGRATION_10_11,
+                        MIGRATION_11_12
                     )
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .addCallback(DatabasePrepopulationCallback(context))
@@ -351,10 +432,37 @@ abstract class AppDatabase : RoomDatabase() {
                     // 3. Always ensure deduplicated again
                     exerciseDao.deduplicateByName()
 
-                    // 4. Keep logged set exercise types in sync with the catalog
+                    // 4. Correct custom exercises the editor saved with its old default.
+                    //
+                    //    The custom-exercise form defaults the equipment to "Bodyweight" and the
+                    //    type to "Standard weight". The result was a bodyweight movement that asked
+                    //    for a barbell load, logged 0 kg, and could never show the athlete's body
+                    //    weight: the "everything reads 0KG" report on upgraded installs. Only rows
+                    //    the athlete owns, whose equipment says Bodyweight, and whose entire history
+                    //    has no external load are retagged. A custom row that has ever carried weight
+                    //    is left exactly as it is.
+                    exerciseDao.retagCustomBodyweightExercises()
+
+                    // 5. Keep logged set exercise types in sync with the catalog
                     database.workoutDao().syncLoggedSetExerciseTypes()
 
-                    // 5. Bind the routines that were saved before the seven day model existed to
+                    // 6. Fill any body weight snapshot that is still 0.
+                    //
+                    //    This belongs here rather than only in MIGRATION_10_11 because an installed
+                    //    development build may already be on schema 11 with zero rows, and then the
+                    //    migration never runs again. The repair is idempotent: it only touches rows
+                    //    that are still <= 0, so a snapshot that was already written is never
+                    //    rewritten.
+                    val liveProfileWeightKg = runCatching {
+                        UserPreferencesRepository(context).storedProfileWeightKg()
+                    }.getOrNull()
+                    val profileWeightKg = liveProfileWeightKg
+                        ?: database.userProfileDao().getProfileDirect()
+                            ?.currentWeightKg
+                            ?.takeIf { it > 0.0 }
+                    database.workoutDao().repairMissingBodyWeights(profileWeightKg)
+
+                    // 7. Bind the routines that were saved before the seven day model existed to
                     //    real weekdays.
                     //
                     //    The work is a transformation of the JSON the days live in, so it cannot be

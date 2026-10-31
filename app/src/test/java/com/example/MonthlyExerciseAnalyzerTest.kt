@@ -183,6 +183,23 @@ class MonthlyExerciseAnalyzerTest {
     }
 
     @Test
+    fun `an empty barbell set is never described as bodyweight`() {
+        // The Progress screen used to tag a zero-load barbell row with the athlete's body weight.
+        // The AI report has to use the same rule, or it repeats the ghost tag in words.
+        val summary = MonthlyExerciseAnalyzer.build(
+            exerciseName = "Barbell Bench Press",
+            exerciseType = ExerciseType.STANDARD_WEIGHT,
+            weightUnit = WeightUnit.KG,
+            sets = listOf(benchSet(1, 1, weight = 0.0, reps = 10, daysAgo = 2)),
+            bodyWeightForSet = { 80.0 },
+            nowMillis = now
+        )
+
+        assertEquals(1, summary.setCount)
+        assertTrue(summary.dailyEntries.first().topSetLabel.startsWith("0kg"))
+    }
+
+    @Test
     fun `no data in the window produces an empty summary`() {
         val summary = MonthlyExerciseAnalyzer.build(
             exerciseName = "Barbell Bench Press",

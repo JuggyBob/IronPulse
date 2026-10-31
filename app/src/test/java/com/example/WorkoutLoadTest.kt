@@ -204,4 +204,66 @@ class WorkoutLoadTest {
         )
         assertEquals(45, WorkoutMetrics.minutes(session, emptyList()))
     }
+
+    // === The isolated bodyweight tag ===
+
+    @Test
+    fun `only zero load bodyweight types are bodyweight tag candidates`() {
+        assertTrue(BodyWeightTimeline.isBodyweightTagCandidate(set(type = ExerciseType.PURE_BODYWEIGHT)))
+        assertTrue(BodyWeightTimeline.isBodyweightTagCandidate(set(type = ExerciseType.ADDED_WEIGHT)))
+        // An empty barbell is not a bodyweight movement.
+        assertTrue(!BodyWeightTimeline.isBodyweightTagCandidate(set(type = ExerciseType.STANDARD_WEIGHT)))
+        assertTrue(!BodyWeightTimeline.isBodyweightTagCandidate(set(type = ExerciseType.CARDIO)))
+        assertTrue(!BodyWeightTimeline.isBodyweightTagCandidate(set(type = "TYPE_FROM_A_NEWER_BUILD")))
+    }
+
+    @Test
+    fun `a bodyweight set that carries load is not a bodyweight tag candidate`() {
+        assertTrue(!BodyWeightTimeline.isBodyweightTagCandidate(set(weight = 60.0)))
+        assertTrue(!BodyWeightTimeline.isBodyweightTagCandidate(set(addedWeight = 10.0)))
+    }
+
+    @Test
+    fun `an isolated bodyweight tag matches bodyweight work only`() {
+        val bodyweight = set(type = ExerciseType.PURE_BODYWEIGHT, bodyWeightKg = 80.0)
+        assertTrue(BodyWeightTimeline.matchesIsolatedWeight(bodyweight, tag = 80.0, bodyWeightKg = 80.0))
+
+        // The ghost tag from the report: a zero-load barbell set must never be pulled in by the
+        // athlete's body weight.
+        val emptyBarbell = set(type = ExerciseType.STANDARD_WEIGHT, weight = 0.0, bodyWeightKg = 80.0)
+        assertTrue(
+            !BodyWeightTimeline.matchesIsolatedWeight(emptyBarbell, tag = 80.0, bodyWeightKg = 80.0)
+        )
+
+        // Load tags still work for every type.
+        assertTrue(
+            BodyWeightTimeline.matchesIsolatedWeight(
+                set(type = ExerciseType.STANDARD_WEIGHT, weight = 80.0),
+                tag = 80.0,
+                bodyWeightKg = null
+            )
+        )
+        assertTrue(
+            BodyWeightTimeline.matchesIsolatedWeight(
+                set(type = ExerciseType.ADDED_WEIGHT, addedWeight = 20.0),
+                tag = 20.0,
+                bodyWeightKg = 80.0
+            )
+        )
+    }
+
+    @Test
+    fun `a bodyweight tag does not match a set done at another body weight`() {
+        val set = set(type = ExerciseType.PURE_BODYWEIGHT, bodyWeightKg = 84.0)
+        assertTrue(!BodyWeightTimeline.matchesIsolatedWeight(set, tag = 80.0, bodyWeightKg = 84.0))
+    }
+
+    @Test
+    fun `an unknown exercise type is not written as the body weight`() {
+        // The old rule was "anything that is not STANDARD_WEIGHT is bodyweight", which gave every
+        // future type the athlete's weight and invented volume for it.
+        val unknown = set(type = "TYPE_FROM_A_NEWER_BUILD", weight = 0.0)
+        assertEquals("0 kg", WorkoutMetrics.loadLabel(unknown, 80.0, WeightUnit.KG))
+        assertEquals(0.0, WorkoutMetrics.effectiveWeightKg(unknown, 80.0)!!, 0.001)
+    }
 }
