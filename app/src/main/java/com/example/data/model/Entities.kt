@@ -209,7 +209,60 @@ data class WorkoutSession(
     val title: String,
     val startTime: Long = System.currentTimeMillis(),
     val endTime: Long = System.currentTimeMillis(),
-    val notes: String = ""
+    val notes: String = "",
+    /**
+     * The saved routine this session fulfilled, or 0 for a quick workout.
+     *
+     * The streak needs an explicit link rather than a title comparison: a routine can be renamed,
+     * and two routines can share a day title.
+     */
+    @ColumnInfo(defaultValue = "0")
+    val routineId: Long = 0L,
+    /** The weekday of the planned routine day, 1 = Monday ... 7 = Sunday, or 0 when unscheduled. */
+    @ColumnInfo(defaultValue = "0")
+    val routineWeekday: Int = 0,
+    /**
+     * The local start-of-day of the planned routine day this session fulfilled, or 0 for a quick
+     * workout. This is the date the streak credits, not necessarily the date the athlete pressed
+     * start: a scheduled Monday session completed late still belongs to Monday.
+     */
+    @ColumnInfo(defaultValue = "0")
+    val plannedDate: Long = 0L,
+    /**
+     * The timezone-stable `yyyyMMdd` key of [plannedDate]. New sessions set both; legacy rows can
+     * fall back to deriving the key from [plannedDate].
+     */
+    @ColumnInfo(defaultValue = "0")
+    val plannedDateKey: Long = 0L
+)
+
+/**
+ * One planned day of the athlete's active routine.
+ *
+ * A row is materialized for every calendar date in the tracking horizon, including rest days
+ * (`exerciseCount = 0`). Past rows are never rewritten; when the routine changes, only today and
+ * future rows are replaced. That is what lets the streak honour the schedule as it was on each
+ * date instead of reinterpreting history through the newest routine.
+ */
+@Immutable
+@Entity(
+    tableName = "scheduled_workout_days",
+    indices = [Index(value = ["routineId"])]
+)
+data class ScheduledWorkoutDay(
+    /** Local midnight of the planned date. One plan per date. */
+    @PrimaryKey
+    val dateStart: Long,
+    /** Timezone-stable `yyyyMMdd` date key; 0 on rows written before the key existed. */
+    @ColumnInfo(defaultValue = "0")
+    val dateKey: Long = 0L,
+    val routineId: Long,
+    /** 1 = Monday ... 7 = Sunday. */
+    val weekday: Int,
+    val dayTitle: String = "",
+    /** The number of prescribed exercises; 0 is a planned rest day. */
+    val exerciseCount: Int = 0,
+    val capturedAt: Long = System.currentTimeMillis()
 )
 
 /**

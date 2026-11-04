@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.data.model.UserProfile
+import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -95,6 +96,31 @@ class UserPreferencesRepository(private val context: Context) {
          * for athletes on metered data or a low battery, where a list of looping GIFs is a real cost.
          */
         val AUTOPLAY_EXERCISE_DEMOS = booleanPreferencesKey("autoplay_exercise_demos")
+
+        /**
+         * Whether the Liquid Glass treatment is applied to the bottom bar and the selected controls.
+         *
+         * On by default so a fresh install shows the finished look. Turning it off restores the
+         * plain surfaces and removes the bottom bar magnification lens entirely.
+         */
+        val LIQUID_GLASS_ENABLED = booleanPreferencesKey("liquid_glass_enabled")
+
+        /**
+         * Whether the app hides the system status and navigation bars.
+         *
+         * On by default: the app was designed as an immersive training surface. It is optional
+         * because punch-hole cameras, notches and conventional navigation bars need breathing room
+         * on some phones.
+         */
+        val FULLSCREEN_MODE = booleanPreferencesKey("fullscreen_mode")
+
+        /**
+         * The look the athlete picked: IronPulse, Dark, Light or AMOLED.
+         *
+         * Stored as the stable [ThemeMode.storageKey] rather than the enum ordinal, so reordering
+         * or renaming the modes later cannot silently change an existing athlete's theme.
+         */
+        val THEME_MODE = stringPreferencesKey("theme_mode")
 
         /**
          * Set once the athlete has finished the first run onboarding, so the landing pages are shown
@@ -211,6 +237,18 @@ class UserPreferencesRepository(private val context: Context) {
         // athlete who never opened Settings had their profile sent with every AI request.
         val shareAthleteDataWithAi: Boolean = false,
         val autoplayExerciseDemos: Boolean = true,
+        /** Whether translucent glass surfaces and the bottom bar lens are shown. */
+        val liquidGlassEnabled: Boolean = true,
+        /**
+         * Whether the system status and navigation bars are hidden. Enabled by default, but the
+         * athlete can restore them on a phone whose cutout or navigation mode needs the space.
+         */
+        val fullscreenEnabled: Boolean = true,
+        /**
+         * The look the athlete picked. IronPulse is the original identity and the default, so an
+         * install that never touches Settings looks exactly as it did before the theme system.
+         */
+        val themeMode: ThemeMode = ThemeMode.IRONPULSE,
         /**
          * Whether a week is displayed starting on Monday. False means it starts on Sunday.
          *
@@ -231,6 +269,9 @@ class UserPreferencesRepository(private val context: Context) {
             restTimerSound = prefs[REST_TIMER_SOUND_ENABLED] ?: true,
             shareAthleteDataWithAi = prefs[SHARE_ATHLETE_DATA_WITH_AI] ?: false,
             autoplayExerciseDemos = prefs[AUTOPLAY_EXERCISE_DEMOS] ?: true,
+            liquidGlassEnabled = prefs[LIQUID_GLASS_ENABLED] ?: true,
+            fullscreenEnabled = prefs[FULLSCREEN_MODE] ?: true,
+            themeMode = ThemeMode.fromStorageKey(prefs[THEME_MODE]),
             weekStartsOnMonday = prefs[WEEK_STARTS_ON_MONDAY] ?: true,
             autoSaveIntervalSeconds = (prefs[AUTO_SAVE_INTERVAL_SECONDS]
                 ?: DEFAULT_AUTO_SAVE_INTERVAL_SECONDS).coerceIn(5, 300),
@@ -269,6 +310,49 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setAutoplayExerciseDemos(enabled: Boolean) {
         context.userDataStore.edit { it[AUTOPLAY_EXERCISE_DEMOS] = enabled }
+    }
+
+    /**
+     * Whether the Liquid Glass treatment is on.
+     *
+     * Exposed as its own flow as well as through [AppSettings] so the app root can subscribe to the
+     * single boolean instead of recomposing the whole tree whenever another preference changes.
+     */
+    val liquidGlassEnabledFlow: Flow<Boolean> = context.userDataStore.data.map { prefs ->
+        prefs[LIQUID_GLASS_ENABLED] ?: true
+    }
+
+    suspend fun setLiquidGlassEnabled(enabled: Boolean) {
+        context.userDataStore.edit { it[LIQUID_GLASS_ENABLED] = enabled }
+    }
+
+    /**
+     * Whether the system bars are hidden.
+     *
+     * Its own flow so the activity can apply the window policy immediately, without waiting for the
+     * rest of the settings snapshot.
+     */
+    val fullscreenEnabledFlow: Flow<Boolean> = context.userDataStore.data.map { prefs ->
+        prefs[FULLSCREEN_MODE] ?: true
+    }
+
+    suspend fun setFullscreenEnabled(enabled: Boolean) {
+        context.userDataStore.edit { it[FULLSCREEN_MODE] = enabled }
+    }
+
+    /**
+     * The selected theme, exposed on its own.
+     *
+     * The app root subscribes to this instead of [appSettingsFlow] so changing the weight unit or
+     * the autosave interval never re-applies the theme, and changing the theme never touches the
+     * Liquid Glass toggle. An unknown or missing value falls back to IronPulse.
+     */
+    val themeModeFlow: Flow<ThemeMode> = context.userDataStore.data.map { prefs ->
+        ThemeMode.fromStorageKey(prefs[THEME_MODE])
+    }
+
+    suspend fun setThemeMode(mode: ThemeMode) {
+        context.userDataStore.edit { it[THEME_MODE] = mode.storageKey }
     }
 
     /**

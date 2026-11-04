@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -32,6 +33,7 @@ import com.example.data.model.RoutineSchedule
 import com.example.data.model.SavedRoutine
 import com.example.data.model.Weekday
 import com.example.ui.theme.*
+import com.example.ui.theme.OnAccent
 
 /**
  * Dialog allowing user to select which specific day's workout to start from a multi-day routine.
@@ -148,7 +150,7 @@ fun SelectRoutineDayDialog(
                                     }
                                     Button(
                                         onClick = { onSelectDay(day) },
-                                        colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                                        colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                                         shape = RoundedCornerShape(8.dp),
                                         modifier = Modifier.height(34.dp)
@@ -156,14 +158,14 @@ fun SelectRoutineDayDialog(
                                         Icon(
                                             imageVector = Icons.Default.PlayArrow,
                                             contentDescription = null,
-                                            tint = DarkBg,
+                                            tint = OnAccent,
                                             modifier = Modifier.size(16.dp)
                                         )
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Text(
                                             text = "Start",
                                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                            color = DarkBg
+                                            color = OnAccent
                                         )
                                     }
                                 }
@@ -426,6 +428,12 @@ private fun RoutineExerciseItemRow(
         formatExerciseNameForWrap(item.exerciseName)
     }
 
+    // The effective rest default is the value stored on this routine entry. The active workout
+    // reads exactly the same field when it starts the timer, so the badge cannot drift from it.
+    val restLabel = remember(item.restSeconds) {
+        item.restSeconds.takeIf { it > 0 }?.let { "Rest ${formatRestDuration(it)}" }
+    }
+
     Surface(
         color = DarkBg.copy(alpha = 0.65f),
         shape = RoundedCornerShape(8.dp),
@@ -437,9 +445,12 @@ private fun RoutineExerciseItemRow(
                 .fillMaxWidth()
                 .padding(horizontal = 10.dp, vertical = 8.dp)
         ) {
-            // Estimate tag width in dp based on font size labelSmall bold (~6.6dp per char + padding/borders)
-            val estimatedTagWidth = remember(displayPrescription) {
-                (displayPrescription.length * 6.6f).dp + 18.dp
+            // Estimate the combined tag width in dp based on labelSmall bold (~6.6dp per char)
+            // plus the small gap and the two lots of chip padding/borders.
+            val estimatedTagWidth = remember(displayPrescription, restLabel) {
+                val restChars = restLabel?.length ?: 0
+                ((displayPrescription.length + restChars) * 6.6f).dp +
+                    (if (restLabel != null) 4.dp else 0.dp) + 22.dp
             }
 
             // Total available width for content minus the index "$index." (~24dp) and spacers (~10dp)
@@ -485,18 +496,10 @@ private fun RoutineExerciseItemRow(
                             )
                         }
                         Spacer(modifier = Modifier.height(6.dp))
-                        // Green tag on a new line under the exercise's name, muscle group and equipment description
-                        Surface(
-                            color = MintGreen.copy(alpha = 0.12f),
-                            shape = RoundedCornerShape(6.dp),
-                            border = BorderStroke(1.dp, MintGreen.copy(alpha = 0.35f))
-                        ) {
-                            Text(
-                                text = displayPrescription,
-                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = MintGreen,
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                            )
+                        // Tags on a new line under the exercise's name, muscle group and equipment.
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            RoutinePrescriptionTag(displayPrescription)
+                            restLabel?.let { RoutineRestTag(it) }
                         }
                     }
                 }
@@ -543,20 +546,75 @@ private fun RoutineExerciseItemRow(
                         }
                     }
                     Spacer(modifier = Modifier.width(8.dp))
-                    Surface(
-                        color = MintGreen.copy(alpha = 0.12f),
-                        shape = RoundedCornerShape(6.dp),
-                        border = BorderStroke(1.dp, MintGreen.copy(alpha = 0.35f))
-                    ) {
-                        Text(
-                            text = displayPrescription,
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = MintGreen,
-                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                        )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        RoutinePrescriptionTag(displayPrescription)
+                        restLabel?.let { RoutineRestTag(it) }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun RoutinePrescriptionTag(label: String) {
+    Surface(
+        color = MintGreen.copy(alpha = 0.12f),
+        shape = RoundedCornerShape(6.dp),
+        border = BorderStroke(1.dp, MintGreen.copy(alpha = 0.35f))
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+            color = MintGreen,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+        )
+    }
+}
+
+/**
+ * The effective rest default for this saved routine entry.
+ *
+ * `restSeconds` is stored per exercise inside the routine, not on the shared exercise catalog. A
+ * routine-level value does not exist in the current model, so this is the single effective value
+ * the workout timer will use. The tag is omitted when the entry has no default (0), rather than
+ * showing a misleading "0s".
+ */
+@Composable
+private fun RoutineRestTag(label: String) {
+    Surface(
+        color = GoldenAmber.copy(alpha = 0.12f),
+        shape = RoundedCornerShape(6.dp),
+        border = BorderStroke(1.dp, GoldenAmber.copy(alpha = 0.35f))
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            modifier = Modifier
+                .padding(horizontal = 7.dp, vertical = 3.dp)
+                .testTag("routine_rest_tag")
+        ) {
+            Icon(
+                imageVector = Icons.Default.Timer,
+                contentDescription = null,
+                tint = GoldenAmber,
+                modifier = Modifier.size(11.dp)
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = GoldenAmber
+            )
+        }
+    }
+}
+
+/** Formats a rest duration as `45s`, `2m` or `1m 30s`. */
+internal fun formatRestDuration(seconds: Int): String {
+    val safe = seconds.coerceAtLeast(0)
+    return when {
+        safe < 60 -> "${safe}s"
+        safe % 60 == 0 -> "${safe / 60}m"
+        else -> "${safe / 60}m ${safe % 60}s"
     }
 }

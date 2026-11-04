@@ -11,6 +11,7 @@ import com.example.data.dao.ChatDao
 import com.example.data.dao.ExerciseDao
 import com.example.data.dao.GeminiSummaryDao
 import com.example.data.dao.SavedRoutineDao
+import com.example.data.dao.ScheduleDao
 import com.example.data.dao.UserProfileDao
 import com.example.data.dao.WorkoutDao
 import com.example.data.model.BodyWeightLog
@@ -21,6 +22,7 @@ import com.example.data.model.ExerciseType
 import com.example.data.model.GeminiSummary
 import com.example.data.model.LoggedSet
 import com.example.data.model.SavedRoutine
+import com.example.data.model.ScheduledWorkoutDay
 import com.example.data.model.UserProfile
 import com.example.data.model.WorkoutSession
 import com.example.data.preferences.UserPreferencesRepository
@@ -41,9 +43,10 @@ import kotlinx.coroutines.sync.withLock
         BodyWeightLog::class,
         ChatSession::class,
         ChatMessageEntity::class,
-        GeminiSummary::class
+        GeminiSummary::class,
+        ScheduledWorkoutDay::class
     ],
-    version = 12,
+    version = 14,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -52,6 +55,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun workoutDao(): WorkoutDao
     abstract fun userProfileDao(): UserProfileDao
     abstract fun savedRoutineDao(): SavedRoutineDao
+    abstract fun scheduleDao(): ScheduleDao
     abstract fun bodyWeightDao(): BodyWeightDao
     abstract fun chatDao(): ChatDao
     abstract fun geminiSummaryDao(): GeminiSummaryDao
@@ -342,6 +346,95 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Links sessions to the routine day they fulfilled and records the materialized schedule.
+         *
+         * Existing sessions keep 0 in the new columns, which is the honest answer: the app never
+         * recorded which routine day they belonged to, and guessing from a title would invent
+         * adherence. The schedule table starts empty; the current routine is materialized from today
+         * when the app opens, so history before this update is treated as untracked rather than
+         * retroactively missed.
+         */
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // The migration is idempotent because upgrade tests stamp a current-schema
+                // database back to 12 and then replay the full chain. In the real path the columns
+                // never exist yet; checking still makes a partially applied migration recoverable.
+                fun hasSessionColumn(column: String): Boolean {
+                    db.query("PRAGMA table_info(`workout_sessions`)", emptyArray()).use { cursor ->
+                        while (cursor.moveToNext()) {
+                            if (cursor.getString(1) == column) return true
+                        }
+                    }
+                    return false
+                }
+
+                if (!hasSessionColumn("routineId")) {
+                    db.execSQL(
+                        "ALTER TABLE `workout_sessions` ADD COLUMN `routineId` INTEGER NOT NULL DEFAULT 0"
+                    )
+                }
+                if (!hasSessionColumn("routineWeekday")) {
+                    db.execSQL(
+                        "ALTER TABLE `workout_sessions` ADD COLUMN `routineWeekday` INTEGER NOT NULL DEFAULT 0"
+                    )
+                }
+                if (!hasSessionColumn("plannedDate")) {
+                    db.execSQL(
+                        "ALTER TABLE `workout_sessions` ADD COLUMN `plannedDate` INTEGER NOT NULL DEFAULT 0"
+                    )
+                }
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `scheduled_workout_days` (
+                        `dateStart` INTEGER NOT NULL,
+                        `routineId` INTEGER NOT NULL,
+                        `weekday` INTEGER NOT NULL,
+                        `dayTitle` TEXT NOT NULL,
+                        `exerciseCount` INTEGER NOT NULL,
+                        `capturedAt` INTEGER NOT NULL,
+                        PRIMARY KEY(`dateStart`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_scheduled_workout_days_routineId` " +
+                        "ON `scheduled_workout_days` (`routineId`)"
+                )
+            }
+        }
+
+        /**
+         * Adds the timezone-stable date keys alongside the original local-midnight epochs.
+         *
+         * Existing rows keep 0 in the key columns; the streak calculator falls back to deriving a
+         * key from the epoch. New rows write both. That is enough to keep a schedule stable when
+         * the device timezone changes, without rewriting any completed session or past plan day.
+         */
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                fun hasColumn(table: String, column: String): Boolean {
+                    db.query("PRAGMA table_info(`$table`)", emptyArray()).use { cursor ->
+                        while (cursor.moveToNext()) {
+                            if (cursor.getString(1) == column) return true
+                        }
+                    }
+                    return false
+                }
+
+                if (!hasColumn("scheduled_workout_days", "dateKey")) {
+                    db.execSQL(
+                        "ALTER TABLE `scheduled_workout_days` ADD COLUMN `dateKey` INTEGER NOT NULL DEFAULT 0"
+                    )
+                }
+                if (!hasColumn("workout_sessions", "plannedDateKey")) {
+                    db.execSQL(
+                        "ALTER TABLE `workout_sessions` ADD COLUMN `plannedDateKey` INTEGER NOT NULL DEFAULT 0"
+                    )
+                }
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -360,7 +453,9 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_8_9,
                         MIGRATION_9_10,
                         MIGRATION_10_11,
-                        MIGRATION_11_12
+                        MIGRATION_11_12,
+                        MIGRATION_12_13,
+                        MIGRATION_13_14
                     )
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .addCallback(DatabasePrepopulationCallback(context))
@@ -449,7 +544,7 @@ abstract class AppDatabase : RoomDatabase() {
                     // 6. Fill any body weight snapshot that is still 0.
                     //
                     //    This belongs here rather than only in MIGRATION_10_11 because an installed
-                    //    development build may already be on schema 11 with zero rows, and then the
+                    //    2.1.0 build may already be on schema 11 with zero rows, and then the
                     //    migration never runs again. The repair is idempotent: it only touches rows
                     //    that are still <= 0, so a snapshot that was already written is never
                     //    rewritten.

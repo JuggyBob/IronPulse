@@ -126,6 +126,7 @@ import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextDim
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.OnAccent
 import com.example.ui.viewmodel.MainViewModel
 import com.example.util.ImageCropper
 import com.example.util.ProfileMediaStore
@@ -218,7 +219,7 @@ fun ProfileScreen(
             .fillMaxSize()
             .background(DarkBg)
             .padding(horizontal = 16.dp),
-        contentPadding = PaddingValues(top = 16.dp, bottom = 40.dp),
+        contentPadding = PaddingValues(top = 8.dp, bottom = 120.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // Header, with the gear icon that opens the settings page
@@ -535,7 +536,7 @@ fun ProfileScreen(
                         weightNoteInput = "Morning weigh-in"
                         showLogWeightDialog = true
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                     shape = RoundedCornerShape(10.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                     modifier = Modifier.testTag("log_weight_button")
@@ -543,14 +544,14 @@ fun ProfileScreen(
                     Icon(
                         imageVector = Icons.Default.Add,
                         contentDescription = null,
-                        tint = DarkBg,
+                        tint = OnAccent,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = "Log Today",
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = DarkBg
+                        color = OnAccent
                     )
                 }
             }
@@ -682,11 +683,11 @@ fun ProfileScreen(
                             PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                         )
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = OnAccent),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.testTag("change_avatar_button")
                 ) {
-                    Text("Change picture", color = DarkBg, fontWeight = FontWeight.Bold)
+                    Text("Change picture", color = OnAccent, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -785,10 +786,10 @@ fun ProfileScreen(
                         }
                         showLogWeightDialog = false
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                     shape = RoundedCornerShape(10.dp)
                 ) {
-                    Text("Save Weigh-in", color = DarkBg, fontWeight = FontWeight.Bold)
+                    Text("Save Weigh-in", color = OnAccent, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -887,7 +888,7 @@ fun ProfileScreen(
                                 label = { Text(lvl, fontSize = 11.sp) },
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = ElectricCyan,
-                                    selectedLabelColor = DarkBg,
+                                    selectedLabelColor = OnAccent,
                                     containerColor = DarkSurfaceVariant,
                                     labelColor = TextWhite
                                 )
@@ -919,10 +920,10 @@ fun ProfileScreen(
                         )
                         showEditProfileDialog = false
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = OnAccent),
                     shape = RoundedCornerShape(10.dp)
                 ) {
-                    Text("Save Changes", color = DarkBg, fontWeight = FontWeight.Bold)
+                    Text("Save Changes", color = OnAccent, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -1030,7 +1031,7 @@ private fun WeighInSummaryCard(count: Int, onShowAll: () -> Unit) {
                 onClick = onShowAll,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = ElectricCyan,
-                    contentColor = DarkBg
+                    contentColor = OnAccent
                 ),
                 shape = RoundedCornerShape(10.dp),
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
@@ -1041,13 +1042,13 @@ private fun WeighInSummaryCard(count: Int, onShowAll: () -> Unit) {
                 Icon(
                     imageVector = Icons.Default.Visibility,
                     contentDescription = null,
-                    tint = DarkBg,
+                    tint = OnAccent,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = "View all",
-                    color = DarkBg,
+                    color = OnAccent,
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
                 )
             }

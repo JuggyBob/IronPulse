@@ -43,13 +43,15 @@ import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
+import com.example.ui.theme.OnAccent
+import com.example.ui.theme.SuccessFlash
 import kotlinx.coroutines.delay
 
 /** The green the cloud flashes when a save just happened: deliberately lighter than MintGreen. */
-private val AutoSaveFlashGreen = Color(0xFFB4FFCB)
+private val AutoSaveFlashGreen: Color get() = SuccessFlash
 
 /** The quiet green of a cloud that is known to be up to date. */
-private val AutoSaveSavedGreen = MintGreen.copy(alpha = 0.8f)
+private val AutoSaveSavedGreen: Color get() = MintGreen.copy(alpha = 0.8f)
 
 /**
  * The auto save state of a workout in progress, as a single small cloud.
@@ -141,7 +143,7 @@ fun AutoSaveCloudIcon(
                 Icon(
                     imageVector = Icons.Filled.Check,
                     contentDescription = null,
-                    tint = DarkBg,
+                    tint = OnAccent,
                     modifier = Modifier.size(6.dp)
                 )
             }

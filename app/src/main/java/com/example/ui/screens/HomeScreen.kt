@@ -105,6 +105,7 @@ import com.example.ui.components.HomeWeeklyGoalWidget
 import com.example.ui.components.HomeWidget
 import com.example.ui.components.HomeWidgetManagerSheet
 import com.example.ui.components.HomeWidgetsEmptyState
+import com.example.ui.components.WorkoutStreakCard
 import com.example.ui.components.TrainingQuotes
 import com.example.ui.components.WeeklyGoalDialog
 import com.example.ui.theme.DarkBg
@@ -117,6 +118,7 @@ import com.example.ui.theme.GoldenAmber
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.OnAccent
 import com.example.ui.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -153,6 +155,7 @@ fun HomeScreen(
     val activeSession by viewModel.activeSession.collectAsStateWithLifecycle()
     val pendingDraft by viewModel.pendingWorkoutDraft.collectAsStateWithLifecycle()
     val heatmap by viewModel.homeHeatmap.collectAsStateWithLifecycle()
+    val streak by viewModel.streakSummary.collectAsStateWithLifecycle()
     val lifetimeDays by viewModel.lifetimeTrainingDays.collectAsStateWithLifecycle()
     val weekTotals by viewModel.weekTotals.collectAsStateWithLifecycle()
     val recentWorkout by viewModel.recentWorkout.collectAsStateWithLifecycle()
@@ -188,6 +191,7 @@ fun HomeScreen(
     val widgetPhotoPath by viewModel.homeWidgetPhotoPath.collectAsStateWithLifecycle()
     val weeklyGoal by viewModel.homeWidgetWeeklyGoal.collectAsStateWithLifecycle()
     val widgetPhotoError by viewModel.widgetPhotoError.collectAsStateWithLifecycle()
+    val fullscreenEnabled by viewModel.fullscreenEnabled.collectAsStateWithLifecycle()
     var showWidgetManager by remember { mutableStateOf(false) }
     var showGoalDialog by remember { mutableStateOf(false) }
 
@@ -457,6 +461,8 @@ fun HomeScreen(
                     )
                 }
 
+                HomeWidget.STREAK -> WorkoutStreakCard(summary = streak)
+
                 HomeWidget.STATS -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -591,7 +597,8 @@ fun HomeScreen(
                 .fillMaxSize()
                 .background(DarkBg)
                 .testTag("home_screen"),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 32.dp),
+            // Clearance for the floating dock: the last widget can scroll fully above the glass.
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
         // === Greeting and widget management ===
@@ -796,7 +803,8 @@ fun HomeScreen(
                 )
             },
             onRemovePhoto = { viewModel.clearWidgetPhoto() },
-            onGoalChange = { viewModel.setHomeWidgetWeeklyGoal(it) }
+            onGoalChange = { viewModel.setHomeWidgetWeeklyGoal(it) },
+            fullscreenEnabled = fullscreenEnabled
         )
     }
 
@@ -1210,7 +1218,7 @@ private fun BodyWeightCard(
             }
             Button(
                 onClick = onLogWeight,
-                colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                 shape = RoundedCornerShape(10.dp),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 modifier = Modifier.testTag("home_log_weight_button")
@@ -1218,14 +1226,14 @@ private fun BodyWeightCard(
                 Icon(
                     imageVector = Icons.Default.Add,
                     contentDescription = null,
-                    tint = DarkBg,
+                    tint = OnAccent,
                     modifier = Modifier.size(16.dp)
                 )
                 Spacer(modifier = Modifier.width(4.dp))
                 Text(
                     text = "Log Weight",
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                    color = DarkBg
+                    color = OnAccent
                 )
             }
         }
@@ -1472,7 +1480,7 @@ private fun PrimaryHomeButton(
 ) {
     Button(
         onClick = onClick,
-        colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+        colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
         shape = RoundedCornerShape(10.dp),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
         modifier = Modifier
@@ -1482,14 +1490,14 @@ private fun PrimaryHomeButton(
         Icon(
             imageVector = Icons.Default.PlayArrow,
             contentDescription = null,
-            tint = DarkBg,
+            tint = OnAccent,
             modifier = Modifier.size(18.dp)
         )
         Spacer(modifier = Modifier.width(6.dp))
         Text(
             text = text,
             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-            color = DarkBg
+            color = OnAccent
         )
     }
 }
@@ -1568,11 +1576,11 @@ private fun LogWeightDialog(
                         onSave(parsed)
                     }
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.testTag("home_weight_save_button")
             ) {
-                Text("Save", color = DarkBg, fontWeight = FontWeight.Bold)
+                Text("Save", color = OnAccent, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {

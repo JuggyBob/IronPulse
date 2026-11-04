@@ -32,6 +32,7 @@ import kotlinx.coroutines.launch
 import com.example.data.model.ActiveRestTimerState
 import com.example.data.model.CustomRestTimer
 import com.example.ui.theme.*
+import com.example.ui.theme.OnAccent
 import com.example.ui.viewmodel.MainViewModel
 import kotlin.math.roundToInt
 
@@ -48,6 +49,18 @@ fun RestTimerDockedButton(
 ) {
     val activeTimer by viewModel.activeRestTimer.collectAsStateWithLifecycle()
     var isHiddenInBorder by rememberSaveable { mutableStateOf(false) }
+    val glassEnabled = LocalLiquidGlassEnabled.current
+    val dockedShape = RoundedCornerShape(
+        topEnd = 12.dp,
+        bottomEnd = 12.dp,
+        topStart = 0.dp,
+        bottomStart = 0.dp
+    )
+    val dockedTint = when {
+        activeTimer.hasFinished -> ElectricCyan
+        activeTimer.isRunning -> MintGreen
+        else -> ElectricCyan
+    }
 
     // Subtle pulsing animation when timer is active
     val infiniteTransition = rememberInfiniteTransition(label = "timer_pulse")
@@ -68,24 +81,45 @@ fun RestTimerDockedButton(
             exit = slideOutHorizontally(targetOffsetX = { -it }) + fadeOut()
         ) {
             Surface(
-                color = when {
-                    activeTimer.hasFinished -> ElectricCyan.copy(alpha = 0.2f)
-                    activeTimer.isRunning -> MintGreen.copy(alpha = 0.16f)
-                    else -> DarkSurface
-                },
-                shape = RoundedCornerShape(topEnd = 12.dp, bottomEnd = 12.dp, topStart = 0.dp, bottomStart = 0.dp),
-                border = BorderStroke(
-                    1.dp,
+                color = if (glassEnabled) {
+                    Color.Transparent
+                } else {
                     when {
-                        activeTimer.hasFinished -> ElectricCyan
-                        activeTimer.isRunning -> MintGreen.copy(alpha = pulseAlpha)
-                        else -> DarkBorder
+                        activeTimer.hasFinished -> ElectricCyan.copy(alpha = 0.2f)
+                        activeTimer.isRunning -> MintGreen.copy(alpha = 0.16f)
+                        else -> DarkSurface
                     }
-                ),
-                shadowElevation = 4.dp,
+                },
+                shape = dockedShape,
+                border = if (glassEnabled) {
+                    null
+                } else {
+                    BorderStroke(
+                        1.dp,
+                        when {
+                            activeTimer.hasFinished -> ElectricCyan
+                            activeTimer.isRunning -> MintGreen.copy(alpha = pulseAlpha)
+                            else -> DarkBorder
+                        }
+                    )
+                },
+                shadowElevation = if (glassEnabled) 0.dp else 4.dp,
                 modifier = Modifier
                     .widthIn(max = 165.dp)
                     .height(34.dp)
+                    .then(
+                        if (glassEnabled) {
+                            Modifier.liquidGlass(
+                                shape = dockedShape,
+                                enabled = true,
+                                tint = dockedTint,
+                                cornerRadius = 12.dp,
+                                elevation = 8.dp
+                            )
+                        } else {
+                            Modifier
+                        }
+                    )
                     .testTag("rest_timer_docked_button")
             ) {
                 Row(
@@ -662,7 +696,7 @@ fun RestTimerDialog(
                                     }
                                 },
                                 enabled = totalSelectedSeconds > 0,
-                                colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                                colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                                 shape = RoundedCornerShape(10.dp),
                                 modifier = Modifier
                                     .weight(0.55f)
@@ -672,13 +706,13 @@ fun RestTimerDialog(
                                 Icon(
                                     imageVector = Icons.Default.PlayArrow,
                                     contentDescription = null,
-                                    tint = DarkBg,
+                                    tint = OnAccent,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
                                     text = "Start Timer",
-                                    color = DarkBg,
+                                    color = OnAccent,
                                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
                                 )
                             }
@@ -746,7 +780,7 @@ fun RestTimerDialog(
                                                     viewModel.startRestTimer(timer.totalSeconds, timer.name)
                                                     onDismiss()
                                                 },
-                                                colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                                                colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                                                 shape = RoundedCornerShape(8.dp),
                                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                                                 modifier = Modifier.height(32.dp)
@@ -754,14 +788,14 @@ fun RestTimerDialog(
                                                 Icon(
                                                     imageVector = Icons.Default.PlayArrow,
                                                     contentDescription = null,
-                                                    tint = DarkBg,
+                                                    tint = OnAccent,
                                                     modifier = Modifier.size(16.dp)
                                                 )
                                                 Spacer(modifier = Modifier.width(2.dp))
                                                 Text(
                                                     text = "Start",
                                                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                                    color = DarkBg
+                                                    color = OnAccent
                                                 )
                                             }
 

@@ -70,6 +70,8 @@ import com.example.ui.theme.GoldenAmber
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.OnAccent
+import com.example.ui.theme.OnDanger
 
 /**
  * The equipment options offered when creating or editing an exercise.
@@ -510,6 +512,7 @@ fun CustomExerciseDialog(
                 enabled = canSave,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MintGreen,
+                    contentColor = OnAccent,
                     disabledContainerColor = DarkSurfaceVariant,
                     disabledContentColor = TextMuted
                 ),
@@ -518,7 +521,7 @@ fun CustomExerciseDialog(
             ) {
                 Text(
                     text = if (existingExercise == null) "Add Exercise" else "Save Changes",
-                    color = if (canSave) DarkBg else TextMuted,
+                    color = if (canSave) OnAccent else TextMuted,
                     fontWeight = FontWeight.Bold
                 )
             }
@@ -744,11 +747,11 @@ fun DeleteCustomExerciseDialog(
         confirmButton = {
             Button(
                 onClick = onConfirm,
-                colors = ButtonDefaults.buttonColors(containerColor = FireRed),
+                colors = ButtonDefaults.buttonColors(containerColor = FireRed, contentColor = OnDanger),
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.testTag("confirm_delete_custom_exercise_button")
             ) {
-                Text("Delete", color = TextWhite, fontWeight = FontWeight.Bold)
+                Text("Delete", color = OnDanger, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {

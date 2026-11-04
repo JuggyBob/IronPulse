@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.sp
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.DarkSurface
 import com.example.ui.theme.ElectricCyan
+import com.example.ui.theme.LocalAppPalette
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
@@ -129,16 +130,17 @@ fun ProgressionLineChart(
 
     val dateFormat = remember { SimpleDateFormat("MMM d", Locale.getDefault()) }
     val density = LocalDensity.current
-    val textPaint = remember(density) {
+    val palette = LocalAppPalette.current
+    val textPaint = remember(density, palette) {
         Paint().apply {
-            color = TextMuted.toArgb()
+            color = palette.textSecondary.toArgb()
             textSize = with(density) { 10.sp.toPx() }
             isAntiAlias = true
         }
     }
-    val refPaint = remember(density) {
+    val refPaint = remember(density, palette) {
         Paint().apply {
-            color = MintGreen.toArgb()
+            color = palette.accentSecondary.toArgb()
             textSize = with(density) { 9.sp.toPx() }
             isAntiAlias = true
         }
@@ -186,7 +188,7 @@ fun ProgressionLineChart(
                             Text(
                                 text = "${if (isPositive) "+" else ""}${"%.1f".format(delta)} $yAxisUnit",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = if (isPositive) MintGreen else Color(0xFFF85149)
+                                color = if (isPositive) MintGreen else palette.chart.negative
                             )
                         }
                         Text(
@@ -253,7 +255,7 @@ fun ProgressionLineChart(
                         val gridValue = minVal + fraction * valueRange
 
                         drawLine(
-                            color = DarkBorder.copy(alpha = 0.6f),
+                            color = palette.border.copy(alpha = 0.6f),
                             start = Offset(paddingLeft, y),
                             end = Offset(width - paddingRight, y),
                             strokeWidth = 1f
@@ -354,12 +356,12 @@ fun ProgressionLineChart(
                             )
                         }
                         drawCircle(
-                            color = DarkSurface,
+                            color = palette.surface,
                             radius = if (isSelected) 6.dp.toPx() else 4.5.dp.toPx(),
                             center = offset
                         )
                         drawCircle(
-                            color = if (isSelected) Color.White else lineColor,
+                            color = if (isSelected) palette.chart.selectedPoint else lineColor,
                             radius = if (isSelected) 4.5.dp.toPx() else 3.dp.toPx(),
                             center = offset
                         )

@@ -13,6 +13,178 @@ Nothing yet. See [CONTRIBUTING.md](CONTRIBUTING.md) to propose a change.
 
 ---
 
+## [4.0.0] - 2026-11-04
+
+This is the first release since 3.0.0. It adds complete user-data backup and restore, the four-theme
+system, the Liquid Glass floating navigation surface, the fullscreen display mode, and the
+schedule-adherence workout streak.
+
+### Added
+
+#### Data management
+- **Portable `.ironpulse` backups.** Settings -> Data Management -> Export writes a versioned,
+  checksummed ZIP archive of the athlete's data. It can be saved anywhere Android's Storage Access
+  Framework can write.
+- **Replacement import.** Import validates the complete archive before changing anything, shows a
+  destructive confirmation with the backup's source version, date, size and category counts, and
+  then replaces the destination user-data state. It is not a merge: workouts, routines, schedules,
+  weigh-ins, AI conversations, saved summaries, custom exercises, preferences and Home
+  customization all come from the backup, and empty categories clear the destination category.
+- **Excluded local data is preserved.** API keys, the profile picture, and exercise images/GIFs are
+  never exported. Import keeps the destination's API keys, profile picture and avatar path, and
+  clears restored custom-exercise media references so the app's missing-media fallback is used.
+- **Archive integrity and compatibility.** The manifest carries separate container and data-schema
+  versions, section paths and record counts. SHA-256 checksums, path traversal and ZIP-bomb limits,
+  duplicate/unknown-entry rejection, relationship validation and manifest/count checks run before
+  any database write.
+- **Safe replacement and rollback.** Room is replaced in one transaction; DataStore and the Home
+  widget photo are staged and verified. A failure at any stage attempts to restore the previous
+  Room, preference and file state, and the UI only claims preservation when rollback succeeds.
+- **Documentation.** `docs/BACKUP_FORMAT.md`, `docs/BACKUP_ARCHITECTURE.md`,
+  `docs/BACKUP_MIGRATION_GUIDE.md`, `docs/USER_DATA_INVENTORY.md` and
+  `docs/BACKUP_IMPLEMENTATION_CHECKLIST.md`.
+
+#### Liquid Glass and navigation
+- **Real backdrop blur on Android 12+.** The floating dock records the page behind it into a
+  graphics layer, blurs it with a RenderEffect and clips it to the dock silhouette. Android 7.1-11
+  use the documented translucent glass fallback rather than a fake foreground blur.
+- **Floating navigation surface.** The dock is an overlay instead of a reserved Scaffold bottom bar,
+  so page content is visible behind the glass and the dock can sit above a visible system navigation
+  bar.
+- **Magnification lens.** Holding the dock activates a smooth lens that magnifies neighbouring
+  destinations. Releasing over an item navigates to that item; releasing outside or cancelling does
+  not navigate, and normal taps still work.
+- **Drag-to-navigate fixes.** The gesture now uses the latest navigation callback and the true
+  pre-lens item bounds, so dragging Profile -> Home works and a magnified Home slot cannot steal
+  Profile's hit area.
+- **Readable floating surfaces.** A content-heavy glass variant is used for the Home widget manager,
+  keeping long labels and controls readable while preserving the glass chrome.
+- **Liquid Glass setting.** The treatment and the bottom-bar lens can be disabled independently of
+  the selected theme.
+
+#### Four complete themes
+- **IronPulse, Dark, Light and AMOLED Dark.** Every theme has a complete semantic palette covering
+  surfaces, borders, text, accents, danger states, charts, activity heat maps, the muscle map and the
+  Liquid Glass panel/lens.
+- **One palette architecture.** `ThemeRuntime`, `AppPalette`, `LocalAppPalette` and dynamic legacy
+  colour getters route the existing screens through the selected theme without per-screen theme
+  branches.
+- **Immediate, persistent selection.** The Settings theme selector applies without a restart,
+  survives relaunch, and has a dedicated `themeModeFlow` so unrelated preference writes do not reset
+  it. Unknown stored values fall back to IronPulse.
+- **Contrast fixes.** `OnAccent` and `OnDanger` replace dark-page foregrounds on accent and
+  destructive buttons, and the heat-map, chart, muscle and glass tokens are theme-specific.
+
+#### Fullscreen and display insets
+- **Fullscreen Mode setting**, default on. Enabling it hides the status and navigation bars and
+  enables short-edge cutout rendering; disabling it shows both bars and restores the default cutout
+  mode. The policy is reapplied when the window regains focus.
+- **Cutout-aware top inset.** On API 33+ the app reserves the actual cutout path bottom rather than
+  the full status-bar safe rectangle; older versions use the platform safe top inset. Non-fullscreen
+  pages use `safeDrawing`.
+- **Top spacing correction.** Main page headers were moved up from the old 16dp page padding to 8dp
+  inside the measured cutout inset, removing the oversized blank band while keeping content below
+  the camera.
+
+#### Workout streak and schedule adherence
+- **Materialized schedule history.** A new `scheduled_workout_days` table stores one row per date,
+  including rest days, with a timezone-stable `yyyyMMdd` key. Past rows remain history when the active
+  routine changes; only today and future rows are regenerated.
+- **Session-to-plan linkage.** Workout sessions record the routine, weekday, planned local date and
+  date key they fulfilled. The streak credits the planned date, not the moment the athlete pressed
+  start, so a late completed Monday session still counts for Monday.
+- **Adherence rules.** A planned day counts when a finished linked session has at least one completed
+  set. Rest days neither break nor advance the streak. A missed planned day breaks it. Today's
+  unfinished planned day is pending, not missed. Multiple completions on one date count once.
+  Historical days before the schedule table are untracked, not retroactively missed.
+- **Current and best streak.** Both are derived from the schedule and completed sessions, never from
+  a counter incremented on app open.
+- **Streak visualisation.** The new Workout Streak Home widget shows current/best streak,
+  ALIVE/BROKEN/PENDING/NO PLAN state, a 12-week adherence heat map, a legend and Done/Missed/Best/Next
+  totals. Alive uses a layered animated flame; broken/no-plan uses a static ash and smoke treatment.
+- **Database upgrades.** Room 12 -> 13 adds the session link columns and schedule table; 13 -> 14 adds
+  the timezone-stable date keys. Existing installations migrate without a manual step.
+
+#### Home dashboard
+- The Workout Streak widget is added to the Home widget catalog and defaults to visible.
+- The existing widget manager, drag ordering, Motivation Photo and Weekly Goal continue to apply to
+  the new card.
+- Home, Progress, Profile, Settings, AI Coach and Create Routine share the corrected top inset and
+  8dp page padding.
+
+### Improved
+
+- **Progress heat map empty days** now use a stronger empty fill and a 1dp border on every cell, so
+  the grid remains visible in Dark and AMOLED instead of disappearing into the card surface. Active
+  intensity levels and all calculations are unchanged.
+- **Profile -> Settings navigation** keeps Profile highlighted. Settings maps to Profile for the
+  dock's selected state while remaining a normal back-stack entry.
+- **Routine Generator day selector** uses equal, expanding day-count tiles instead of clipped filter
+  chips, so all three-to-seven-day options remain readable at normal and 1.5x font scale.
+- **Saved routine rest tags** show the per-entry rest default, for example `Rest 1m 30s`; zero-rest
+  entries show no tag.
+- **Customize Home sheet** uses an opaque page-coloured baseline under the glass, so the dashboard no
+  longer bleeds through long labels and buttons. The sheet also respects Fullscreen Mode.
+- **Version footer** is available on the main tabs and reads the installed version from the build.
+- **Settings layout** was reorganised into clear General, AI, App, Home Widgets and Data Management
+  cards, with consistent section descriptions and test tags.
+
+### Fixed
+
+- **The Liquid Glass dock had no real backdrop.** It was previously a near-opaque gradient inside a
+  reserved bottom-bar strip. The dock is now an overlay with a real blurred backdrop on API 31+.
+- **Release-to-navigate was discarded.** The lens only dismissed on release; it now hit-tests the
+  measured tab bounds and navigates to the item under the finger.
+- **Dragging back to Home did nothing.** A long-lived pointer block captured the original route
+  callback, and lens-scaled bounds made Home overlap Profile. Both causes are fixed.
+- **The selected indicator vanished in Settings.** Settings is not a tab route; it now maps to
+  Profile for selection only.
+- **Empty heat-map cells disappeared** in Dark and AMOLED. Empty fills, borders and legend cells were
+  corrected in every theme.
+- **Fullscreen top spacing was excessive.** The app reserved the full 128px cutout safe rectangle and
+  added 16dp page padding; it now uses the actual cutout path on API 33+ and 8dp page padding.
+- **The Customize Home sheet was see-through.** Home text could be read through the sheet; the
+  content-heavy surface fixes it without removing the glass styling.
+- **Theme contrast issues** on accent-filled buttons, destructive buttons and custom-drawn charts
+  were corrected with the new palette roles.
+
+### AI and exercise database
+
+- **No new providers were added in 4.0.0.** The existing six-provider layer remains: Google, OpenAI,
+  Anthropic, OpenRouter, xAI and a custom OpenAI-compatible endpoint, with per-provider model
+  selection, live model discovery, per-provider API keys, native tool calling with Auto/Native/Text
+  fallback, and read-only exercise/routine lookup tools.
+- **AI data is now portable.** All conversations and messages are included in backups, as are saved
+  Gemini monthly summaries, custom and AI-generated exercises, and AI-created exercise metadata. API
+  keys are deliberately excluded.
+- **The 1,333-exercise catalog and its attribution are unchanged.** Exercise animations remain
+  streamed from the dataset and retain their existing third-party attribution.
+
+### Internal changes
+
+- Room schema moved from v12 to v14 with migrations 12 -> 13 and 13 -> 14.
+- New centralized theme token model and palette-driven chart, heat-map, muscle and glass drawing.
+- New timezone-stable local date key helpers and schedule materialization.
+- New backup package with archive codec, manifest/checksum validation, DTO mapping, schema
+  migrations, semantic validation, preference allowlist and replacement/rollback orchestration.
+- New `ScheduledWorkoutDay` persistence and schedule-aware session fields.
+- Test coverage grew to 672 JVM tests across 78 classes, including theme, navigation, streak,
+  fullscreen, Liquid Glass and backup round-trip/replacement/corruption/performance tests.
+- Lint remains at 0 errors; the existing warning baseline is unchanged.
+
+### Licensing
+
+- The official `v3.0.0` tag is the licensing boundary: commit
+  `784fc4d3553dc286db85e576641e4f067993f577`, version name `3.0.0`, version code `7`.
+- Code at or before that boundary remains under CC BY-NC-SA 4.0, preserved verbatim in
+  `LICENSES/CC-BY-NC-SA-4.0.txt`.
+- New standalone source files authored after 3.0.0 are under PolyForm Noncommercial 1.0.0, with the
+  official text in `LICENSES/POLYFORM-NONCOMMERCIAL-1.0.0.txt`.
+- Files that existed at 3.0.0 and were modified later remain historical files under CC BY-NC-SA 4.0;
+  they were not blanket-relicensed. See `LICENSES/LICENSE-BOUNDARY.md`.
+
+---
+
 ## [3.0.0] — 2026-10-31
 
 This is the first release since 2.0.1. It consolidates every change that was developed under the
@@ -492,7 +664,8 @@ Entries are grouped under **Added**, **Changed**, **Deprecated**, **Removed**, *
 **Security**, each newest first. Versions follow [SemVer](https://semver.org/): bump the patch for a
 fix, the minor for a feature, the major for a breaking change.
 
-[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v4.0.0...HEAD
+[4.0.0]: https://github.com/JuggyBob/IronPulse/compare/v3.0.0...v4.0.0
 [3.0.0]: https://github.com/JuggyBob/IronPulse/compare/v2.0.1...v3.0.0
 [2.0.1]: https://github.com/JuggyBob/IronPulse/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/JuggyBob/IronPulse/compare/v1.1.1...v2.0.0

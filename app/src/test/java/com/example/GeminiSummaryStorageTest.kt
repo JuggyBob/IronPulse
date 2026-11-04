@@ -40,6 +40,7 @@ class GeminiSummaryStorageTest {
             workoutDao = db.workoutDao(),
             userProfileDao = db.userProfileDao(),
             savedRoutineDao = db.savedRoutineDao(),
+            scheduleDao = db.scheduleDao(),
             bodyWeightDao = db.bodyWeightDao(),
             chatDao = db.chatDao(),
             geminiSummaryDao = db.geminiSummaryDao()

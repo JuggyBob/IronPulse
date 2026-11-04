@@ -59,6 +59,7 @@ import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.OnAccent
 import com.example.util.WidgetPhotoStore
 import java.io.File
 
@@ -224,7 +225,7 @@ private fun PhotoPlaceholder(
                     onClick = onAction,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = ElectricCyan,
-                        contentColor = DarkBg
+                        contentColor = OnAccent
                     ),
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.testTag("home_photo_choose_button")
@@ -238,7 +239,7 @@ private fun PhotoPlaceholder(
                     Text(
                         text = actionLabel,
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = DarkBg
+                        color = OnAccent
                     )
                 }
             }
@@ -407,7 +408,7 @@ fun HomeWidgetsEmptyState(
                 onClick = onOpenManager,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = ElectricCyan,
-                    contentColor = DarkBg
+                    contentColor = OnAccent
                 ),
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier
@@ -423,7 +424,7 @@ fun HomeWidgetsEmptyState(
                 Text(
                     text = "Add widgets",
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                    color = DarkBg
+                    color = OnAccent
                 )
             }
         }
@@ -532,12 +533,12 @@ fun WeeklyGoalDialog(
                 onClick = { onSave(draft) },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = ElectricCyan,
-                    contentColor = DarkBg
+                    contentColor = OnAccent
                 ),
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.testTag("weekly_goal_save")
             ) {
-                Text("Save", color = DarkBg, fontWeight = FontWeight.Bold)
+                Text("Save", color = OnAccent, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {

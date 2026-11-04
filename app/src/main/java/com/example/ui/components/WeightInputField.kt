@@ -25,6 +25,7 @@ import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.OnAccent
 
 /**
  * Weight input that speaks the athlete's unit.

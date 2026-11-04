@@ -1,14 +1,51 @@
-Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International Public License
+# IronPulse licensing
 
-By exercising the Licensed Rights (defined below), You accept and agree to be bound by the terms and conditions of this Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International Public License ("Public License").
+IronPulse is not licensed under a single set of terms across its whole history. This file is an
+index. The complete license texts and the evidence for the boundary are in `LICENSES/`.
 
-Under this license, you are free to:
-- Share: Copy and redistribute the material in any medium or format.
-- Adapt: Remix, transform, and build upon the material.
+## Code at or before the 3.0.0 boundary
 
-Under the following terms:
-- Attribution: You must give appropriate credit, provide a link to the license, and indicate if changes were made.
-- NonCommercial: You may NOT use the material for commercial purposes or monetization of any kind.
-- ShareAlike: If you remix, transform, or build upon the material, you must distribute your contributions under the same license as the original.
+All source code, assets, and documentation that existed at or before the IronPulse 3.0.0 licensing
+boundary remain under the **Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+Public License (CC BY-NC-SA 4.0)**. They are **not** retroactively relicensed under PolyForm.
 
-Full license text: [https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode](https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode)
+- Preserved license text: [`LICENSES/CC-BY-NC-SA-4.0.txt`](LICENSES/CC-BY-NC-SA-4.0.txt)
+- Canonical license: <https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode>
+
+The preserved file is a byte-for-byte copy of the repository's `LICENSE` immediately before this
+transition.
+
+## New standalone code authored after the boundary
+
+New source files first created after the IronPulse `v3.0.0` tag are licensed under the **PolyForm
+Noncommercial License 1.0.0**. That includes the Liquid Glass and workout-streak modules added for
+4.0.0, the user-data export/import modules, and their new tests.
+
+- Preserved official text: [`LICENSES/POLYFORM-NONCOMMERCIAL-1.0.0.txt`](LICENSES/POLYFORM-NONCOMMERCIAL-1.0.0.txt)
+- Canonical license: <https://polyformproject.org/licenses/noncommercial/1.0.0>
+
+Those new files carry a short header naming PolyForm and pointing at the preserved text. No
+`Required Notice:` line is supplied because the project has not established a verified copyright
+holder designation for one.
+
+## Files that existed before the boundary and were modified after it
+
+A file that already existed before the boundary is **not** relicensed as a whole. Changes made to
+such a file remain part of that historical file and are distributed under CC BY-NC-SA 4.0, including
+its ShareAlike requirement. New standalone files are the only files identified with the PolyForm
+header. `LICENSES/LICENSE-BOUNDARY.md` lists the mixed files touched by this work and explains the
+distinction.
+
+## Third-party material
+
+Dependencies, the exercise dataset, and exercise animations keep their own licenses and attribution
+requirements. Nothing in this repository grants rights to third-party material that the project does
+not own.
+
+## Boundary status
+
+The official 3.0.0 boundary is verified: tag `v3.0.0`, commit
+`784fc4d3553dc286db85e576641e4f067993f577`, version name `3.0.0`, version code `7`. The release APK
+`IronPulse3.0.0-release.apk` independently reports the same version name and code. The evidence and
+the full file scope are recorded in
+[`LICENSES/LICENSE-BOUNDARY.md`](LICENSES/LICENSE-BOUNDARY.md).

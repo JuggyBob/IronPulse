@@ -47,6 +47,7 @@ import com.example.ui.theme.GoldenAmber
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.OnAccent
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -160,7 +161,7 @@ fun AboutDialog(
                     Spacer(modifier = Modifier.height(10.dp))
                     Button(
                         onClick = onCheckForUpdates,
-                        colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                        colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -169,14 +170,14 @@ fun AboutDialog(
                         Icon(
                             imageVector = Icons.Default.SystemUpdateAlt,
                             contentDescription = null,
-                            tint = DarkBg,
+                            tint = OnAccent,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "Update available",
                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                            color = DarkBg
+                            color = OnAccent
                         )
                     }
                 }

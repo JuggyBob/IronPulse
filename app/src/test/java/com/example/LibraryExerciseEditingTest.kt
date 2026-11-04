@@ -70,6 +70,7 @@ class LibraryExerciseEditingTest {
         workoutDao = dao.workoutDao(),
         userProfileDao = dao.userProfileDao(),
         savedRoutineDao = dao.savedRoutineDao(),
+        scheduleDao = dao.scheduleDao(),
         bodyWeightDao = dao.bodyWeightDao(),
         chatDao = dao.chatDao(),
         geminiSummaryDao = dao.geminiSummaryDao()

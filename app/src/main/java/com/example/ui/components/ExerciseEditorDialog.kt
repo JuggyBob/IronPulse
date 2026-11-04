@@ -80,6 +80,8 @@ import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import com.example.ui.theme.VioletPurple
+import com.example.ui.theme.OnAccent
+import com.example.ui.theme.OnDanger
 
 /**
  * The low level editor for a single exercise.
@@ -435,7 +437,11 @@ fun ExerciseEditorDialog(
                 ) {
                     Text(
                         text = "Save",
-                        color = if (name.trim().length >= 2) DarkBg else TextMuted,
+                        color = if (name.trim().length >= 2) {
+                            if (isLibrary) OnDanger else OnAccent
+                        } else {
+                            TextMuted
+                        },
                         fontWeight = FontWeight.Bold
                     )
                 }
@@ -508,7 +514,7 @@ private fun SaveConfirmation(modifier: Modifier = Modifier) {
             Icon(
                 imageVector = Icons.Default.Check,
                 contentDescription = null,
-                tint = DarkBg,
+                tint = OnAccent,
                 modifier = Modifier
                     .size(15.dp)
                     .alpha(checkAlpha)
@@ -585,11 +591,11 @@ private fun LibraryEditWarningDialog(
         confirmButton = {
             Button(
                 onClick = onConfirm,
-                colors = ButtonDefaults.buttonColors(containerColor = FireRed),
+                colors = ButtonDefaults.buttonColors(containerColor = FireRed, contentColor = OnDanger),
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.testTag("confirm_library_edit_button")
             ) {
-                Text("Edit it anyway", color = TextWhite, fontWeight = FontWeight.Bold)
+                Text("Edit it anyway", color = OnDanger, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {

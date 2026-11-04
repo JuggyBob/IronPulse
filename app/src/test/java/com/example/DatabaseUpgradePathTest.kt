@@ -11,6 +11,7 @@ import com.example.data.db.AppDatabase
 import com.example.data.model.BodyWeightLog
 import com.example.data.model.ExerciseType
 import com.example.data.model.LoggedSet
+import com.example.data.model.ScheduledWorkoutDay
 import com.example.data.model.WorkoutSession
 import com.example.data.seed.DatasetSeeder
 import kotlinx.coroutines.flow.first
@@ -75,7 +76,9 @@ class DatabaseUpgradePathTest {
             AppDatabase.MIGRATION_8_9,
             AppDatabase.MIGRATION_9_10,
             AppDatabase.MIGRATION_10_11,
-            AppDatabase.MIGRATION_11_12
+            AppDatabase.MIGRATION_11_12,
+            AppDatabase.MIGRATION_12_13,
+            AppDatabase.MIGRATION_13_14
         )
 
         /** The target version, taken from the last registered step rather than hardcoded. */
@@ -509,7 +512,7 @@ class DatabaseUpgradePathTest {
 
         val upgraded = openCurrent()
         try {
-            assertEquals(12, versionOf(upgraded))
+            assertEquals(currentVersion(), versionOf(upgraded))
             val indexes = mutableSetOf<String>()
             upgraded.query("SELECT name FROM sqlite_master WHERE type = 'index'", emptyArray()).use { cursor ->
                 while (cursor.moveToNext()) indexes.add(cursor.getString(0))
@@ -528,6 +531,73 @@ class DatabaseUpgradePathTest {
             // The data the athlete already had is still there after the index rebuild.
             assertEquals(1, upgraded.workoutDao().getAllSets().size)
             assertEquals("Indexed Session", upgraded.workoutDao().getAllSessions().first().single().title)
+        } finally {
+            upgraded.close()
+        }
+    }
+
+    /**
+     * The 12 -> 13 step: the session-to-schedule link and the materialized schedule table.
+     *
+     * The test creates the current schema, removes the new schema objects, stamps 12, and reopens.
+     * That proves the migration creates exactly what Room expects and that existing sessions keep
+     * the honest 0 defaults rather than being assigned a guessed routine day.
+     */
+    @Test
+    fun `migration 12 to 13 adds streak schedule columns and table`() = runBlocking {
+        val created = openCurrent()
+        created.workoutDao().insertSession(
+            WorkoutSession(title = "Legacy Session", startTime = 1000, endTime = 2000)
+        )
+        created.close()
+
+        val file = context.getDatabasePath(DB_NAME)
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE).use { raw ->
+            raw.execSQL("ALTER TABLE `workout_sessions` DROP COLUMN `plannedDate`")
+            raw.execSQL("ALTER TABLE `workout_sessions` DROP COLUMN `routineWeekday`")
+            raw.execSQL("ALTER TABLE `workout_sessions` DROP COLUMN `routineId`")
+            raw.execSQL("DROP TABLE IF EXISTS `scheduled_workout_days`")
+            raw.execSQL("PRAGMA user_version = 12")
+        }
+
+        val upgraded = openCurrent()
+        try {
+            assertEquals(currentVersion(), versionOf(upgraded))
+            val columns = mutableListOf<String>()
+            upgraded.query("PRAGMA table_info(`workout_sessions`)", emptyArray()).use { cursor ->
+                while (cursor.moveToNext()) columns.add(cursor.getString(1))
+            }
+            assertTrue("routineId" in columns)
+            assertTrue("routineWeekday" in columns)
+            assertTrue("plannedDate" in columns)
+            assertTrue("plannedDateKey" in columns)
+            val scheduleColumns = mutableListOf<String>()
+            upgraded.query("PRAGMA table_info(`scheduled_workout_days`)", emptyArray()).use { cursor ->
+                while (cursor.moveToNext()) scheduleColumns.add(cursor.getString(1))
+            }
+            assertTrue("dateKey" in scheduleColumns)
+
+            val legacy = upgraded.workoutDao().getAllSessions().first().single()
+            assertEquals(0L, legacy.routineId)
+            assertEquals(0, legacy.routineWeekday)
+            assertEquals(0L, legacy.plannedDate)
+
+            upgraded.scheduleDao().insertScheduleDays(
+                listOf(
+                    ScheduledWorkoutDay(
+                        dateStart = 86_400_000L,
+                        routineId = 7L,
+                        weekday = 3,
+                        dayTitle = "Upper Body",
+                        exerciseCount = 4,
+                        capturedAt = 1_000L
+                    )
+                )
+            )
+            val schedule = upgraded.scheduleDao().getAllScheduleDaysOnce().single()
+            assertEquals(7L, schedule.routineId)
+            assertEquals(3, schedule.weekday)
+            assertEquals(4, schedule.exerciseCount)
         } finally {
             upgraded.close()
         }

@@ -22,9 +22,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -100,6 +102,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
 import com.example.ui.components.AppVersionFooter
 import com.example.ui.components.ExerciseGifThumbnail
@@ -123,6 +126,8 @@ import com.example.data.model.LoggedSet
 import com.example.data.model.WeightUnit
 import com.example.data.model.MuscleCategory
 import com.example.ui.components.DayDropdown
+import com.example.ui.components.LocalLiquidGlassEnabled
+import com.example.ui.components.liquidGlass
 import com.example.ui.components.MuscleSelectorDialog
 import com.example.ui.components.WorkoutTimerBadge
 import com.example.ui.components.ExerciseDetailDialog
@@ -145,6 +150,8 @@ import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import com.example.ui.theme.VioletPurple
+import com.example.ui.theme.OnAccent
+import com.example.ui.theme.OnDanger
 import com.example.ui.viewmodel.MainViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -162,16 +169,16 @@ private const val EXERCISE_PAGE_SIZE = 30
 private const val ADDED_BANNER_DURATION_MS = 1500L
 
 private val ExerciseCardShape = RoundedCornerShape(14.dp)
-private val ExerciseCardBorder = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+private val ExerciseCardBorder get() = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
 private val ExerciseBadgeShape = RoundedCornerShape(8.dp)
 private val ExerciseButtonShape = RoundedCornerShape(10.dp)
-private val ExerciseButtonBorder = androidx.compose.foundation.BorderStroke(1.dp, ElectricCyan)
+private val ExerciseButtonBorder get() = androidx.compose.foundation.BorderStroke(1.dp, ElectricCyan)
 private val ExerciseButtonPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
 
-private val StandardWtBadgeBg = ElectricCyan.copy(alpha = 0.18f)
-private val AddedWtBadgeBg = CoralOrange.copy(alpha = 0.18f)
-private val BodyweightBadgeBg = MintGreen.copy(alpha = 0.18f)
-private val CardioBadgeBg = GoldenAmber.copy(alpha = 0.18f)
+private val StandardWtBadgeBg get() = ElectricCyan.copy(alpha = 0.18f)
+private val AddedWtBadgeBg get() = CoralOrange.copy(alpha = 0.18f)
+private val BodyweightBadgeBg get() = MintGreen.copy(alpha = 0.18f)
+private val CardioBadgeBg get() = GoldenAmber.copy(alpha = 0.18f)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -194,6 +201,12 @@ fun LogWorkoutScreen(
     val customExerciseResult by viewModel.customExerciseResult.collectAsStateWithLifecycle()
     // When the workout in progress was last written to disk, for the "auto saved" indicator.
     val lastAutoSaveAt by viewModel.lastAutoSaveAt.collectAsStateWithLifecycle()
+    val glassEnabled = LocalLiquidGlassEnabled.current
+    val bottomActionShape = RoundedCornerShape(12.dp)
+    // The dock is an overlay. The quick-workout tray must sit above it, except while the
+    // keyboard is open: then the root's imePadding lifts the page and the dock is hidden.
+    val keyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val dockClearance = if (keyboardOpen) 0.dp else 92.dp
 
     var showCustomExerciseDialog by remember { mutableStateOf(false) }
     var exerciseBeingEdited by remember { mutableStateOf<Exercise?>(null) }
@@ -380,10 +393,10 @@ fun LogWorkoutScreen(
         )
 
         val listBottomPadding = when {
-            activeSession == null -> 24.dp
-            trayState == QuickWorkoutTrayState.MINIMIZED -> 72.dp
-            trayState == QuickWorkoutTrayState.PARTIAL -> partialHeight + 16.dp
-            else -> 24.dp
+            activeSession == null -> 112.dp
+            trayState == QuickWorkoutTrayState.MINIMIZED -> 140.dp
+            trayState == QuickWorkoutTrayState.PARTIAL -> partialHeight + 100.dp
+            else -> 112.dp
         }
 
         Column(modifier = Modifier.fillMaxSize()) {
@@ -469,7 +482,7 @@ fun LogWorkoutScreen(
                         if (activeSession == null) {
                             Button(
                                 onClick = safeStartQuickWorkout,
-                                colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                                colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = OnAccent),
                                 shape = RoundedCornerShape(12.dp),
                                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                                 modifier = Modifier
@@ -479,14 +492,14 @@ fun LogWorkoutScreen(
                                 Icon(
                                     imageVector = Icons.Default.PlayArrow,
                                     contentDescription = null,
-                                    tint = DarkBg,
+                                    tint = OnAccent,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
                                     text = "Start",
                                     fontWeight = FontWeight.Bold,
-                                    color = DarkBg,
+                                    color = OnAccent,
                                     maxLines = 1,
                                     softWrap = false
                                 )
@@ -688,7 +701,7 @@ fun LogWorkoutScreen(
                         },
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = ElectricCyan,
-                            selectedLabelColor = DarkBg,
+                            selectedLabelColor = OnAccent,
                             containerColor = DarkSurfaceVariant,
                             labelColor = TextWhite
                         ),
@@ -857,6 +870,7 @@ fun LogWorkoutScreen(
             Card(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
+                    .padding(bottom = dockClearance)
                     .fillMaxWidth()
                     .height(animatedTrayHeight)
                     .testTag("quick_workout_tray"),
@@ -1218,11 +1232,28 @@ fun LogWorkoutScreen(
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
-                            color = DarkSurfaceVariant,
-                            shape = RoundedCornerShape(12.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder),
-                            shadowElevation = 6.dp
+                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                                .then(
+                                    if (glassEnabled) {
+                                        Modifier.liquidGlass(
+                                            shape = bottomActionShape,
+                                            enabled = true,
+                                            tint = MintGreen,
+                                            cornerRadius = 12.dp,
+                                            elevation = 12.dp
+                                        )
+                                    } else {
+                                        Modifier
+                                    }
+                                ),
+                            color = if (glassEnabled) Color.Transparent else DarkSurfaceVariant,
+                            shape = bottomActionShape,
+                            border = if (glassEnabled) {
+                                null
+                            } else {
+                                androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+                            },
+                            shadowElevation = if (glassEnabled) 0.dp else 6.dp
                         ) {
                             Row(
                                 modifier = Modifier
@@ -1265,7 +1296,7 @@ fun LogWorkoutScreen(
 
                                     Button(
                                         onClick = { showFinishDialog = true },
-                                        colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                                        colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                                         shape = RoundedCornerShape(8.dp),
                                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                                         modifier = Modifier.testTag("finish_quick_workout_btn")
@@ -1273,11 +1304,11 @@ fun LogWorkoutScreen(
                                         Icon(
                                             imageVector = Icons.Default.Check,
                                             contentDescription = null,
-                                            tint = DarkBg,
+                                            tint = OnAccent,
                                             modifier = Modifier.size(15.dp)
                                         )
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Finish", color = DarkBg, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        Text("Finish", color = OnAccent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                                     }
                                 }
                             }
@@ -1373,14 +1404,14 @@ fun LogWorkoutScreen(
                         showRenameWorkoutDialog = false
                         viewModel.renameActiveWorkout(renameValue)
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = OnAccent),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.testTag("confirm_rename_workout_button")
                 ) {
                     Text(
                         text = "Save",
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = DarkBg
+                        color = OnAccent
                     )
                 }
             },
@@ -1420,14 +1451,14 @@ fun LogWorkoutScreen(
                         showExitWorkoutDialog = false
                         viewModel.discardActiveSession()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = FireRed),
+                    colors = ButtonDefaults.buttonColors(containerColor = FireRed, contentColor = OnDanger),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.testTag("confirm_exit_workout_button")
                 ) {
                     Text(
                         text = "Exit Workout",
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = TextWhite
+                        color = OnDanger
                     )
                 }
             },
@@ -1472,13 +1503,13 @@ fun LogWorkoutScreen(
                         pendingQuickWorkoutAction?.invoke()
                         pendingQuickWorkoutAction = null
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = FireRed),
+                    colors = ButtonDefaults.buttonColors(containerColor = FireRed, contentColor = OnDanger),
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Text(
                         text = "Exit & Start Quick Workout",
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = TextWhite
+                        color = OnDanger
                     )
                 }
             },
@@ -1543,11 +1574,11 @@ fun LogWorkoutScreen(
                         showFinishDialog = false
                         finishNotes = ""
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.testTag("save_workout_to_history_button")
                 ) {
-                    Text("Save to History", color = DarkBg, fontWeight = FontWeight.Bold)
+                    Text("Save to History", color = OnAccent, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {

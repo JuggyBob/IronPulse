@@ -1,13 +1,15 @@
 # IronPulse — Workout Logger
 
-[![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](LICENSE)
-[![Kotlin](https://img.shields.io/badge/Kotlin-1.9-7F52FF.svg)](https://kotlinlang.org)
+[![License](https://img.shields.io/badge/license-source--available-lightgrey.svg)](LICENSE)
+[![Kotlin](https://img.shields.io/badge/Kotlin-2.2-7F52FF.svg)](https://kotlinlang.org)
 [![Android](https://img.shields.io/badge/Android-7.1%2B-3DDC84.svg)](https://developer.android.com)
-[![Release](https://img.shields.io/badge/release-v3.0.0-blue.svg)](https://github.com/JuggyBob/IronPulse/releases)
+[![Release](https://img.shields.io/badge/release-v4.0.0-blue.svg)](https://github.com/JuggyBob/IronPulse/releases/tag/v4.0.0)
 
 A dark-themed workout logger for strength training and calisthenics, built for the gym:
 offline by default, no account, no tracking, and a 1,300+ movement catalog that streams its
-animations on demand instead of shipping them in the APK.
+animations on demand instead of shipping them in the APK. IronPulse 4.0.0 adds a complete
+`.ironpulse` backup/restore format, four themes, Liquid Glass navigation, fullscreen mode, and a
+schedule-adherence workout streak.
 
 <p align="center">
   <img src="docs/screenshots/01-home-dashboard.png" width="30%" alt="The Home dashboard" />
@@ -48,6 +50,11 @@ animations on demand instead of shipping them in the APK.
   dates, and tapping a day tells you exactly what was done on it.
 - **Training days** is a lifetime count of the days you completed a qualifying workout. It is not a
   streak: a week off costs you nothing. Tap it to read exactly what counts.
+- **Workout Streak** tracks adherence to your scheduled routine, not just consecutive workouts. A
+  planned day counts when a finished linked session has at least one completed set; rest days do not
+  break it, missed planned days do, and today's unfinished plan is pending rather than missed. The
+  card shows current and best streak, a 12-week heat map, Done/Missed/Best/Next totals, and an
+  animated flame that changes to ash when the streak is broken.
 - **This week** in three numbers: workouts, time and volume.
 - **Body weight**: the latest weigh-in, the change since the one before it, and a **Log Weight**
   button that saves through the same weigh-in the Profile page uses.
@@ -145,6 +152,21 @@ stays small and an exercise you never open costs nothing.
   <img src="docs/screenshots/07-create-custom-exercise.png" width="45%" alt="Create a custom exercise, with the media picker" />
 </p>
 
+### Themes, Liquid Glass and fullscreen
+- **Four complete looks:** IronPulse, Dark, Light and AMOLED Dark. The selector is at the top of
+  Settings, applies immediately, persists across restarts, and falls back to IronPulse for unknown
+  stored values. Charts, activity heat maps, the muscle map, dialogs, buttons and the Liquid Glass
+  lens all draw from the same semantic palette.
+- **Liquid Glass navigation.** The bottom dock floats over the page instead of sitting in an opaque
+  reserved strip. On Android 12+ it captures and blurs the content behind it; Android 7.1-11 use the
+  documented translucent fallback. Hold the dock to magnify neighbouring tabs, then release over one
+  to navigate. Normal taps still work, and releasing outside the dock does nothing.
+- **Fullscreen Mode** is on by default. It hides the status and navigation bars and reserves only the
+  actual display-cutout path on API 33+; turning it off restores both bars and `safeDrawing` insets.
+  The setting is independent of the theme and Liquid Glass.
+- **Readable floating surfaces.** Settings popups, the Home widget manager and the dock use
+  content-appropriate glass opacity so labels and controls stay legible in every theme.
+
 ### Progress
 - Volume, estimated one-rep max, max reps, training days and a 12-month activity heatmap built from
   local calendar days, so daylight-saving changes cannot move a workout to the wrong square.
@@ -182,8 +204,7 @@ OpenAI-compatible endpoint, add a key where the service needs one, and you get:
   offered.
 - **The AI can read your library and routines** through read-only tools: exercise search and
   details, exercise lists, saved routines and routine details. It cannot run SQL, touch files, make
-  network calls or execute code. Every tool, its arguments, validation and limits are documented in
-  [docs/AI_TOOLS.md](docs/AI_TOOLS.md).
+  network calls or execute code.
 - **A custom endpoint is opt-in.** Its URL is validated, plain HTTP is limited to loopback or a
   private-network host, and the first use shows a privacy/security warning naming the exact
   endpoint. The key goes only to that endpoint, redirects are not followed and TLS checks are never
@@ -243,6 +264,29 @@ storage, so it keeps working even after you delete the original from your galler
 - The update check reads the public releases of this repository. **No token and no credential is
   built into the app**, and nothing is sent anywhere else.
 
+### Backup and restore
+- **Export a portable `.ironpulse` file** from Settings -> Data Management. It contains the complete
+  user-data state: profile and onboarding, workouts and every set, exercise history, custom and
+  AI-generated exercises, edited library exercises, routines and materialized schedules, weigh-ins,
+  all AI conversations and messages, saved Gemini summaries, Home widget configuration and the
+  Motivation Photo, and the exportable preferences.
+- **The archive is versioned and checksummed.** `manifest.json` carries a container format version, a
+  separate data-schema version, the source app version, export time, section paths and record counts.
+  `checksums.json` carries SHA-256 for every payload entry. Import verifies the whole archive before
+  touching the destination.
+- **Import replaces, it does not merge.** The destructive confirmation names the backup version,
+  creation time, size and category counts. After confirmation, destination user data is replaced by
+  the backup's data even when a category is empty. API keys, the destination profile picture and its
+  path are preserved; exercise images/GIFs are excluded and the restored exercise uses the existing
+  missing-media fallback.
+- **Failure safety.** Room replacement is transactional. DataStore, the Home photo and preference
+  state are staged and verified, with a rollback snapshot of the previous user data. The app reports
+  that the previous data was restored only when rollback succeeds.
+- **Future compatibility.** Older data schemas have a centralized migration path; newer/unknown
+  schemas are rejected before any write. The v1 compatibility fixture and tests must keep importing.
+  The format and migration rules are documented in `docs/BACKUP_FORMAT.md`,
+  `docs/BACKUP_ARCHITECTURE.md` and `docs/BACKUP_MIGRATION_GUIDE.md`.
+
 ---
 
 ## Development Methodology & Transparency
@@ -260,8 +304,9 @@ storage, so it keeps working even after you delete the original from your galler
 | **Language** | Kotlin (100%) |
 | **UI** | Jetpack Compose + Material 3, portrait-only (locked in the manifest) |
 | **Architecture** | MVVM — Compose screens → `MainViewModel` → `FitnessRepository` → Room DAOs |
-| **Database** | Room (SQLite), schema v12, versioned migrations ([details](docs/DATABASE.md)) |
+| **Database** | Room (SQLite), schema v14, versioned migrations |
 | **Preferences** | DataStore |
+| **Backup format** | `.ironpulse` ZIP with manifest, independent format/data-schema versions, SHA-256 checksums and forward migrations |
 | **Async** | Coroutines + Flow |
 | **Images** | Coil (animated GIF + still-frame loaders) |
 | **Video** | Media3 / ExoPlayer |
@@ -304,7 +349,7 @@ can still be supplied through `.env`; copy `.env.example`, fill it in, and keep 
 
 ### Running the tests
 ```bash
-./gradlew testDebugUnitTest      # 608 JVM unit tests across 64 classes
+./gradlew testDebugUnitTest      # 672 JVM unit tests across 78 classes
 ./gradlew recordRoborazziDebug   # regenerate reference screenshots
 ```
 
@@ -313,12 +358,12 @@ can still be supplied through `.env`; copy `.env.example`, fill it in, and keep 
 ## Download
 
 Prebuilt APKs are attached to the
-[releases page](https://github.com/JuggyBob/IronPulse/releases). Every listed build is a signed
-release APK.
+[releases page](https://github.com/JuggyBob/IronPulse/releases).
 
 | Version | File |
 |---|---|
-| **v3.0.0** | [`IronPulse3.0.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v3.0.0/IronPulse3.0.0-release.apk) |
+| **v4.0.0** | [`IronPulse4.0.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.0.0/IronPulse4.0.0-release.apk) |
+| v3.0.0 | [`IronPulse3.0.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v3.0.0/IronPulse3.0.0-release.apk) |
 | v2.0.1 | [`IronPulse2.0.1-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v2.0.1/IronPulse2.0.1-release.apk) |
 | v2.0.0 | [`IronPulse2.0.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v2.0.0/IronPulse2.0.0-release.apk) |
 | v1.1.1 | [`IronPulse1.1.1-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v1.1.1/IronPulse1.1.1-release.apk) |
@@ -334,24 +379,6 @@ Requires Android 7.1 (API 24) or newer.
 
 ---
 
-## Known limitations
-
-- **AI is optional and bring-your-own-key.** Hosted providers need a key you obtain from them; a
-  local OpenAI-compatible endpoint may not. The app never ships a shared key.
-- **Native tool calling depends on the model.** Capability metadata can be incomplete, so a model
-  may report "unknown". Auto mode falls back to the bounded text protocol when a provider rejects
-  native tools; Native-only mode reports the error instead.
-- **The app is portrait-only by design.** This is a deliberate layout decision, not a device bug.
-- **Exercise animations stream on demand.** They are not bundled in the APK, so the first view of a
-  movement needs a network connection.
-- **Updates only come from this repository.** The in-app updater accepts an APK published on the
-  official GitHub releases page and signed with the same release key; it will not install a build
-  from another source.
-- **Provider behavior is controlled by the provider.** Model catalogs, rate limits, quotas and
-  availability can change without an app update.
-
----
-
 ## Project layout
 
 ```
@@ -360,8 +387,7 @@ IronPulse/
 │   ├── src/main/
 │   │   ├── assets/exercises.json     # 1,333-movement catalog seed
 │   │   ├── java/com/example/
-│   │   │   ├── data/                 # Room entities, DAOs, repository, seeders
-│   │   │   │   └── ai/               # Provider adapters, model config, read-only tools
+│   │   │   ├── data/                 # Room entities, DAOs, repository, seeders, backup codec
 │   │   │   ├── ui/
 │   │   │   │   ├── components/       # Dialogs, editors, charts, sheets
 │   │   │   │   ├── screens/          # Home, the other tabs and onboarding
@@ -369,17 +395,15 @@ IronPulse/
 │   │   │   │   └── viewmodel/        # MainViewModel — the single source of truth
 │   │   │   └── util/                 # Coil loaders, media store, timers
 │   │   └── res/                      # Icons, strings, themes, backup rules
-│   └── src/test/                     # 608 JVM tests (Robolectric + JUnit)
-├── docs/
-│   ├── AI_TOOLS.md                   # The read-only AI tool contract
-│   ├── DATABASE.md                   # Schema, migrations and integrity rules
-│   └── screenshots/                  # Images used by this README
+│   └── src/test/                     # 672 JVM tests (Robolectric + JUnit)
+├── docs/screenshots/                 # Images used by this README
 ├── gradle/wrapper/                   # Pinned Gradle distribution
 ├── .github/                          # Issue & PR templates, CI workflows
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
 ├── SECURITY.md
-└── LICENSE                           # CC BY-NC-SA 4.0
+├── LICENSES/                         # preserved historical and new license texts
+└── LICENSE                           # licensing index (CC BY-NC-SA 4.0 + PolyForm)
 ```
 
 ---
@@ -404,7 +428,21 @@ Bug reports, feature requests and pull requests are all welcome — see
 
 ## License
 
-Licensed under the **Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
-Public License (CC BY-NC-SA 4.0)**. See [LICENSE](LICENSE).
+IronPulse has a licensing boundary; it is not under one set of terms across its whole history.
+
+- Code and assets at or before the 3.0.0 boundary remain under the **Creative Commons
+  Attribution-NonCommercial-ShareAlike 4.0 International Public License (CC BY-NC-SA 4.0)**. The
+  complete preserved text is [LICENSES/CC-BY-NC-SA-4.0.txt](LICENSES/CC-BY-NC-SA-4.0.txt).
+- New standalone source files authored after the verified `v3.0.0` tag are under the **PolyForm
+  Noncommercial License 1.0.0**. This includes the Liquid Glass and workout-streak modules and the
+  user-data export/import implementation. The official text is
+  [LICENSES/POLYFORM-NONCOMMERCIAL-1.0.0.txt](LICENSES/POLYFORM-NONCOMMERCIAL-1.0.0.txt).
+- Modifications inside pre-existing files are not relicensed as a whole and remain under
+  CC BY-NC-SA 4.0, including its ShareAlike requirement.
+- Third-party components keep their own licenses.
+
+The official boundary is tag `v3.0.0` at commit `784fc4d3553dc286db85e576641e4f067993f577`
+(version name `3.0.0`, version code `7`). [LICENSE](LICENSE) is the index; the evidence and full
+file scope are in [LICENSES/LICENSE-BOUNDARY.md](LICENSES/LICENSE-BOUNDARY.md).
 
 **Not an official product of Google, Gym visual, or any exercise dataset author.**

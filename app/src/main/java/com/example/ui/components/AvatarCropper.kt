@@ -45,6 +45,7 @@ import com.example.ui.theme.DarkBg
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.OnAccent
 import com.example.util.ImageCropper
 import kotlin.math.max
 import kotlin.math.min
@@ -180,7 +181,7 @@ fun AvatarCropper(
                     )
                 },
                 enabled = viewportSize > 0,
-                colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = OnAccent),
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -188,7 +189,7 @@ fun AvatarCropper(
             ) {
                 Text(
                     text = "Use this picture",
-                    color = DarkBg,
+                    color = OnAccent,
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp
                 )

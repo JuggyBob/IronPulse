@@ -1,9 +1,11 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
@@ -20,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
@@ -62,6 +65,7 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -90,12 +94,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import com.example.ui.components.PredefinedRoutinesSheet
 import com.example.ui.components.AppVersionFooter
+import com.example.ui.components.LocalLiquidGlassEnabled
+import com.example.ui.components.liquidGlass
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -120,6 +127,8 @@ import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import com.example.ui.theme.VioletPurple
+import com.example.ui.theme.OnAccent
+import com.example.ui.theme.OnDanger
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import com.example.ui.components.AiUnavailableDialog
@@ -357,7 +366,7 @@ fun AiChatView(viewModel: MainViewModel) {
                             .testTag("side_panel_new_chat_button"),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = ElectricCyan,
-                            contentColor = DarkBg
+                            contentColor = OnAccent
                         ),
                         shape = RoundedCornerShape(12.dp)
                     ) {
@@ -628,7 +637,11 @@ fun AiChatView(viewModel: MainViewModel) {
             // Input Bar
             Surface(
                 color = DarkSurface,
-                shadowElevation = 8.dp
+                shadowElevation = 8.dp,
+                // The floating dock is an overlay, not a Scaffold bottom bar, so the input must
+                // reserve its own clearance. While the keyboard is open the dock is hidden and the
+                // root's imePadding already lifts the input, so no extra gap is added.
+                modifier = Modifier.padding(bottom = if (imeBottom > 0) 0.dp else 92.dp)
             ) {
                 Row(
                     modifier = Modifier
@@ -675,7 +688,7 @@ fun AiChatView(viewModel: MainViewModel) {
                         Icon(
                             imageVector = Icons.Default.Send,
                             contentDescription = "Send",
-                            tint = DarkBg,
+                            tint = OnAccent,
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -879,7 +892,7 @@ fun AiRoutineGeneratorView(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 16.dp),
-            contentPadding = PaddingValues(top = 16.dp, bottom = 88.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
         item {
@@ -924,7 +937,7 @@ fun AiRoutineGeneratorView(
                             },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = ElectricCyan,
-                                contentColor = DarkBg
+                                contentColor = OnAccent
                             ),
                             shape = RoundedCornerShape(10.dp),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
@@ -933,7 +946,7 @@ fun AiRoutineGeneratorView(
                             Icon(
                                 imageVector = Icons.Default.AutoFixHigh,
                                 contentDescription = "Prompt for a workout routine",
-                                tint = DarkBg,
+                                tint = OnAccent,
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
@@ -941,7 +954,7 @@ fun AiRoutineGeneratorView(
                                 text = "Prompt for Routine",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = DarkBg,
+                                color = OnAccent,
                                 maxLines = 1,
                                 softWrap = false
                             )
@@ -961,7 +974,7 @@ fun AiRoutineGeneratorView(
                                 label = { Text(g, fontSize = 11.sp) },
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = ElectricCyan,
-                                    selectedLabelColor = DarkBg,
+                                    selectedLabelColor = OnAccent,
                                     containerColor = DarkSurfaceVariant,
                                     labelColor = TextWhite
                                 )
@@ -976,33 +989,63 @@ fun AiRoutineGeneratorView(
                     Spacer(modifier = Modifier.height(6.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         listOf(3, 4, 5, 6, 7).forEach { d ->
-                            FilterChip(
-                                selected = days == d,
-                                onClick = { viewModel.routineDaysPerWeek.value = d },
-                                label = {
-                                    Text(
-                                        text = "$d Days",
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 12.sp,
-                                        maxLines = 1,
-                                        softWrap = false,
-                                        textAlign = TextAlign.Center,
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = MintGreen,
-                                    selectedLabelColor = DarkBg,
-                                    containerColor = DarkSurfaceVariant,
-                                    labelColor = TextWhite
-                                ),
+                            val selected = days == d
+                            Surface(
                                 modifier = Modifier
                                     .weight(1f)
-                                    .testTag("days_chip_$d")
-                            )
+                                    // A minimum, not a fixed height: at large font scales the
+                                    // value and its unit must be able to grow instead of clipping.
+                                    .heightIn(min = 54.dp)
+                                    .selectable(
+                                        selected = selected,
+                                        onClick = { viewModel.routineDaysPerWeek.value = d },
+                                        role = Role.RadioButton
+                                    )
+                                    .testTag("days_chip_$d"),
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (selected) MintGreen else DarkSurfaceVariant,
+                                border = BorderStroke(
+                                    width = 1.dp,
+                                    color = if (selected) MintGreen else DarkBorder
+                                )
+                            ) {
+                                // Two centred lines rather than a padded chip label: "3 Days" in a
+                                // single line was clipped by the FilterChip's internal start/end
+                                // padding at the narrowest widths. The value and its unit now have
+                                // the whole segment and never fight the chip content padding.
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(vertical = 4.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Text(
+                                        text = "$d",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp,
+                                        color = if (selected) OnAccent else TextWhite,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        textAlign = TextAlign.Center
+                                    )
+                                    Text(
+                                        text = "days",
+                                        fontSize = 9.sp,
+                                        color = if (selected) {
+                                            OnAccent.copy(alpha = 0.82f)
+                                        } else {
+                                            TextMuted
+                                        },
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
                         }
                     }
 
@@ -1032,7 +1075,7 @@ fun AiRoutineGeneratorView(
                     Button(
                         onClick = { viewModel.generateRoutineWithAI() },
                         enabled = !isGenerating,
-                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = OnAccent),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1041,20 +1084,20 @@ fun AiRoutineGeneratorView(
                         if (isGenerating) {
                             CircularProgressIndicator(
                                 modifier = Modifier.size(18.dp),
-                                color = DarkBg,
+                                color = OnAccent,
                                 strokeWidth = 2.dp
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Formulating Program...", color = DarkBg, fontWeight = FontWeight.Bold)
+                            Text("Formulating Program...", color = OnAccent, fontWeight = FontWeight.Bold)
                         } else {
                             Icon(
                                 imageVector = Icons.Default.AutoAwesome,
                                 contentDescription = null,
-                                tint = DarkBg,
+                                tint = OnAccent,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Generate Structured Routine", color = DarkBg, fontWeight = FontWeight.Bold)
+                            Text("Generate Structured Routine", color = OnAccent, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -1100,7 +1143,7 @@ fun AiRoutineGeneratorView(
                                         )
                                     )
                                 },
-                                colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                                colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                                 shape = RoundedCornerShape(8.dp),
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                                 modifier = Modifier.testTag("save_routine_button")
@@ -1108,11 +1151,11 @@ fun AiRoutineGeneratorView(
                                 Icon(
                                     imageVector = Icons.Default.Bookmark,
                                     contentDescription = null,
-                                    tint = DarkBg,
+                                    tint = OnAccent,
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Save", color = DarkBg, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, softWrap = false)
+                                Text("Save", color = OnAccent, fontWeight = FontWeight.Bold, fontSize = 12.sp, maxLines = 1, softWrap = false)
                             }
                         }
 
@@ -1167,7 +1210,7 @@ fun AiRoutineGeneratorView(
                                     }
                                 }
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                            colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1176,10 +1219,10 @@ fun AiRoutineGeneratorView(
                             Icon(
                                 imageVector = Icons.Default.PlayArrow,
                                 contentDescription = null,
-                                tint = DarkBg
+                                tint = OnAccent
                             )
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Start Workout", color = DarkBg, fontWeight = FontWeight.Bold)
+                            Text("Start Workout", color = OnAccent, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -1237,13 +1280,13 @@ fun AiRoutineGeneratorView(
                             pendingRoutineLaunch?.invoke()
                             pendingRoutineLaunch = null
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = FireRed),
+                        colors = ButtonDefaults.buttonColors(containerColor = FireRed, contentColor = OnDanger),
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Text(
                             text = "Exit & Start Routine",
                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                            color = TextWhite
+                            color = OnDanger
                         )
                     }
                 },
@@ -1261,17 +1304,36 @@ fun AiRoutineGeneratorView(
         }
 
         // Bottom Right Button for Unstructured Workout Parser
+        val parserGlassEnabled = LocalLiquidGlassEnabled.current
         FloatingActionButton(
             onClick = {
                 viewModel.resetUnstructuredParseState()
                 showUnstructuredDialog = true
             },
-            containerColor = ElectricCyan,
-            contentColor = DarkBg,
+            containerColor = if (parserGlassEnabled) Color.Transparent else ElectricCyan,
+            contentColor = if (parserGlassEnabled) TextWhite else OnAccent,
             shape = RoundedCornerShape(16.dp),
+            elevation = if (parserGlassEnabled) {
+                FloatingActionButtonDefaults.elevation(0.dp, 0.dp, 0.dp, 0.dp)
+            } else {
+                FloatingActionButtonDefaults.elevation()
+            },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(16.dp)
+                .then(
+                    if (parserGlassEnabled) {
+                        Modifier.liquidGlass(
+                            shape = RoundedCornerShape(16.dp),
+                            enabled = true,
+                            tint = ElectricCyan,
+                            cornerRadius = 16.dp,
+                            elevation = 12.dp
+                        )
+                    } else {
+                        Modifier
+                    }
+                )
                 .testTag("unstructured_parser_fab")
         ) {
             Row(
@@ -1360,7 +1422,7 @@ fun SavedRoutinesView(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 16.dp),
-            contentPadding = PaddingValues(top = 16.dp, bottom = 40.dp),
+            contentPadding = PaddingValues(top = 8.dp, bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
@@ -1595,13 +1657,13 @@ fun SavedRoutinesView(
                             pendingRoutineLaunch?.invoke()
                             pendingRoutineLaunch = null
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = FireRed),
+                        colors = ButtonDefaults.buttonColors(containerColor = FireRed, contentColor = OnDanger),
                         shape = RoundedCornerShape(8.dp)
                     ) {
                         Text(
                             text = "Exit & Start Routine",
                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                            color = TextWhite
+                            color = OnDanger
                         )
                     }
                 },
@@ -1685,11 +1747,11 @@ private fun DeleteRoutineConfirmDialog(
         confirmButton = {
             Button(
                 onClick = onConfirm,
-                colors = ButtonDefaults.buttonColors(containerColor = FireRed),
+                colors = ButtonDefaults.buttonColors(containerColor = FireRed, contentColor = OnDanger),
                 shape = RoundedCornerShape(8.dp),
                 modifier = Modifier.testTag("confirm_delete_routine_button")
             ) {
-                Text("Delete", color = TextWhite, fontWeight = FontWeight.Bold)
+                Text("Delete", color = OnDanger, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
@@ -1819,7 +1881,7 @@ private fun SavedRoutineCard(
             ) {
                 Button(
                     onClick = onStartWorkout,
-                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                     shape = RoundedCornerShape(10.dp),
                     contentPadding = PaddingValues(horizontal = 10.dp),
                     modifier = Modifier
@@ -1830,13 +1892,13 @@ private fun SavedRoutineCard(
                     Icon(
                         imageVector = Icons.Default.PlayArrow,
                         contentDescription = null,
-                        tint = DarkBg,
+                        tint = OnAccent,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = "Start Workout",
-                        color = DarkBg,
+                        color = OnAccent,
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.labelLarge,
                         maxLines = 1,

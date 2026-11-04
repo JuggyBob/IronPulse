@@ -85,6 +85,46 @@ object WidgetPhotoStore {
         }
     }
 
+    /**
+     * Writes already encoded image bytes into the widget photo directory.
+     *
+     * Used by the backup importer, which must restore the exact JPEG/PNG bytes from the archive
+     * rather than decode and re-encode them (re-encoding would change the athlete's picture).
+     * The file goes through a staging name and is renamed only after a complete write, so a failure
+     * cannot leave a partially restored image that the Home card would try to display.
+     */
+    fun writeEncoded(context: Context, bytes: ByteArray, extension: String): String? {
+        if (bytes.isEmpty()) return null
+        val safeExtension = when (extension.lowercase()) {
+            "jpg", "jpeg" -> "jpg"
+            "png" -> "png"
+            "webp" -> "webp"
+            else -> return null
+        }
+        val folder = dir(context)
+        val target = File(
+            folder,
+            "$FILE_PREFIX${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(8)}.$safeExtension"
+        )
+        val staging = File(folder, "${target.name}.tmp")
+        return try {
+            FileOutputStream(staging).use { out -> out.write(bytes) }
+            if (staging.length() != bytes.size.toLong()) {
+                staging.delete()
+                return null
+            }
+            if (!staging.renameTo(target)) {
+                staging.delete()
+                return null
+            }
+            target.absolutePath
+        } catch (e: Exception) {
+            Log.w(TAG, "could not restore the widget photo", e)
+            staging.delete()
+            null
+        }
+    }
+
     /** True when [path] points at a non-empty file that can be handed to the image loader. */
     fun isUsable(path: String): Boolean {
         if (path.isBlank()) return false

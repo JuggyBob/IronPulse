@@ -97,7 +97,16 @@ data class ActiveRoutineWorkoutState(
      */
     val weekday: Int? = null,
     val dayTitle: String? = null,
-    val dayNote: String = ""
+    val dayNote: String = "",
+    /**
+     * The local start-of-day of the planned routine day this session fulfils.
+     *
+     * 0 means the day could not be resolved (for example a legacy routine with no weekday); such a
+     * session is still saved, but it cannot count towards schedule adherence.
+     */
+    val plannedDate: Long = 0L,
+    /** Timezone-stable `yyyyMMdd` key of [plannedDate]. */
+    val plannedDateKey: Long = 0L
 )
 
 object RoutineParser {

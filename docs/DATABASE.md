@@ -1,7 +1,7 @@
 # Database and migrations
 
 IronPulse stores everything on the device in a Room (SQLite) database named
-`ironpulse_database`. The current schema is **version 12**. The database is created and upgraded by
+`ironpulse_database`. The current schema is **version 14**. The database is created and upgraded by
 [`AppDatabase.kt`](../app/src/main/java/com/example/data/db/AppDatabase.kt); the entities live in
 [`Entities.kt`](../app/src/main/java/com/example/data/model/Entities.kt).
 
@@ -23,6 +23,11 @@ database, so the app never depends on a remote restore.
 | `chat_sessions` | AI coach conversations. | `lastUpdatedAt`. |
 | `chat_messages` | Messages belonging to a conversation. | `sessionId`, `timestamp`. |
 | `gemini_summaries` | Cached monthly exercise reports. The table and entity keep their historical name so existing installs keep their data; the feature itself works with every AI provider. | `createdAt`. |
+| `scheduled_workout_days` | One materialized plan row per calendar date, including rest days; stores routine, weekday, day title, exercise count and a timezone-stable `yyyyMMdd` key. | Primary key `dateStart`, `routineId`. |
+
+`workout_sessions` also stores the routine, weekday, planned local date and planned date key that a
+session fulfilled. Those fields are what the schedule-adherence streak uses; they are not inferred
+from the routine title.
 
 Relationships are expressed by ids and names (`logged_sets.sessionId`, `chat_messages.sessionId`)
 rather than SQLite foreign-key constraints. The repository is the only layer that writes them, and
@@ -32,7 +37,7 @@ it keeps the related rows in step.
 
 ## Migration history
 
-Every step is registered in the builder; there is no gap in the chain from 1 to 12.
+Every step is registered in the builder; there is no gap in the chain from 1 to 14.
 
 | Step | What it does |
 |---|---|
@@ -47,6 +52,8 @@ Every step is registered in the builder; there is no gap in the chain from 1 to 
 | 9 → 10 | Adds `saved_routines.scheduleVersion` so old numbered days are bound to real weekdays once. |
 | 10 → 11 | Backfills `bodyWeightKg` for history that never stored it: latest weigh-in at or before the workout end, then the earliest weigh-in, then the profile weight, then 75 kg. |
 | 11 → 12 | Adds the hot-query indexes; no table or row is rewritten. |
+| 12 -> 13 | Adds `routineId`, `routineWeekday` and `plannedDate` to workout sessions and creates `scheduled_workout_days` with its `routineId` index. Existing sessions keep 0, which means untracked rather than retroactively missed. |
+| 13 -> 14 | Adds `dateKey` to scheduled days and `plannedDateKey` to sessions, so plans and completions survive timezone changes. Existing rows derive the key from their local date when read. |
 
 ### 11 → 12 indexes
 
@@ -118,7 +125,7 @@ normal upgrade never drops a table or a row.
 
 | Test | Coverage |
 |---|---|
-| `DatabaseUpgradePathTest` | Opens real databases at v3, v6, v10 and v11, runs the full chain to 12, checks that history survives, and verifies every 11 → 12 index and its column. |
+| `DatabaseUpgradePathTest` | Opens real databases at v3, v6, v10, v11, v12 and v13, runs the full chain to 14, checks that history survives, and verifies the schedule tables, new columns and indexes. |
 | `BodyWeightRepairTest` | The body-weight snapshot and the idempotent repair, including the profile fallback. |
 | `DatasetSeederTest` | Seeded rows carry the canonical display spelling. |
 | `RoutineRestDefaultsTest` | The routine JSON round trip, legacy JSON, clamping and the AI tool output. |

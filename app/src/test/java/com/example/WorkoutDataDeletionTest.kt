@@ -13,6 +13,7 @@ import com.example.data.model.Exercise
 import com.example.data.model.ExerciseType
 import com.example.data.model.LoggedSet
 import com.example.data.model.SavedRoutine
+import com.example.data.model.ScheduledWorkoutDay
 import com.example.data.model.UserProfile
 import com.example.data.model.WorkoutSession
 import com.example.data.repository.FitnessRepository
@@ -55,6 +56,7 @@ class WorkoutDataDeletionTest {
             workoutDao = db.workoutDao(),
             userProfileDao = db.userProfileDao(),
             savedRoutineDao = db.savedRoutineDao(),
+            scheduleDao = db.scheduleDao(),
             bodyWeightDao = db.bodyWeightDao(),
             chatDao = db.chatDao(),
         geminiSummaryDao = db.geminiSummaryDao()
@@ -154,6 +156,18 @@ class WorkoutDataDeletionTest {
         repository.insertChatMessage(
             ChatMessageEntity(sessionId = chatSession.id, sender = "USER", text = "How do I muscle up?")
         )
+        db.scheduleDao().insertScheduleDays(
+            listOf(
+                ScheduledWorkoutDay(
+                    dateStart = 1_000L,
+                    dateKey = 19700101L,
+                    routineId = 1L,
+                    weekday = 4,
+                    dayTitle = "Test day",
+                    exerciseCount = 3
+                )
+            )
+        )
 
         repository.clearAllUserData()
 
@@ -162,6 +176,7 @@ class WorkoutDataDeletionTest {
         assertTrue(repository.getAllCompletedSets().first().isEmpty())
         assertTrue(repository.getDistinctLoggedExerciseNames().first().isEmpty())
         assertTrue(repository.getAllSavedRoutines().first().isEmpty())
+        assertTrue(repository.getScheduleDays().first().isEmpty())
         assertTrue(repository.getAllWeightLogs().first().isEmpty())
         assertTrue(repository.getAllChatSessions().first().isEmpty())
         assertNull(repository.getUserProfile().first())

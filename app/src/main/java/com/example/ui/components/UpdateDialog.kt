@@ -46,6 +46,7 @@ import com.example.ui.theme.GoldenAmber
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.OnAccent
 
 /**
  * The update dialog: check, download, install.
@@ -323,7 +324,7 @@ private fun UpdateButton(
     } else {
         Button(
             onClick = onClick,
-            colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+            colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
             shape = RoundedCornerShape(10.dp),
             modifier = Modifier
                 .fillMaxWidth()
@@ -332,14 +333,14 @@ private fun UpdateButton(
             Icon(
                 imageVector = Icons.Default.Download,
                 contentDescription = null,
-                tint = DarkBg,
+                tint = OnAccent,
                 modifier = Modifier.size(18.dp)
             )
             Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = text,
                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                color = DarkBg
+                color = OnAccent
             )
         }
     }

@@ -43,6 +43,9 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.MonitorWeight
@@ -60,6 +63,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -70,6 +74,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -104,6 +109,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
+import com.example.data.backup.BackupOperation
+import com.example.data.backup.BackupPreview
+import com.example.data.backup.DataTransferState
+import com.example.data.backup.UserDataBackupManager
 import com.example.data.ai.AiEndpointValidator
 import com.example.data.ai.AiModelDescriptor
 import com.example.data.ai.AiProviderId
@@ -125,6 +134,9 @@ import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextDim
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.ThemeMode
+import com.example.ui.theme.OnAccent
+import com.example.ui.theme.OnDanger
 import com.example.ui.viewmodel.MainViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -152,8 +164,10 @@ fun SettingsScreen(
     // Read once at the top: the autosave interval lives in the Preferences card and the update
     // toggle in the IronPulse card, and both have to see the same settings.
     val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
+    val dataTransferState by viewModel.dataTransferState.collectAsStateWithLifecycle()
 
     var showClearDataDialog by remember { mutableStateOf(false) }
+    var showImportDialog by remember { mutableStateOf(false) }
     var showRestoreWidgetsDialog by remember { mutableStateOf(false) }
     var widgetsRestored by remember { mutableStateOf(false) }
     var widgetsRestoreFailed by remember { mutableStateOf(false) }
@@ -218,6 +232,36 @@ fun SettingsScreen(
 
     val uriHandler = LocalUriHandler.current
     val context = LocalContext.current
+
+    // Storage Access Framework: the athlete chooses where the archive goes and which file to
+    // restore. No broad storage permission is requested.
+    val exportDataLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri ->
+        if (uri != null) {
+            viewModel.exportUserData(
+                uri = uri,
+                suggestedName = UserDataBackupManager.suggestedFileName(System.currentTimeMillis())
+            )
+        }
+    }
+    val importDataLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            viewModel.inspectUserDataImport(uri)
+        }
+    }
+
+    LaunchedEffect(dataTransferState) {
+        showImportDialog = dataTransferState is DataTransferState.ReadyToImport
+    }
 
     /**
      * The update state and the About information, read from the view model.
@@ -310,7 +354,7 @@ fun SettingsScreen(
             .fillMaxSize()
             .background(DarkBg)
             .padding(horizontal = 16.dp),
-        contentPadding = PaddingValues(top = 16.dp, bottom = 40.dp),
+        contentPadding = PaddingValues(top = 8.dp, bottom = 120.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
 
@@ -381,6 +425,15 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
+                    ThemeSelector(
+                        selected = appSettings.themeMode,
+                        onSelect = { viewModel.setThemeMode(it) }
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    HorizontalDivider(color = DarkBorder)
+                    Spacer(modifier = Modifier.height(2.dp))
+
                     Text(
                         text = "Weight unit",
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
@@ -418,7 +471,7 @@ fun SettingsScreen(
                                     style = MaterialTheme.typography.bodyMedium.copy(
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                     ),
-                                    color = if (isSelected) DarkBg else TextMuted
+                                    color = if (isSelected) OnAccent else TextMuted
                                 )
                             }
                         }
@@ -469,7 +522,7 @@ fun SettingsScreen(
                                     style = MaterialTheme.typography.bodyMedium.copy(
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                     ),
-                                    color = if (isSelected) DarkBg else TextMuted
+                                    color = if (isSelected) OnAccent else TextMuted
                                 )
                             }
                         }
@@ -521,7 +574,7 @@ fun SettingsScreen(
                                     style = MaterialTheme.typography.bodyMedium.copy(
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                     ),
-                                    color = if (isSelected) DarkBg else TextMuted
+                                    color = if (isSelected) OnAccent else TextMuted
                                 )
                             }
                         }
@@ -559,6 +612,31 @@ fun SettingsScreen(
                         checked = autoplayExerciseDemos,
                         onCheckedChange = { viewModel.setAutoplayExerciseDemos(it) },
                         tag = "settings_autoplay_exercise_demos"
+                    )
+
+                    // The visual finish. It also owns the bottom bar magnification lens: turning it
+                    // off removes the glass surfaces and the lens together, leaving navigation
+                    // exactly as it was.
+                    SettingSwitchRow(
+                        title = "Liquid Glass",
+                        subtitle = if (appSettings.liquidGlassEnabled) {
+                            "Translucent glass surfaces are on. Press and hold the navigation bar to magnify it."
+                        } else {
+                            "Glass surfaces and the navigation bar magnifier are off. The original look is restored."
+                        },
+                        checked = appSettings.liquidGlassEnabled,
+                        onCheckedChange = { viewModel.setLiquidGlassEnabled(it) },
+                        tag = "settings_liquid_glass"
+                    )
+
+                    // Optional because a punch-hole, notch or conventional three-button navigation
+                    // bar can make an always-immersive layout feel cramped. On by default.
+                    SettingSwitchRow(
+                        title = "Fullscreen Mode",
+                        subtitle = "Hide system status and navigation bars to maximize available screen space.",
+                        checked = appSettings.fullscreenEnabled,
+                        onCheckedChange = { viewModel.setFullscreenEnabled(it) },
+                        tag = "settings_fullscreen_mode"
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
@@ -893,11 +971,11 @@ fun SettingsScreen(
                                 viewModel.saveAiApiKey(customApiKeyInput)
                                 showApiKeyConfirmedBadge = true
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = OnAccent),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.testTag("save_api_key_button")
                         ) {
-                            Text("Save API Key", color = DarkBg, fontWeight = FontWeight.Bold)
+                            Text("Save API Key", color = OnAccent, fontWeight = FontWeight.Bold)
                         }
 
                         OutlinedButton(
@@ -1220,7 +1298,7 @@ fun SettingsScreen(
             }
         }
 
-        // Data Management & Danger Zone Card
+        // Data Management: portable backup/restore plus the destructive reset.
         item {
             Card(
                 modifier = Modifier
@@ -1230,7 +1308,221 @@ fun SettingsScreen(
                 shape = RoundedCornerShape(16.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
             ) {
+                val transfer = dataTransferState
                 Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.FileDownload,
+                            contentDescription = null,
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Data Management",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = TextWhite
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Create a portable .ironpulse backup of your IronPulse data, or replace this device's data with a backup you made earlier.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        val busy = transfer is DataTransferState.Running ||
+                            transfer is DataTransferState.ReadyToImport
+                        OutlinedButton(
+                            onClick = {
+                                exportDataLauncher.launch(
+                                    UserDataBackupManager.suggestedFileName(System.currentTimeMillis())
+                                )
+                            },
+                            enabled = !busy,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("export_user_data_button"),
+                            shape = RoundedCornerShape(10.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.65f)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = ElectricCyan)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.FileDownload,
+                                contentDescription = null,
+                                modifier = Modifier.size(17.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Export", fontWeight = FontWeight.Bold)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                importDataLauncher.launch(
+                                    arrayOf(
+                                        "application/zip",
+                                        "application/octet-stream",
+                                        "application/x-zip-compressed"
+                                    )
+                                )
+                            },
+                            enabled = !busy,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("import_user_data_button"),
+                            shape = RoundedCornerShape(10.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, MintGreen.copy(alpha = 0.65f)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MintGreen)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.FileUpload,
+                                contentDescription = null,
+                                modifier = Modifier.size(17.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Import", fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    when (transfer) {
+                        is DataTransferState.Running -> {
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = if (transfer.operation == BackupOperation.EXPORT) {
+                                        "Exporting your data"
+                                    } else {
+                                        "Restoring your backup"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = TextWhite,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    text = transfer.progress.phase.label,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ElectricCyan
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(7.dp))
+                            LinearProgressIndicator(
+                                progress = { transfer.progress.fraction },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(5.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .testTag("data_transfer_progress"),
+                                color = if (transfer.operation == BackupOperation.EXPORT) ElectricCyan else MintGreen,
+                                trackColor = DarkSurfaceVariant
+                            )
+                            if (transfer.operation == BackupOperation.EXPORT) {
+                                TextButton(
+                                    onClick = { viewModel.cancelDataTransfer() },
+                                    modifier = Modifier.testTag("cancel_data_transfer_button")
+                                ) {
+                                    Text("Cancel", color = TextMuted)
+                                }
+                            }
+                        }
+
+                        is DataTransferState.ReadyToImport -> {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "The backup passed validation and is ready for you to review.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MintGreen
+                            )
+                            TextButton(
+                                onClick = { showImportDialog = true },
+                                modifier = Modifier.testTag("review_backup_button")
+                            ) {
+                                Text("Review backup", color = ElectricCyan, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        is DataTransferState.Success -> {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = transfer.title,
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                                color = MintGreen,
+                                modifier = Modifier.testTag("data_transfer_success")
+                            )
+                            Text(
+                                text = transfer.detail,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted
+                            )
+                            TextButton(
+                                onClick = { viewModel.dismissDataTransferMessage() },
+                                modifier = Modifier.testTag("dismiss_data_transfer_button")
+                            ) {
+                                Text("Dismiss", color = TextMuted)
+                            }
+                        }
+
+                        is DataTransferState.Error -> {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = transfer.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = FireRed,
+                                modifier = Modifier.testTag("data_transfer_error")
+                            )
+                            if (transfer.destinationPreserved) {
+                                Text(
+                                    text = "Your existing IronPulse data was not replaced.",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MintGreen
+                                )
+                            }
+                            TextButton(
+                                onClick = { viewModel.dismissDataTransferMessage() },
+                                modifier = Modifier.testTag("dismiss_data_transfer_button")
+                            ) {
+                                Text("Dismiss", color = TextMuted)
+                            }
+                        }
+
+                        is DataTransferState.Cancelled -> {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = transfer.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextMuted,
+                                modifier = Modifier.testTag("data_transfer_cancelled")
+                            )
+                            TextButton(
+                                onClick = { viewModel.dismissDataTransferMessage() },
+                                modifier = Modifier.testTag("dismiss_data_transfer_button")
+                            ) {
+                                Text("Dismiss", color = TextMuted)
+                            }
+                        }
+
+                        DataTransferState.Idle -> Unit
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Backups contain personal data and are not encrypted. Store the file somewhere secure. API keys, your profile picture and exercise images/GIFs are never included; your current API keys and profile picture stay on this device.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextDim,
+                        lineHeight = 16.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    HorizontalDivider(color = DarkBorder)
+                    Spacer(modifier = Modifier.height(14.dp))
+
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Default.DeleteSweep,
@@ -1240,28 +1532,25 @@ fun SettingsScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Data Management & History",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            text = "Delete App Data",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                             color = TextWhite
                         )
                     }
-
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Permanently erase every piece of data you have stored in this app: workout sessions, logged sets, saved routines, weigh-ins, AI coach chat history, your AI monthly summaries, your saved AI provider settings and API keys, your profile, rest timer presets, your Home widget layout and the widget photos saved on this phone.",
+                        text = "Permanently erase workout sessions, logged sets, routines, weigh-ins, AI chat history and summaries, AI provider settings and API keys, your profile, rest timer presets, the Home widget layout and saved widget photos.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Your exercise library is kept, including exercises created by the AI parser and your own custom exercises.",
+                        text = "The exercise library is kept, including exercises created by the AI parser and your own custom exercises.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MintGreen
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
-
-                    // Delete App Data Button
                     Button(
                         onClick = { showClearDataDialog = true },
                         colors = ButtonDefaults.buttonColors(containerColor = FireRed.copy(alpha = 0.15f)),
@@ -1283,6 +1572,21 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+
+    val pendingPreview = (dataTransferState as? DataTransferState.ReadyToImport)?.preview
+    if (showImportDialog && pendingPreview != null) {
+        ImportDataConfirmationDialog(
+            preview = pendingPreview,
+            onConfirm = {
+                showImportDialog = false
+                viewModel.confirmUserDataImport()
+            },
+            onDismiss = {
+                showImportDialog = false
+                viewModel.cancelPendingUserDataImport()
+            }
+        )
     }
 
     // The update checker.
@@ -1346,10 +1650,10 @@ fun SettingsScreen(
                             // The settings screen is not there either, so there is nothing to do.
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                     shape = RoundedCornerShape(10.dp)
                 ) {
-                    Text("Open the settings", color = DarkBg, fontWeight = FontWeight.Bold)
+                    Text("Open the settings", color = OnAccent, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -1421,11 +1725,11 @@ fun SettingsScreen(
                             widgetsRestoreFailed = !success
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = FireRed),
+                    colors = ButtonDefaults.buttonColors(containerColor = FireRed, contentColor = OnDanger),
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.testTag("confirm_restore_widgets")
                 ) {
-                    Text("Restore Defaults", color = TextWhite, fontWeight = FontWeight.Bold)
+                    Text("Restore Defaults", color = OnDanger, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -1497,10 +1801,10 @@ fun SettingsScreen(
                         viewModel.deleteAllAppData()
                         showClearDataDialog = false
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = FireRed),
+                    colors = ButtonDefaults.buttonColors(containerColor = FireRed, contentColor = OnDanger),
                     shape = RoundedCornerShape(10.dp)
                 ) {
-                    Text("Delete App Data", color = TextWhite, fontWeight = FontWeight.Bold)
+                    Text("Delete App Data", color = OnDanger, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -2103,11 +2407,11 @@ fun SettingsScreen(
                             },
                             enabled = !isValidatingModel &&
                                 (modelInputText.isNotBlank() || activeAiProvider == AiProviderId.GOOGLE),
-                            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = OnAccent),
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier.testTag("save_model_button")
                         ) {
-                            Text("Save model", color = DarkBg, fontWeight = FontWeight.Bold)
+                            Text("Save model", color = OnAccent, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -2348,6 +2652,111 @@ private fun ApiKeyHelpStep(number: Int, text: String) {
 }
 
 /**
+ * The theme picker.
+ *
+ * A plain menu rather than a set of preview cards: the whole app behind it changes the moment an
+ * item is chosen, so the page itself is the preview. The selected row carries a check and an accent
+ * label, and every item has its own test tag for the UI tests.
+ */
+@Composable
+private fun ThemeSelector(
+    selected: ThemeMode,
+    onSelect: (ThemeMode) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "Theme",
+            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = TextWhite
+        )
+        Text(
+            text = "Applies immediately. Liquid Glass works with every theme.",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextMuted
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Box {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(DarkBg)
+                    .border(1.dp, DarkBorder, RoundedCornerShape(10.dp))
+                    .clickable { expanded = true }
+                    .padding(horizontal = 14.dp, vertical = 12.dp)
+                    .testTag("settings_theme_selector"),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = selected.displayName,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                        color = TextWhite
+                    )
+                    Text(
+                        text = selected.description,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Default.ExpandMore,
+                    contentDescription = "Choose theme",
+                    tint = TextMuted,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier
+                    .background(DarkSurface)
+                    .testTag("settings_theme_menu")
+            ) {
+                ThemeMode.values().forEach { mode ->
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(
+                                    text = mode.displayName,
+                                    color = if (mode == selected) ElectricCyan else TextWhite,
+                                    fontWeight = if (mode == selected) {
+                                        FontWeight.Bold
+                                    } else {
+                                        FontWeight.Normal
+                                    }
+                                )
+                                Text(
+                                    text = mode.description,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextMuted
+                                )
+                            }
+                        },
+                        onClick = {
+                            expanded = false
+                            onSelect(mode)
+                        },
+                        trailingIcon = {
+                            if (mode == selected) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    tint = ElectricCyan
+                                )
+                            }
+                        },
+                        modifier = Modifier.testTag("settings_theme_item_${mode.storageKey}")
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
  * One labelled on/off row of the preferences card.
  */
 @Composable
@@ -2383,7 +2792,7 @@ private fun SettingSwitchRow(
             checked = checked,
             onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(
-                checkedThumbColor = DarkBg,
+                checkedThumbColor = OnAccent,
                 checkedTrackColor = MintGreen,
                 uncheckedThumbColor = TextMuted,
                 uncheckedTrackColor = DarkSurfaceVariant,
@@ -2560,11 +2969,11 @@ private fun RevertCatalogCard(
                         showConfirm = false
                         onRevert(keepUserCreated, keepAiCreated)
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = GoldenAmber),
+                    colors = ButtonDefaults.buttonColors(containerColor = GoldenAmber, contentColor = OnAccent),
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier.testTag("confirm_revert_catalog_button")
                 ) {
-                    Text("Revert", color = DarkBg, fontWeight = FontWeight.Bold)
+                    Text("Revert", color = OnAccent, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -2578,6 +2987,106 @@ private fun RevertCatalogCard(
         )
     }
 }
+
+/**
+ * The destructive confirmation for import.
+ *
+ * It spells out the replacement semantics before the athlete can proceed: this is not a merge, the
+ * destination's local credentials and profile picture are kept, and the excluded exercise media
+ * will not come back with the backup.
+ */
+@Composable
+private fun ImportDataConfirmationDialog(
+    preview: BackupPreview,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = DarkSurface,
+        modifier = Modifier.testTag("import_confirmation_dialog"),
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = FireRed,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Replace all IronPulse data?", color = TextWhite, fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    text = "This is a replacement, not a merge. Every workout, routine, weigh-in, AI conversation, saved summary, custom exercise, preference and Home customization currently on this device will be replaced by the backup's contents.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextWhite
+                )
+                Text(
+                    text = "Backup: ${preview.fileName ?: "selected file"}\n" +
+                        "Created: ${formatBackupDate(preview.exportedAtEpochMillis)}\n" +
+                        "Source: IronPulse ${preview.appVersionName} (${preview.appVersionCode})\n" +
+                        "Size: ${formatBackupBytes(preview.archiveSizeBytes)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted,
+                    lineHeight = 17.sp
+                )
+                Text(
+                    text = "Contents: ${preview.sectionCounts["workouts"] ?: 0} workout records, " +
+                        "${preview.sectionCounts["routines"] ?: 0} routine records, " +
+                        "${preview.sectionCounts["exercises"] ?: 0} custom/edited exercises, " +
+                        "${preview.sectionCounts["ai"] ?: 0} AI records, " +
+                        "${preview.sectionCounts["progress"] ?: 0} weigh-ins.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MintGreen,
+                    lineHeight = 17.sp
+                )
+                Text(
+                    text = "Kept on this device: your API keys and your current profile picture. " +
+                        "Exercise images and GIF animations are not restored. Your current data cannot be recovered after this completes.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted,
+                    lineHeight = 17.sp
+                )
+                Text(
+                    text = "This cannot be undone.",
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                    color = FireRed
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(containerColor = FireRed, contentColor = OnDanger),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.testTag("confirm_import_data")
+            ) {
+                Text("Replace My Data", color = OnDanger, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.testTag("cancel_import_data")
+            ) {
+                Text("Cancel", color = TextMuted)
+            }
+        }
+    )
+}
+
+private fun formatBackupBytes(bytes: Long): String {
+    if (bytes < 1024L) return "$bytes B"
+    val kb = bytes / 1024.0
+    if (kb < 1024.0) return String.format(Locale.US, "%.1f KB", kb)
+    return String.format(Locale.US, "%.1f MB", kb / 1024.0)
+}
+
+private fun formatBackupDate(epochMillis: Long): String =
+    SimpleDateFormat("MMM d, yyyy, HH:mm", Locale.getDefault()).format(Date(epochMillis))
 
 @Composable
 private fun BulletLine(text: String, color: Color) {

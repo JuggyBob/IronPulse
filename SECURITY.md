@@ -10,11 +10,9 @@ else finds them.
 
 | Version | Supported |
 |---|---|
-| 3.0.x | ✅ |
-| 2.0.x | ✅ |
-| 1.1.x | ✅ |
-| 1.0.x | ✅ |
-| < 1.0.0 | ❌ |
+| 4.0.x | Yes |
+| 3.0.x | No - upgrade to 4.0.x |
+| 2.x | No - upgrade to 4.0.x |
 
 Only the latest released version receives security fixes. If you are on an older build, upgrade —
 there is no patched older branch.
@@ -113,7 +111,7 @@ Release APKs are attached to the
 checksums.
 
 ```bash
-sha256sum IronPulse2.0.0-release.apk
+sha256sum IronPulse4.0.0-release.apk
 ```
 
 Compare against the checksum in the release notes before installing an APK you did not build

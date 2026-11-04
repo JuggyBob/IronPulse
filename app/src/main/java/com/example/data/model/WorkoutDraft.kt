@@ -38,6 +38,10 @@ data class WorkoutDraft(
     val weekday: Int = Weekday.MONDAY,
     val dayTitle: String = "",
     val dayNote: String = "",
+    /** The planned date this routine day fulfils, or 0 when it was never resolved. */
+    val plannedDate: Long = 0L,
+    /** Timezone-stable `yyyyMMdd` key of [plannedDate]. */
+    val plannedDateKey: Long = 0L,
     /** The prescribed targets of the day, so the routine workout can be rebuilt exactly. */
     val routineItems: List<RoutineExerciseItem> = emptyList()
 ) {
@@ -71,6 +75,8 @@ object WorkoutDraftCodec {
                 put("weekday", draft.weekday)
                 put("dayTitle", draft.dayTitle)
                 put("dayNote", draft.dayNote)
+                put("plannedDate", draft.plannedDate)
+                put("plannedDateKey", draft.plannedDateKey)
                 put("routineItems", RoutineParser.serializeExercises(draft.routineItems))
             }
         }
@@ -126,6 +132,10 @@ object WorkoutDraftCodec {
                     ),
                 dayTitle = root.optString("dayTitle", ""),
                 dayNote = root.optString("dayNote", ""),
+                // A draft written before the streak update has no planned date. It is left at 0
+                // rather than guessed, so a resumed workout cannot invent schedule adherence.
+                plannedDate = root.optLong("plannedDate", 0L),
+                plannedDateKey = root.optLong("plannedDateKey", 0L),
                 routineItems = routineItems
             )
         } catch (e: Exception) {

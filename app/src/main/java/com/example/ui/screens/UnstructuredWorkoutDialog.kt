@@ -78,6 +78,8 @@ import com.example.ui.theme.FireRed
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.ThemeRuntime
+import com.example.ui.theme.OnAccent
 import com.example.ui.viewmodel.MainViewModel
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -107,7 +109,7 @@ fun UnstructuredWorkoutDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.7f))
+                .background(ThemeRuntime.palette.scrim.copy(alpha = 0.7f))
                 .padding(horizontal = 16.dp, vertical = 24.dp),
             contentAlignment = Alignment.Center
         ) {
@@ -465,7 +467,7 @@ fun UnstructuredWorkoutDialog(
                                                     onStartWorkoutDirectly()
                                                 }
                                             },
-                                            colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                                            colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                                             shape = RoundedCornerShape(10.dp),
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -475,13 +477,13 @@ fun UnstructuredWorkoutDialog(
                                             Icon(
                                                 imageVector = Icons.Default.PlayArrow,
                                                 contentDescription = null,
-                                                tint = DarkBg,
+                                                tint = OnAccent,
                                                 modifier = Modifier.size(18.dp)
                                             )
                                             Spacer(modifier = Modifier.width(6.dp))
                                             Text(
                                                 text = "Start Workout Now",
-                                                color = DarkBg,
+                                                color = OnAccent,
                                                 fontWeight = FontWeight.Bold
                                             )
                                         }
@@ -541,7 +543,7 @@ fun UnstructuredWorkoutDialog(
                                 )
                             },
                             enabled = workoutTextInput.isNotBlank() && parseState !is UnstructuredParseState.Loading,
-                            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = OnAccent),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier
                                 .weight(2f)
@@ -551,20 +553,20 @@ fun UnstructuredWorkoutDialog(
                             if (parseState is UnstructuredParseState.Loading) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(18.dp),
-                                    color = DarkBg,
+                                    color = OnAccent,
                                     strokeWidth = 2.dp
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Parsing Program...", color = DarkBg, fontWeight = FontWeight.Bold)
+                                Text("Parsing Program...", color = OnAccent, fontWeight = FontWeight.Bold)
                             } else {
                                 Icon(
                                     imageVector = Icons.Default.AutoAwesome,
                                     contentDescription = null,
-                                    tint = DarkBg,
+                                    tint = OnAccent,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Parse & Save Routine", color = DarkBg, fontWeight = FontWeight.Bold)
+                                Text("Parse & Save Routine", color = OnAccent, fontWeight = FontWeight.Bold)
                             }
                         }
                     }

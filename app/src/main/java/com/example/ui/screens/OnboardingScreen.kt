@@ -89,6 +89,7 @@ import com.example.ui.theme.GoldenAmber
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.OnAccent
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 
@@ -291,7 +292,7 @@ fun OnboardingScreen(viewModel: MainViewModel) {
                         enabled = profileComplete,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = ElectricCyan,
-                            contentColor = DarkBg,
+                            contentColor = OnAccent,
                             disabledContainerColor = DarkSurfaceVariant,
                             disabledContentColor = TextMuted
                         ),
@@ -317,7 +318,7 @@ fun OnboardingScreen(viewModel: MainViewModel) {
                         },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = ElectricCyan,
-                            contentColor = DarkBg
+                            contentColor = OnAccent
                         ),
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
@@ -512,7 +513,7 @@ private fun ProfilePage(
                     label = { Text(unit.suffix) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = ElectricCyan,
-                        selectedLabelColor = DarkBg,
+                        selectedLabelColor = OnAccent,
                         labelColor = TextMuted
                     ),
                     border = FilterChipDefaults.filterChipBorder(
@@ -581,7 +582,7 @@ private fun ProfilePage(
                     label = { Text(level) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = ElectricCyan,
-                        selectedLabelColor = DarkBg,
+                        selectedLabelColor = OnAccent,
                         labelColor = TextMuted
                     ),
                     border = FilterChipDefaults.filterChipBorder(

@@ -79,6 +79,8 @@ import com.example.ui.theme.FireRed
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.ThemeRuntime
+import com.example.ui.theme.OnAccent
 import com.example.ui.viewmodel.MainViewModel
 
 private data class PromptRoutineExample(
@@ -122,7 +124,7 @@ fun PromptWorkoutRoutineDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.7f))
+                .background(ThemeRuntime.palette.scrim.copy(alpha = 0.7f))
                 .padding(horizontal = 16.dp, vertical = 24.dp),
             contentAlignment = Alignment.Center
         ) {
@@ -423,7 +425,7 @@ fun PromptWorkoutRoutineDialog(
                                                 enabled = !successState.isSaved,
                                                 colors = ButtonDefaults.buttonColors(
                                                     containerColor = if (successState.isSaved) DarkSurfaceVariant else MintGreen,
-                                                    contentColor = if (successState.isSaved) MintGreen else DarkBg,
+                                                    contentColor = if (successState.isSaved) MintGreen else OnAccent,
                                                     disabledContainerColor = DarkSurfaceVariant,
                                                     disabledContentColor = MintGreen
                                                 ),
@@ -554,7 +556,7 @@ fun PromptWorkoutRoutineDialog(
                                                     }
                                                 }
                                             },
-                                            colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                                            colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                                             shape = RoundedCornerShape(10.dp),
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -564,13 +566,13 @@ fun PromptWorkoutRoutineDialog(
                                             Icon(
                                                 imageVector = Icons.Default.PlayArrow,
                                                 contentDescription = null,
-                                                tint = DarkBg,
+                                                tint = OnAccent,
                                                 modifier = Modifier.size(18.dp)
                                             )
                                             Spacer(modifier = Modifier.width(6.dp))
                                             Text(
                                                 text = "Start Workout Now",
-                                                color = DarkBg,
+                                                color = OnAccent,
                                                 fontWeight = FontWeight.Bold
                                             )
                                         }
@@ -631,7 +633,7 @@ fun PromptWorkoutRoutineDialog(
                                 )
                             },
                             enabled = promptTextInput.isNotBlank() && promptState !is CustomRoutinePromptState.Loading,
-                            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = OnAccent),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier
                                 .weight(2f)
@@ -641,20 +643,20 @@ fun PromptWorkoutRoutineDialog(
                             if (promptState is CustomRoutinePromptState.Loading) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(18.dp),
-                                    color = DarkBg,
+                                    color = OnAccent,
                                     strokeWidth = 2.dp
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Generating Routine...", color = DarkBg, fontWeight = FontWeight.Bold)
+                                Text("Generating Routine...", color = OnAccent, fontWeight = FontWeight.Bold)
                             } else {
                                 Icon(
                                     imageVector = Icons.Default.AutoAwesome,
                                     contentDescription = null,
-                                    tint = DarkBg,
+                                    tint = OnAccent,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Generate Routine", color = DarkBg, fontWeight = FontWeight.Bold)
+                                Text("Generate Routine", color = OnAccent, fontWeight = FontWeight.Bold)
                             }
                         }
                     }

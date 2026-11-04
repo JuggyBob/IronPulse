@@ -59,6 +59,7 @@ import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.OnAccent
 
 /**
  * The starter routine browser, opened from the square button next to "Create New Routine".
@@ -337,7 +338,7 @@ private fun TemplatePreview(
         Spacer(modifier = Modifier.height(4.dp))
         Button(
             onClick = onAdopt,
-            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = DarkBg),
+            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = OnAccent),
             shape = RoundedCornerShape(12.dp),
             modifier = Modifier
                 .fillMaxWidth()
@@ -387,4 +388,4 @@ private fun remember_missing(
  * in one place is what makes it read as one surface; spreading the same value across several
  * literals is how a two-tone split appeared in the first place.
  */
-private val SheetSurface = DarkBg
+private val SheetSurface get() = DarkBg

@@ -107,6 +107,7 @@ import com.example.ui.theme.GoldenAmber
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.OnAccent
 import com.example.ui.viewmodel.MainViewModel
 import com.example.util.ExerciseMediaStore
 import kotlinx.coroutines.delay
@@ -411,6 +412,7 @@ fun CreateRoutineScreen(
                         enabled = canSave,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MintGreen,
+                            contentColor = OnAccent,
                             disabledContainerColor = DarkSurfaceVariant
                         ),
                         shape = RoundedCornerShape(8.dp),
@@ -420,7 +422,7 @@ fun CreateRoutineScreen(
                         Text(
                             text = if (isEditing) "Update" else "Save",
                             style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                            color = if (canSave) DarkBg else TextMuted
+                            color = if (canSave) OnAccent else TextMuted
                         )
                     }
                 }
@@ -431,7 +433,7 @@ fun CreateRoutineScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 16.dp),
-                contentPadding = PaddingValues(top = 16.dp, bottom = 40.dp),
+                contentPadding = PaddingValues(top = 8.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 // Section 1: Routine Information
@@ -535,13 +537,13 @@ fun CreateRoutineScreen(
                                             Text(
                                                 text = Weekday.shortName(day),
                                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                                color = if (isSelected) DarkBg else TextWhite,
+                                                color = if (isSelected) OnAccent else TextWhite,
                                                 maxLines = 1
                                             )
                                             Text(
                                                 text = if (count > 0) "$count" else "Rest",
                                                 style = MaterialTheme.typography.labelSmall,
-                                                color = if (isSelected) DarkBg else TextMuted,
+                                                color = if (isSelected) OnAccent else TextMuted,
                                                 maxLines = 1
                                             )
                                         }
@@ -743,7 +745,8 @@ fun CreateRoutineScreen(
                                                         searchQuery = "" // Clear after adding
                                                     },
                                                     colors = ButtonDefaults.buttonColors(
-                                                        containerColor = if (isAlreadyAdded) DarkSurfaceVariant else ElectricCyan
+                                                        containerColor = if (isAlreadyAdded) DarkSurfaceVariant else ElectricCyan,
+                                                        contentColor = if (isAlreadyAdded) MintGreen else OnAccent
                                                     ),
                                                     shape = RoundedCornerShape(6.dp),
                                                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
@@ -752,14 +755,14 @@ fun CreateRoutineScreen(
                                                     Icon(
                                                         imageVector = if (isAlreadyAdded) Icons.Default.Check else Icons.Default.Add,
                                                         contentDescription = null,
-                                                        tint = if (isAlreadyAdded) MintGreen else DarkBg,
+                                                        tint = if (isAlreadyAdded) MintGreen else OnAccent,
                                                         modifier = Modifier.size(14.dp)
                                                     )
                                                     Spacer(modifier = Modifier.width(4.dp))
                                                     Text(
                                                         text = if (isAlreadyAdded) "Add More" else "Add",
                                                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                                        color = if (isAlreadyAdded) MintGreen else DarkBg
+                                                        color = if (isAlreadyAdded) MintGreen else OnAccent
                                                     )
                                                 }
                                             }
@@ -922,6 +925,7 @@ fun CreateRoutineScreen(
                         enabled = canSave,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = MintGreen,
+                            contentColor = OnAccent,
                             disabledContainerColor = DarkSurfaceVariant
                         ),
                         shape = RoundedCornerShape(12.dp),
@@ -933,14 +937,14 @@ fun CreateRoutineScreen(
                         Icon(
                             imageVector = Icons.Default.Check,
                             contentDescription = null,
-                            tint = if (canSave) DarkBg else TextMuted,
+                            tint = if (canSave) OnAccent else TextMuted,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = if (isEditing) "Update Workout Routine" else "Save Workout Routine",
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                            color = if (canSave) DarkBg else TextMuted
+                            color = if (canSave) OnAccent else TextMuted
                         )
                     }
                 }

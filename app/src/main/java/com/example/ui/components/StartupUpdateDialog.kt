@@ -51,6 +51,7 @@ import com.example.ui.theme.FireRed
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.OnAccent
 
 /**
  * The update prompt the app opens by itself when a newer release exists.
@@ -144,7 +145,7 @@ fun StartupUpdateDialog(
                         colors = CheckboxDefaults.colors(
                             checkedColor = ElectricCyan,
                             uncheckedColor = TextMuted,
-                            checkmarkColor = DarkBg
+                            checkmarkColor = OnAccent
                         ),
                         modifier = Modifier.testTag("startup_update_dont_show_checkbox")
                     )
@@ -234,20 +235,20 @@ fun StartupUpdateDialog(
                     if (state.asset != null) {
                         Button(
                             onClick = onDownload,
-                            colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                            colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.testTag("startup_update_download_button")
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Download,
                                 contentDescription = null,
-                                tint = DarkBg,
+                                tint = OnAccent,
                                 modifier = Modifier.size(17.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = "Download",
-                                color = DarkBg,
+                                color = OnAccent,
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -257,13 +258,13 @@ fun StartupUpdateDialog(
                 is UpdateState.ReadyToInstall -> {
                     Button(
                         onClick = onInstall,
-                        colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                        colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.testTag("startup_update_install_button")
                     ) {
                         Text(
                             text = "Install",
-                            color = DarkBg,
+                            color = OnAccent,
                             fontWeight = FontWeight.Bold
                         )
                     }
@@ -272,13 +273,13 @@ fun StartupUpdateDialog(
                 is UpdateState.Failed -> {
                     Button(
                         onClick = onDownload,
-                        colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                        colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.testTag("startup_update_retry_button")
                     ) {
                         Text(
                             text = "Try again",
-                            color = DarkBg,
+                            color = OnAccent,
                             fontWeight = FontWeight.Bold
                         )
                     }

@@ -72,6 +72,7 @@ import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import com.example.ui.theme.VioletPurple
+import com.example.ui.theme.OnAccent
 
 /**
  * Searchable muscle picker.
@@ -203,7 +204,7 @@ fun MuscleSelectorDialog(
                                     Icon(
                                         imageVector = Icons.Default.Check,
                                         contentDescription = null,
-                                        tint = DarkBg,
+                                        tint = OnAccent,
                                         modifier = Modifier.size(13.dp)
                                     )
                                     Spacer(modifier = Modifier.width(4.dp))
@@ -213,7 +214,7 @@ fun MuscleSelectorDialog(
                                     style = MaterialTheme.typography.labelSmall.copy(
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                     ),
-                                    color = if (isSelected) DarkBg else TextWhite,
+                                    color = if (isSelected) OnAccent else TextWhite,
                                     maxLines = 1
                                 )
                             }
@@ -245,7 +246,7 @@ fun MuscleSelectorDialog(
                     }
                     Button(
                         onClick = onDismiss,
-                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = OnAccent),
                         shape = RoundedCornerShape(12.dp),
                         contentPadding = PaddingValues(vertical = 12.dp),
                         modifier = Modifier
@@ -255,7 +256,7 @@ fun MuscleSelectorDialog(
                         Text(
                             text = "Done",
                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                            color = DarkBg
+                            color = OnAccent
                         )
                     }
                 }
@@ -576,7 +577,7 @@ fun ExerciseDetailDialog(
                 Spacer(modifier = Modifier.height(16.dp))
                 Button(
                     onClick = onAddSet,
-                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                     shape = RoundedCornerShape(12.dp),
                     contentPadding = PaddingValues(vertical = 14.dp),
                     modifier = Modifier
@@ -587,14 +588,14 @@ fun ExerciseDetailDialog(
                     Icon(
                         imageVector = Icons.Default.Add,
                         contentDescription = null,
-                        tint = DarkBg,
+                        tint = OnAccent,
                         modifier = Modifier.size(20.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = "Add Set",
                         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = DarkBg
+                        color = OnAccent
                     )
                 }
             }

@@ -40,6 +40,7 @@ import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.TextMuted
+import com.example.ui.theme.ThemeRuntime
 
 /** Width of the anatomical drawing, in drawing units. */
 private const val BODY_WIDTH = 100f
@@ -328,11 +329,11 @@ private fun muscleShapes(isFront: Boolean): List<MuscleShape> {
 // Palette
 // ---------------------------------------------------------------------------
 
-private val BodySkin = Color(0xFF39424E)
-private val BodySkinLine = Color(0xFF4C5764)
-private val MuscleRest = Color(0xFF3E4B5D)
-private val MuscleDim = Color(0xFF2A323C)
-private val MuscleLine = Color(0xFF566374)
+private val BodySkin get() = ThemeRuntime.palette.muscle.skin
+private val BodySkinLine get() = ThemeRuntime.palette.muscle.skinLine
+private val MuscleRest get() = ThemeRuntime.palette.muscle.rest
+private val MuscleDim get() = ThemeRuntime.palette.muscle.dim
+private val MuscleLine get() = ThemeRuntime.palette.muscle.line
 
 // ---------------------------------------------------------------------------
 // Composable
@@ -511,11 +512,15 @@ private fun DrawScope.drawFigureBody(
         // Unoutlined blocks (the abs) are painted a shade lighter so the six pack reads as one group
         val fill = when {
             isActive -> ElectricCyan
-            highlighted != null -> if (shape.outlined) MuscleDim else Color(0xFF323A45)
+            highlighted != null -> if (shape.outlined) {
+                MuscleDim
+            } else {
+                ThemeRuntime.palette.muscle.inactiveFill
+            }
             shape.outlined -> MuscleRest
-            else -> Color(0xFF45536A)
+            else -> ThemeRuntime.palette.muscle.absFill
         }
-        val outline = if (isActive) Color(0xFF8FF6FF) else MuscleLine
+        val outline = if (isActive) ThemeRuntime.palette.muscle.activeOutline else MuscleLine
         drawPair({ shape.buildInto(this) }, fill, outline, shape.outlined)
     }
 }

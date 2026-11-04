@@ -119,6 +119,8 @@ import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import com.example.ui.theme.VioletPurple
+import com.example.ui.theme.ThemeRuntime
+import com.example.ui.theme.OnAccent
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.ProgressMetric
 import java.text.SimpleDateFormat
@@ -239,7 +241,7 @@ fun ProgressScreen(
             .fillMaxSize()
             .background(DarkBg)
             .padding(horizontal = 16.dp),
-        contentPadding = PaddingValues(top = 16.dp, bottom = 32.dp),
+        contentPadding = PaddingValues(top = 8.dp, bottom = 120.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // Header, with the workout history entry point: the log of past sessions is a record of
@@ -576,7 +578,7 @@ fun ProgressScreen(
                             enabled = hasSelection,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = ElectricCyan,
-                                contentColor = DarkBg,
+                                contentColor = OnAccent,
                                 disabledContainerColor = DarkSurfaceVariant,
                                 disabledContentColor = TextMuted
                             ),
@@ -589,14 +591,14 @@ fun ProgressScreen(
                             Icon(
                                 imageVector = Icons.Default.AutoAwesome,
                                 contentDescription = null,
-                                tint = if (hasSelection) DarkBg else TextMuted,
+                                tint = if (hasSelection) OnAccent else TextMuted,
                                 modifier = Modifier.size(18.dp)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "AI Monthly Summary",
                                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
-                                color = if (hasSelection) DarkBg else TextMuted,
+                                color = if (hasSelection) OnAccent else TextMuted,
                                 maxLines = 1,
                                 softWrap = false,
                                 overflow = TextOverflow.Ellipsis
@@ -681,7 +683,7 @@ fun ProgressScreen(
                                     label = { Text("All Weights", fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.Normal) },
                                     colors = FilterChipDefaults.filterChipColors(
                                         selectedContainerColor = activeAccent,
-                                        selectedLabelColor = DarkBg,
+                                        selectedLabelColor = OnAccent,
                                         containerColor = DarkSurfaceVariant,
                                         labelColor = TextWhite
                                     ),
@@ -732,7 +734,7 @@ fun ProgressScreen(
                                     label = { Text(label, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
                                     colors = FilterChipDefaults.filterChipColors(
                                         selectedContainerColor = activeAccent,
-                                        selectedLabelColor = DarkBg,
+                                        selectedLabelColor = OnAccent,
                                         containerColor = DarkSurfaceVariant,
                                         labelColor = TextWhite
                                     ),
@@ -1262,7 +1264,7 @@ private fun SavedSummariesDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.7f))
+                .background(ThemeRuntime.palette.scrim.copy(alpha = 0.7f))
                 .padding(horizontal = 16.dp, vertical = 24.dp),
             contentAlignment = Alignment.Center
         ) {

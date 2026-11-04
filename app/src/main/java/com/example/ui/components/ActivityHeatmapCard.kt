@@ -41,6 +41,7 @@ import com.example.ui.theme.DarkSurfaceVariant
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
+import com.example.ui.theme.ThemeRuntime
 import com.example.ui.theme.TextWhite
 
 /** One square of the grid. */
@@ -72,6 +73,9 @@ fun ActivityHeatmapCard(
     // Keys are normalised to local midnight: a day can be handed over with any time of day
     val byDay = remember(days) { days.associateBy { ActivityHeatmap.startOfDay(it.epochDayStart) } }
     val scrollState = rememberScrollState()
+    // A quiet border keeps a rest-day square present even where the empty fill is close to the
+    // card surface (most visibly in Dark and AMOLED). The fill still carries the activity level.
+    val cellBorder = ThemeRuntime.palette.border
 
     // Land on the most recent weeks: a year of history scrolled to its empty start would hide
     // everything the athlete just did.
@@ -188,6 +192,13 @@ fun ActivityHeatmapCard(
                             modifier = Modifier
                                 .size(CELL_SIZE)
                                 .background(color, RoundedCornerShape(3.dp))
+                                .border(
+                                    width = 1.dp,
+                                    color = cellBorder.copy(
+                                        alpha = if (intensity <= 0f) 0.85f else 0.35f
+                                    ),
+                                    shape = RoundedCornerShape(3.dp)
+                                )
                                 .then(
                                     if (isToday) {
                                         Modifier.border(1.5.dp, MintGreen, RoundedCornerShape(3.dp))
@@ -222,6 +233,11 @@ fun ActivityHeatmapCard(
                         .padding(horizontal = 2.dp)
                         .size(13.dp)
                         .background(activityColor(level), RoundedCornerShape(3.dp))
+                        .border(
+                            width = 1.dp,
+                            color = cellBorder.copy(alpha = 0.65f),
+                            shape = RoundedCornerShape(3.dp)
+                        )
                 )
             }
             Spacer(modifier = Modifier.width(6.dp))
@@ -260,12 +276,13 @@ private fun HeatmapToggle(
 
 /** Dim for a rest day, then progressively more vivid green up to fully saturated. */
 private fun activityColor(intensity: Float): Color {
+    val heatmap = ThemeRuntime.palette.heatmap
     val clamped = intensity.coerceIn(0f, 1f)
     return when {
-        clamped <= 0f -> Color(0xFF1B2026)
-        clamped < 0.25f -> Color(0xFF1B5E33)
-        clamped < 0.5f -> Color(0xFF23893D)
-        clamped < 0.75f -> Color(0xFF2FBE4C)
-        else -> Color(0xFF3CE063)
+        clamped <= 0f -> heatmap.empty
+        clamped < 0.25f -> heatmap.low
+        clamped < 0.5f -> heatmap.medium
+        clamped < 0.75f -> heatmap.high
+        else -> heatmap.max
     }
 }

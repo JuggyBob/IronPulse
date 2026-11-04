@@ -1,6 +1,9 @@
 package com.example
 
+import android.graphics.RectF
+import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -8,6 +11,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
@@ -16,8 +20,12 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -25,20 +33,24 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.FitnessCenter
@@ -51,29 +63,37 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScaffoldDefaults
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -88,7 +108,14 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.data.model.UpdateState
+import com.example.ui.components.LiquidGlassLens
+import com.example.ui.components.LocalLiquidGlassEnabled
 import com.example.ui.components.StartupUpdateDialog
+import com.example.ui.components.detectLiquidGlassLensGesture
+import com.example.ui.components.drawLiquidGlassLens
+import com.example.ui.components.liquidGlass
+import com.example.ui.components.liquidGlassBackdrop
+import com.example.ui.components.rememberReducedMotion
 import com.example.ui.screens.AiCoachScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.OnboardingScreen
@@ -105,9 +132,12 @@ import com.example.ui.theme.MintGreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.ThemeRuntime
+import com.example.ui.theme.OnAccent
 import com.example.ui.viewmodel.MainViewModel
 import com.example.util.ApkInstaller
 import java.io.File
+import kotlin.math.abs
 
 sealed class Screen(val route: String, val title: String, val icon: ImageVector, val tag: String) {
     object LogWorkout : Screen("log_workout", "Exercises", Icons.Default.FitnessCenter, "nav_log_workout")
@@ -116,58 +146,167 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector,
     object Profile : Screen("profile", "Profile", Icons.Default.Person, "nav_profile")
     object AiCoach : Screen("ai_coach", "AI Coach", Icons.Default.AutoAwesome, "nav_ai_coach")
     object Settings : Screen("settings", "Settings", Icons.Default.Settings, "nav_settings")
+
+    companion object {
+        /**
+         * The tab that should stay selected for a pushed detail route.
+         *
+         * Settings is opened from Profile and is not a sixth destination, so the dock would
+         * otherwise have no selected index. Keeping this mapping pure makes the rule testable and
+         * prevents a future detail route from silently changing another tab's highlight.
+         */
+        fun selectedTabRoute(route: String): String =
+            if (route == Settings.route) Profile.route else route
+    }
 }
 
 class MainActivity : ComponentActivity() {
 
+    /** The last mode the athlete chose; reapplied when the window regains focus. */
+    private var fullscreenEnabled = true
+
     /**
-     * Hides the status bar and the on screen navigation bar for as long as the app is in front.
+     * Applies the optional fullscreen policy immediately.
      *
-     * They are hidden rather than merely drawn over, because a training app that keeps two system
-     * bars permanently visible spends a meaningful share of a phone screen on chrome the athlete
-     * never uses while lifting. Swiping from an edge brings them back temporarily, and they fade out
-     * again on their own, so the escape hatch stays without reserving space for it.
+     * Enabled hides both system bars and lets the page render into the cutout area; the Compose
+     * root then pads only the display cutout, so the camera never covers important UI. Disabled
+     * shows both bars and the root pads `safeDrawing`, so no page content sits underneath them.
      *
-     * The transient behaviour matters as much as the hiding: with it the bars appear as an overlay
-     * and the layout does not resize when they slide in, which is what stops the whole page from
-     * jumping under the athlete mid set.
+     * Swiping from an edge still reveals the bars temporarily in fullscreen. That transient
+     * overlay behaviour is what stops the layout from jumping while the athlete is mid-set.
      */
-    private fun goFullScreen() {
+    fun setFullscreenMode(enabled: Boolean) {
+        fullscreenEnabled = enabled
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowCompat.getInsetsController(window, window.decorView).apply {
             systemBarsBehavior =
                 WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            hide(WindowInsetsCompat.Type.systemBars())
+            if (enabled) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    window.attributes = window.attributes.apply {
+                        layoutInDisplayCutoutMode =
+                            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    }
+                }
+                hide(WindowInsetsCompat.Type.systemBars())
+            } else {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    window.attributes = window.attributes.apply {
+                        layoutInDisplayCutoutMode =
+                            WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+                    }
+                }
+                show(WindowInsetsCompat.Type.systemBars())
+            }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        goFullScreen()
+        setFullscreenMode(true)
         setContent {
-            MyApplicationTheme {
-                IronPulseApp()
-            }
+            IronPulseApp()
         }
     }
 
     /**
-     * Reapplies the hiding when the app comes back to the front.
+     * Reapplies the current policy when the app comes back to the front.
      *
      * The bars can be left showing by the system after a notification shade pull or a settings
-     * gesture, and without this they would stay open until the athlete deliberately hid them again.
+     * gesture; without this, fullscreen would stay open until the athlete toggled it again.
      */
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) goFullScreen()
+        if (hasFocus) setFullscreenMode(fullscreenEnabled)
     }
+}
+
+/**
+ * The cutout inset used in fullscreen, measured to the actual camera obstruction.
+ *
+ * `WindowInsets.displayCutout` reports a safe rectangle that is often the full status-bar height
+ * (128px on the test device), while the punch-hole itself ends much sooner. Reserving the whole
+ * rectangle on every page is what produced the oversized blank band. On API 33+ the cutout path's
+ * actual bottom is used; the result is still a safe inset because the path is the physical
+ * obstruction. Older versions keep the platform's safe top inset, so no device is made less safe.
+ *
+ * The ordinary page top padding (8dp after this change) remains inside the inset, giving a small
+ * breathing margin without recreating the old blank band.
+ */
+@Composable
+private fun fullscreenCutoutInsets(): WindowInsets {
+    val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
+    val view = LocalView.current
+    val cutout = WindowInsets.displayCutout
+    val safeTopPx = cutout.getTop(density)
+    val actualTopPx = remember(safeTopPx, view) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && safeTopPx > 0) {
+            val path = ViewCompat.getRootWindowInsets(view)?.displayCutout?.cutoutPath
+            if (path != null) {
+                val bounds = RectF()
+                path.computeBounds(bounds, true)
+                val pathBottom = bounds.bottom.toInt()
+                // Only a top cutout may reduce the top reserve. A side/waterfall cutout path can
+                // span the full display height, and must never become a giant top padding.
+                pathBottom.takeIf { it in 1..safeTopPx } ?: safeTopPx
+            } else {
+                safeTopPx
+            }
+        } else {
+            safeTopPx
+        }
+    }
+    return WindowInsets(
+        left = with(density) { cutout.getLeft(density, layoutDirection).toDp() },
+        top = with(density) { actualTopPx.toDp() },
+        right = with(density) { cutout.getRight(density, layoutDirection).toDp() },
+        bottom = with(density) { cutout.getBottom(density).toDp() }
+    )
 }
 
 @Composable
 fun IronPulseApp() {
-    val navController = rememberNavController()
     val viewModel: MainViewModel = viewModel()
+    val liquidGlassEnabled by viewModel.liquidGlassEnabled.collectAsStateWithLifecycle()
+    val fullscreenEnabled by viewModel.fullscreenEnabled.collectAsStateWithLifecycle()
+    val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    // The activity owns the window policy; Compose owns the preference. The two are connected here
+    // so a toggle applies immediately without recreating the activity.
+    LaunchedEffect(fullscreenEnabled) {
+        (context as? MainActivity)?.setFullscreenMode(fullscreenEnabled)
+    }
+
+    // The theme wraps the whole app, including the navigation bar and every dialog, and is read
+    // from its own flow so an unrelated setting change never re-applies it. Liquid Glass stays a
+    // separate provider: it is an effect, not a theme, and works in all four looks.
+    MyApplicationTheme(themeMode = themeMode) {
+        CompositionLocalProvider(LocalLiquidGlassEnabled provides liquidGlassEnabled) {
+            val insetModifier = if (fullscreenEnabled) {
+                Modifier.windowInsetsPadding(fullscreenCutoutInsets())
+            } else {
+                Modifier.windowInsetsPadding(WindowInsets.safeDrawing)
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    // Paint the cutout/inset strip in the page colour rather than leaving the
+                    // window's default black visible as an unexplained band above the content.
+                    .background(DarkBg)
+                    .then(insetModifier)
+            ) {
+                IronPulseAppContent(viewModel)
+            }
+        }
+    }
+}
+
+@Composable
+private fun IronPulseAppContent(viewModel: MainViewModel) {
+    val navController = rememberNavController()
     val activeRoutineWorkout by viewModel.activeRoutineWorkout.collectAsStateWithLifecycle()
     val activeSession by viewModel.activeSession.collectAsStateWithLifecycle()
     // Gate rather than a route: the landing pages are a modal flow with no back navigation, and
@@ -345,10 +484,10 @@ fun IronPulseApp() {
                             // No settings screen to open: there is nothing else to try.
                         }
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                     shape = RoundedCornerShape(10.dp)
                 ) {
-                    Text("Open the settings", color = DarkBg, fontWeight = FontWeight.Bold)
+                    Text("Open the settings", color = OnAccent, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -407,50 +546,62 @@ fun IronPulseApp() {
 
         val navBackStackEntry by navController.currentBackStackEntryAsState()
         val currentRoute = navBackStackEntry?.destination?.route ?: Screen.Home.route
+        // Settings is a pushed detail reachable from Profile, not a sixth tab. Keep Profile
+        // highlighted while it is open instead of clearing the indicator because no tab owns the
+        // Settings route. Navigation callbacks still compare against the real route above.
+        val selectedTabRoute = Screen.selectedTabRoute(currentRoute)
 
         val isKeyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-
-        Scaffold(
-            modifier = Modifier
-                .fillMaxSize()
-                // Lifts the whole app, bottom navigation included, above the keyboard when it opens.
-                // Without it the keyboard covers whatever is at the bottom of the page, which is
-                // exactly where the weight and reps fields sit while logging a set.
-                .imePadding(),
-            bottomBar = {
-                // The navigation bar is removed rather than lifted while typing: it cannot be used
-                // during a text edit anyway, and leaving it would shrink the visible list to a row
-                // of dead space above the keyboard.
-                if (!isKeyboardOpen) {
-                    IronBottomBar(
-                        screens = screens,
-                        currentRoute = currentRoute,
-                        onSelect = { screen ->
-                            if (currentRoute != screen.route) {
-                                navController.navigate(screen.route) {
-                                    popUpTo(navController.graph.findStartDestination().id) {
-                                        saveState = true
-                                    }
-                                    launchSingleTop = true
-                                    restoreState = true
-                                }
-                            }
-                        }
-                    )
+        val glassEnabled = LocalLiquidGlassEnabled.current
+        var navBounds by remember { mutableStateOf<Rect?>(null) }
+        var contentBounds by remember { mutableStateOf<Rect?>(null) }
+        val dockBounds = remember(navBounds, contentBounds) {
+            val nav = navBounds
+            val content = contentBounds
+            if (nav == null || content == null) {
+                null
+            } else {
+                Rect(
+                    left = nav.left - content.left,
+                    top = nav.top - content.top,
+                    right = nav.right - content.left,
+                    bottom = nav.bottom - content.top
+                )
+            }
+        }
+        val navigate: (Screen) -> Unit = { screen ->
+            if (currentRoute != screen.route) {
+                navController.navigate(screen.route) {
+                    popUpTo(navController.graph.findStartDestination().id) {
+                        saveState = true
+                    }
+                    launchSingleTop = true
+                    restoreState = true
                 }
             }
-        ) { innerPadding ->
+        }
+
+        // The dock is an overlay, not a Scaffold bottom bar. A reserved bottom bar would paint an
+        // opaque page-coloured strip behind the glass and prevent any content from ever showing
+        // through it. The NavHost now fills the screen and the floating dock draws above it.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .imePadding()
+        ) {
             NavHost(
                 navController = navController,
                 startDestination = Screen.Home.route,
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
-                    .consumeWindowInsets(innerPadding)
-                    // Reserved for nothing: the system bars are hidden by the window, so any inset
-                    // the Scaffold reserved for them would show up as a dead band at the edge of
-                    // every page. Consuming them here keeps the layout at the physical edges.
-                    .consumeWindowInsets(WindowInsets(0, 0, 0, 0))
+                    .onGloballyPositioned { contentBounds = it.boundsInRoot() }
+                    // Records the pages into a graphics layer and draws a genuinely blurred copy
+                    // only inside the dock silhouette. This is the backdrop the glass sits on.
+                    .liquidGlassBackdrop(
+                        enabled = glassEnabled && !isKeyboardOpen,
+                        bounds = dockBounds,
+                        cornerRadius = 28.dp
+                    )
                     .background(DarkBg)
             ) {
                 composable(Screen.LogWorkout.route) {
@@ -526,6 +677,26 @@ fun IronPulseApp() {
                     )
                 }
             }
+
+            // Hidden while typing rather than lifted: it cannot be used during a text edit and
+            // would shrink the visible list to a row of dead space above the keyboard.
+            if (!isKeyboardOpen) {
+                IronBottomBar(
+                    screens = screens,
+                    currentRoute = selectedTabRoute,
+                    onSelect = navigate,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .then(
+                            if (glassEnabled) {
+                                Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            } else {
+                                Modifier
+                            }
+                        ),
+                    onBoundsChanged = { navBounds = it }
+                )
+            }
         }
     }
     }
@@ -549,133 +720,298 @@ fun IronPulseApp() {
 private fun IronBottomBar(
     screens: List<Screen>,
     currentRoute: String,
-    onSelect: (Screen) -> Unit
+    onSelect: (Screen) -> Unit,
+    modifier: Modifier = Modifier,
+    onBoundsChanged: (Rect) -> Unit = {}
 ) {
-    Surface(
-        color = DarkSurface,
-        tonalElevation = 8.dp,
-        modifier = Modifier.testTag("bottom_navigation_bar")
-    ) {
-        BoxWithConstraints(
+    val glassEnabled = LocalLiquidGlassEnabled.current
+    val reducedMotion = rememberReducedMotion()
+    val density = LocalDensity.current
+    val influenceRadiusPx = with(density) { LiquidGlassLens.INFLUENCE_RADIUS_DP.dp.toPx() }
+    val lensRadiusPx = with(density) { LiquidGlassLens.LENS_RADIUS_DP.dp.toPx() }
+    val liftPx = with(density) { LiquidGlassLens.LIFT_DP.dp.toPx() }
+
+    var lensActive by remember { mutableStateOf(false) }
+    val lensCenterX = remember { mutableFloatStateOf(0f) }
+    var dockBounds by remember { mutableStateOf<Rect?>(null) }
+    var itemBounds by remember { mutableStateOf<Map<Int, Rect>>(emptyMap()) }
+    // The pointerInput block lives for the life of the dock and would otherwise capture the first
+    // composition's onSelect/currentRoute. That made Home a no-op because the app starts on Home:
+    // every later release was compared against the initial route. Read the latest callback instead.
+    val latestOnSelect = rememberUpdatedState(onSelect)
+    val lensProgress = remember { Animatable(0f) }
+    val lensProgressState = lensProgress.asState()
+
+    LaunchedEffect(lensActive, reducedMotion) {
+        val target = if (lensActive) 1f else 0f
+        if (reducedMotion) {
+            lensProgress.snapTo(target)
+        } else {
+            lensProgress.animateTo(
+                targetValue = target,
+                animationSpec = tween(
+                    durationMillis = if (lensActive) 120 else 180,
+                    easing = FastOutSlowInEasing
+                )
+            )
+        }
+    }
+
+    Box(modifier = modifier.testTag("bottom_navigation_bar")) {
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 6.dp)
-        ) {
-            val itemWidth = maxWidth / screens.size
-            val selectedIndex = screens.indexOfFirst { it.route == currentRoute }
-            val selectedIsHome = selectedIndex >= 0 && screens[selectedIndex] == Screen.Home
-
-            // One indicator for the whole bar. Its width, position and colour animate together, so
-            // the highlight travels between destinations instead of one highlight disappearing and
-            // another appearing. The Home destination is a circle, which is why its width shrinks
-            // to 40dp: with a 20dp corner radius, a 40dp box *is* a circle.
-            //
-            // The colour is the same ElectricCyan as every other destination. Home used to get an
-            // 18% wash so it could keep a cyan icon, which read as "much less selected" than the
-            // other tabs. The icon is dark instead, exactly like the other selected icons.
-            val indicatorWidth by animateDpAsState(
-                targetValue = if (selectedIsHome) 40.dp else 48.dp,
-                animationSpec = tween(260, easing = FastOutSlowInEasing),
-                label = "bottom_nav_indicator_width"
-            )
-            val indicatorOffset by animateDpAsState(
-                targetValue = if (selectedIndex >= 0) {
-                    itemWidth * selectedIndex.toFloat() + (itemWidth - indicatorWidth) / 2
-                } else {
-                    (itemWidth - indicatorWidth) / 2
-                },
-                animationSpec = tween(320, easing = FastOutSlowInEasing),
-                label = "bottom_nav_indicator_offset"
-            )
-            val indicatorColor by animateColorAsState(
-                targetValue = ElectricCyan,
-                animationSpec = tween(220),
-                label = "bottom_nav_indicator_color"
-            )
-
-            if (selectedIndex >= 0) {
-                Box(
-                    modifier = Modifier
-                        .offset(x = indicatorOffset, y = 4.dp)
-                        .width(indicatorWidth)
-                        .height(40.dp)
-                        .background(indicatorColor, RoundedCornerShape(20.dp))
-                        .testTag("bottom_nav_indicator")
-                )
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.Top
-            ) {
-                screens.forEach { screen ->
-                    val isSelected = currentRoute == screen.route
-                    val isHome = screen == Screen.Home
-                    val iconTint by animateColorAsState(
-                        targetValue = if (isSelected) DarkBg else TextMuted,
-                        animationSpec = tween(200),
-                        label = "bottom_nav_icon_${screen.route}"
-                    )
-                    val labelColor by animateColorAsState(
-                        targetValue = if (isSelected) ElectricCyan else TextMuted,
-                        animationSpec = tween(220),
-                        label = "bottom_nav_label_${screen.route}"
-                    )
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .selectable(
-                                selected = isSelected,
-                                onClick = { onSelect(screen) },
-                                role = Role.Tab
+                .onGloballyPositioned {
+                    val bounds = it.boundsInRoot()
+                    dockBounds = bounds
+                    onBoundsChanged(bounds)
+                }
+                .then(
+                    if (glassEnabled) {
+                        Modifier
+                            .liquidGlass(
+                                shape = RoundedCornerShape(26.dp),
+                                enabled = true,
+                                tint = ElectricCyan,
+                                cornerRadius = 26.dp,
+                                elevation = 16.dp,
+                                // The page behind the dock is already blurred by the NavHost's
+                                // liquidGlassBackdrop modifier. A lighter body lets that real
+                                // backdrop show instead of covering it with a gradient.
+                                backdropBlurred = true
                             )
-                            .padding(vertical = 4.dp)
-                            .testTag(screen.tag),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(3.dp)
-                    ) {
-                        Box(
+                            // The detector lives on the glass dock, so a press anywhere on the bar
+                            // can start the lens. It watches the Initial pass and only consumes
+                            // after the hold threshold, which keeps ordinary taps untouched.
+                            .pointerInput(Unit) {
+                                detectLiquidGlassLensGesture(
+                                    onStart = { position ->
+                                        lensCenterX.floatValue = position.x
+                                        lensActive = true
+                                    },
+                                    onMove = { position -> lensCenterX.floatValue = position.x },
+                                    onRelease = { position ->
+                                        val dock = dockBounds
+                                        if (dock != null) {
+                                            val rootPosition = Offset(
+                                                x = dock.left + position.x,
+                                                y = dock.top + position.y
+                                            )
+                                            val measured = screens.indices.map { index ->
+                                                itemBounds[index] ?: Rect.Zero
+                                            }
+                                            LiquidGlassLens.itemIndexAt(
+                                                position = rootPosition,
+                                                itemBounds = measured
+                                            )?.let { index ->
+                                                latestOnSelect.value(screens[index])
+                                            }
+                                        }
+                                        // The lens dismisses after the destination is processed.
+                                        lensActive = false
+                                    },
+                                    onCancel = { lensActive = false }
+                                )
+                            }
+                    } else {
+                        // With Liquid Glass off, restore the conventional full-width bar rather
+                        // than leaving a floating glass silhouette in a solid colour.
+                        Modifier.background(DarkSurface)
+                    }
+                )
+        ) {
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 6.dp)
+            ) {
+                val itemWidth = maxWidth / screens.size
+                val itemWidthPx = with(density) { itemWidth.toPx() }
+                val selectedIndex = screens.indexOfFirst { it.route == currentRoute }
+                val selectedIsHome = selectedIndex >= 0 && screens[selectedIndex] == Screen.Home
+
+                // One indicator for the whole bar. Its width, position and colour animate together,
+                // so the highlight travels between destinations instead of one highlight
+                // disappearing and another appearing. The Home destination is a circle, which is
+                // why its width shrinks to 40dp: with a 20dp corner radius, a 40dp box *is* a
+                // circle.
+                //
+                // The colour is the same ElectricCyan as every other destination. Home used to get
+                // an 18% wash so it could keep a cyan icon, which read as "much less selected" than
+                // the other tabs. The icon is dark instead, exactly like the other selected icons.
+                val indicatorWidth by animateDpAsState(
+                    targetValue = if (selectedIsHome) 40.dp else 48.dp,
+                    animationSpec = tween(260, easing = FastOutSlowInEasing),
+                    label = "bottom_nav_indicator_width"
+                )
+                val indicatorOffset by animateDpAsState(
+                    targetValue = if (selectedIndex >= 0) {
+                        itemWidth * selectedIndex.toFloat() + (itemWidth - indicatorWidth) / 2
+                    } else {
+                        (itemWidth - indicatorWidth) / 2
+                    },
+                    animationSpec = tween(320, easing = FastOutSlowInEasing),
+                    label = "bottom_nav_indicator_offset"
+                )
+                val indicatorColor by animateColorAsState(
+                    targetValue = ElectricCyan,
+                    animationSpec = tween(220),
+                    label = "bottom_nav_indicator_color"
+                )
+
+                if (selectedIndex >= 0) {
+                    Box(
+                        modifier = Modifier
+                            .offset(x = indicatorOffset, y = 4.dp)
+                            .width(indicatorWidth)
+                            .height(40.dp)
+                            .background(indicatorColor, RoundedCornerShape(20.dp))
+                            .testTag("bottom_nav_indicator")
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.Top
+                ) {
+                    screens.forEachIndexed { index, screen ->
+                        val isSelected = currentRoute == screen.route
+                        val isHome = screen == Screen.Home
+                        val interactionSource = remember { MutableInteractionSource() }
+                        val isPressed by interactionSource.collectIsPressedAsState()
+                        val iconTint by animateColorAsState(
+                            targetValue = if (isSelected) OnAccent else TextMuted,
+                            animationSpec = tween(200),
+                            label = "bottom_nav_icon_${screen.route}"
+                        )
+                        val labelColor by animateColorAsState(
+                            targetValue = if (isSelected) ElectricCyan else TextMuted,
+                            animationSpec = tween(220),
+                            label = "bottom_nav_label_${screen.route}"
+                        )
+                        val itemCenterPx = itemWidthPx * (index + 0.5f)
+                        Column(
                             modifier = Modifier
-                                .size(40.dp)
-                                // The Home destination is always a dark circle with a ring; the
-                                // sliding indicator behind it supplies the fill when selected.
-                                .then(
-                                    if (isHome) {
-                                        Modifier
-                                            // Selected: the sliding indicator shows through the
-                                            // ring. Unselected: the dark Home button of the bar.
-                                            .background(
-                                                if (isSelected) Color.Transparent else DarkBg,
-                                                CircleShape
+                                .weight(1f)
+                                // Measure the slot before the lens graphics layer scales it. The
+                                // hit region must stay the untouched tab slot, not the temporarily
+                                // magnified bounds (which overlap the neighbours).
+                                .onGloballyPositioned { coordinates ->
+                                    itemBounds = itemBounds + (index to coordinates.boundsInRoot())
+                                }
+                                // The magnification is a draw-time property. Reading the lens
+                                // state inside graphicsLayer keeps finger movement out of
+                                // composition: only this item's layer is invalidated, not the
+                                // whole navigation bar.
+                                .graphicsLayer {
+                                    if (glassEnabled) {
+                                        val progress = lensProgressState.value
+                                        if (progress > 0.001f) {
+                                            val distance = abs(itemCenterPx - lensCenterX.floatValue)
+                                            val falloff = LiquidGlassLens.falloff(
+                                                distancePx = distance,
+                                                influenceRadiusPx = influenceRadiusPx
                                             )
-                                            .border(
-                                                width = if (isSelected) 2.dp else 1.dp,
-                                                color = if (isSelected) ElectricCyan else DarkBorder,
-                                                shape = CircleShape
-                                            )
-                                    } else {
-                                        Modifier
+                                            val scale = 1f + (LiquidGlassLens.MAX_SCALE - 1f) *
+                                                falloff * progress
+                                            scaleX = scale
+                                            scaleY = scale
+                                            translationY = -liftPx * falloff * progress
+                                        } else {
+                                            scaleX = 1f
+                                            scaleY = 1f
+                                            translationY = 0f
+                                        }
                                     }
-                                ),
-                            contentAlignment = Alignment.Center
+                                    transformOrigin = TransformOrigin(0.5f, 1f)
+                                }
+                                // The Material ripple is a rectangle over the whole item, which
+                                // becomes an obvious wash while the lens is held. In glass mode
+                                // it is replaced by a quiet rounded press highlight that yields to
+                                // the lens; with glass off the original ripple is untouched.
+                                .background(
+                                    color = if (glassEnabled && isPressed && !lensActive) {
+                                        ThemeRuntime.palette.glass.press.copy(alpha = 0.06f)
+                                    } else {
+                                        Color.Transparent
+                                    },
+                                    shape = RoundedCornerShape(14.dp)
+                                )
+                                .selectable(
+                                    selected = isSelected,
+                                    interactionSource = interactionSource,
+                                    indication = if (glassEnabled) null else LocalIndication.current,
+                                    onClick = { onSelect(screen) },
+                                    role = Role.Tab
+                                )
+                                .padding(vertical = 4.dp)
+                                .testTag(screen.tag),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
-                            Icon(
-                                imageVector = screen.icon,
-                                contentDescription = screen.title,
-                                tint = iconTint,
-                                modifier = Modifier.size(if (isHome) 21.dp else 24.dp)
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    // The Home destination is always a dark circle with a ring;
+                                    // the sliding indicator behind it supplies the fill when
+                                    // selected.
+                                    .then(
+                                        if (isHome) {
+                                            Modifier
+                                                // Selected: the sliding indicator shows through
+                                                // the ring. Unselected: the dark Home button of the
+                                                // bar.
+                                                .background(
+                                                    if (isSelected) Color.Transparent else DarkBg,
+                                                    CircleShape
+                                                )
+                                                .border(
+                                                    width = if (isSelected) 2.dp else 1.dp,
+                                                    color = if (isSelected) ElectricCyan else DarkBorder,
+                                                    shape = CircleShape
+                                                )
+                                        } else {
+                                            Modifier
+                                        }
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = screen.icon,
+                                    contentDescription = screen.title,
+                                    tint = iconTint,
+                                    modifier = Modifier.size(if (isHome) 21.dp else 24.dp)
+                                )
+                            }
+                            Text(
+                                text = screen.title,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    fontSize = 11.sp
+                                ),
+                                color = labelColor,
+                                maxLines = 1
                             )
                         }
-                        Text(
-                            text = screen.title,
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                fontSize = 11.sp
-                            ),
-                            color = labelColor,
-                            maxLines = 1
-                        )
+                    }
+                }
+
+                if (glassEnabled) {
+                    // The lens is drawn above the items. It has no pointer input of its own: the
+                    // dock's detector owns the gesture, and the Canvas must never intercept taps.
+                    Canvas(modifier = Modifier.matchParentSize()) {
+                        val progress = lensProgressState.value
+                        if (progress > 0.001f) {
+                            val maxCenterX = (size.width - lensRadiusPx).coerceAtLeast(lensRadiusPx)
+                            val centerX = lensCenterX.floatValue.coerceIn(lensRadiusPx, maxCenterX)
+                            drawLiquidGlassLens(
+                                center = Offset(centerX, 30.dp.toPx()),
+                                radiusPx = lensRadiusPx,
+                                progress = progress,
+                                tint = ElectricCyan
+                            )
+                        }
                     }
                 }
             }

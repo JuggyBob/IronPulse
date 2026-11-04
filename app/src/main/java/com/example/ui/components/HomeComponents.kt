@@ -43,6 +43,7 @@ import com.example.ui.theme.DarkSurfaceVariant
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.GoldenAmber
 import com.example.ui.theme.MintGreen
+import com.example.ui.theme.OnAccent
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import java.text.SimpleDateFormat
@@ -89,6 +90,12 @@ enum class HomeWidget(
         "this week's schedule",
         "This Week",
         "The seven-day plan from the routine you are following."
+    ),
+    STREAK(
+        "streak",
+        "workout streak",
+        "Workout Streak",
+        "Consecutive planned workout days completed, with a schedule-adherence heat map."
     ),
     STATS(
         "stats",
@@ -347,7 +354,7 @@ fun HomeHeatmap(
                         Text(
                             text = option.label,
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = if (isSelected) DarkBg else TextMuted
+                            color = if (isSelected) OnAccent else TextMuted
                         )
                     }
                 }
@@ -387,7 +394,7 @@ fun HomeHeatmap(
                             Text(
                                 text = cell.setCount.toString(),
                                 style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                color = if (intensity > 0.55f) DarkBg else TextWhite
+                                color = if (intensity > 0.55f) OnAccent else TextWhite
                             )
                         }
                     }

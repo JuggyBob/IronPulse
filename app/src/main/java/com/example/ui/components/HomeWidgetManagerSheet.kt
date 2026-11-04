@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.FormatQuote
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.MonitorWeight
@@ -49,7 +50,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import android.view.ViewParent
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -70,6 +77,9 @@ import com.example.ui.theme.GoldenAmber
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.OnAccent
+import com.example.ui.components.LocalLiquidGlassEnabled
+import com.example.ui.components.liquidGlass
 import com.example.util.WidgetPhotoStore
 import java.io.File
 
@@ -95,16 +105,41 @@ fun HomeWidgetManagerSheet(
     onMove: (HomeWidget, Int) -> Unit,
     onChoosePhoto: () -> Unit,
     onRemovePhoto: () -> Unit,
-    onGoalChange: (Int) -> Unit
+    onGoalChange: (Int) -> Unit,
+    fullscreenEnabled: Boolean
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val glassEnabled = LocalLiquidGlassEnabled.current
+    val sheetShape = BottomSheetDefaults.ExpandedShape
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = DarkBg,
+        shape = sheetShape,
+        // This is a long, interactive panel. An opaque theme surface is the baseline; the glass
+        // modifier above adds highlights and its content-heavy body on top. A transparent sheet
+        // container let Home text bleed through even when the decorative glass alpha was raised.
+        containerColor = if (glassEnabled) DarkSurface else DarkBg,
         contentColor = TextWhite,
         dragHandle = { BottomSheetDefaults.DragHandle(color = DarkBorder) },
-        modifier = Modifier.testTag("home_widget_manager_sheet")
+        modifier = Modifier
+            .testTag("home_widget_manager_sheet")
+            .then(
+                if (glassEnabled) {
+                    Modifier.liquidGlass(
+                        shape = sheetShape,
+                        enabled = true,
+                        tint = ElectricCyan,
+                        cornerRadius = 28.dp,
+                        elevation = 18.dp,
+                        // This is a long, text-heavy manager, not a small decorative surface.
+                        // Keep the glass chrome but make the body nearly opaque so Home content
+                        // never competes with its labels and controls.
+                        contentHeavy = true
+                    )
+                } else {
+                    Modifier
+                }
+            )
     ) {
         HomeWidgetManagerContent(
             enabled = enabled,
@@ -118,8 +153,37 @@ fun HomeWidgetManagerSheet(
             onMove = onMove,
             onChoosePhoto = onChoosePhoto,
             onRemovePhoto = onRemovePhoto,
-            onGoalChange = onGoalChange
+            onGoalChange = onGoalChange,
+            fullscreenEnabled = fullscreenEnabled
         )
+    }
+}
+
+/**
+ * Keeps immersive mode inside the sheet's own Dialog window.
+ *
+ * ModalBottomSheet is a separate window, so hiding the activity's system bars does not hide the
+ * sheet window's bars. The dialog would otherwise flash the status bar over an otherwise fullscreen
+ * app. This only touches the sheet window; the activity's policy is unchanged.
+ */
+@Composable
+private fun HideSystemBarsInSheet(enabled: Boolean) {
+    if (!enabled) return
+    val view = LocalView.current
+    DisposableEffect(view) {
+        var parent: ViewParent? = view.parent
+        while (parent != null && parent !is DialogWindowProvider) {
+            parent = parent.parent
+        }
+        val window = (parent as? DialogWindowProvider)?.window
+        if (window != null) {
+            WindowCompat.getInsetsController(window, window.decorView).apply {
+                systemBarsBehavior =
+                    androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                hide(WindowInsetsCompat.Type.systemBars())
+            }
+        }
+        onDispose { }
     }
 }
 
@@ -137,8 +201,10 @@ internal fun HomeWidgetManagerContent(
     onChoosePhoto: () -> Unit,
     onRemovePhoto: () -> Unit,
     onGoalChange: (Int) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    fullscreenEnabled: Boolean = true
 ) {
+    HideSystemBarsInSheet(enabled = fullscreenEnabled)
     val available = HomeWidget.available(enabled)
     Column(
         modifier = modifier
@@ -510,7 +576,7 @@ private fun PhotoWidgetControls(
                 onClick = onChoosePhoto,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = ElectricCyan,
-                    contentColor = DarkBg
+                    contentColor = OnAccent
                 ),
                 shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.testTag("widget_photo_choose")
@@ -524,7 +590,7 @@ private fun PhotoWidgetControls(
                 Text(
                     text = "Choose photo",
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                    color = DarkBg
+                    color = OnAccent
                 )
             }
         }
@@ -619,6 +685,7 @@ private fun widgetIcon(widget: HomeWidget): ImageVector = when (widget) {
     HomeWidget.TODAY -> Icons.Default.FitnessCenter
     HomeWidget.ACTIONS -> Icons.Default.Bolt
     HomeWidget.WEEK -> Icons.Default.CalendarToday
+    HomeWidget.STREAK -> Icons.Default.LocalFireDepartment
     HomeWidget.STATS -> Icons.Default.ShowChart
     HomeWidget.HEATMAP -> Icons.Default.GridView
     HomeWidget.WEIGHT -> Icons.Default.MonitorWeight
@@ -631,5 +698,6 @@ private fun widgetIcon(widget: HomeWidget): ImageVector = when (widget) {
 private fun widgetAccent(widget: HomeWidget): Color = when (widget) {
     HomeWidget.ACTIONS, HomeWidget.HEATMAP, HomeWidget.GOAL -> MintGreen
     HomeWidget.WEEK, HomeWidget.WEIGHT -> GoldenAmber
+    HomeWidget.STREAK -> FireRed
     else -> ElectricCyan
 }

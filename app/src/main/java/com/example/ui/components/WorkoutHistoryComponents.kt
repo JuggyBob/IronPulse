@@ -96,6 +96,8 @@ import com.example.ui.theme.GoldenAmber
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.OnAccent
+import com.example.ui.theme.OnDanger
 import com.example.ui.viewmodel.MainViewModel
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -567,11 +569,11 @@ fun WorkoutHistoryDialog(
                     // Close Button
                     Button(
                         onClick = onDismiss,
-                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = OnAccent),
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Close", color = DarkBg, fontWeight = FontWeight.Bold)
+                        Text("Close", color = OnAccent, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -608,9 +610,9 @@ fun WorkoutHistoryDialog(
                         viewModel.deleteSession(sessionToDelete!!)
                         sessionToDelete = null
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = FireRed)
+                    colors = ButtonDefaults.buttonColors(containerColor = FireRed, contentColor = OnDanger)
                 ) {
-                    Text("Delete", color = TextWhite, fontWeight = FontWeight.Bold)
+                    Text("Delete", color = OnDanger, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -833,7 +835,7 @@ fun CalendarPickerDialog(
                                     fontWeight = if (isSelected || isToday) FontWeight.Bold else FontWeight.Normal
                                 ),
                                 color = when {
-                                    isSelected -> DarkBg
+                                    isSelected -> OnAccent
                                     isFuture -> TextMuted.copy(alpha = 0.25f)
                                     isToday -> ElectricCyan
                                     else -> TextWhite
@@ -859,9 +861,9 @@ fun CalendarPickerDialog(
                     }
                     onDateSelected(resultCal.timeInMillis)
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan)
+                colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = OnAccent)
             ) {
-                Text("Select Date", color = DarkBg, fontWeight = FontWeight.Bold)
+                Text("Select Date", color = OnAccent, fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {

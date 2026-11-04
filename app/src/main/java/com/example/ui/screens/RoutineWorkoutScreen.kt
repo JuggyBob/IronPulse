@@ -78,6 +78,8 @@ import com.example.data.model.LoggedSet
 import com.example.data.model.RoutineParser
 import com.example.ui.components.RestTimerDockedButton
 import com.example.ui.components.RestTimerDialog
+import com.example.ui.components.LocalLiquidGlassEnabled
+import com.example.ui.components.liquidGlass
 import com.example.ui.theme.CoralOrange
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
@@ -89,6 +91,8 @@ import com.example.ui.theme.GoldenAmber
 import com.example.ui.theme.MintGreen
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
+import com.example.ui.theme.OnAccent
+import com.example.ui.theme.OnDanger
 import com.example.ui.components.ExerciseDetailDialog
 import com.example.ui.components.ExerciseEditorDialog
 import com.example.ui.components.WorkoutTimerBadge
@@ -121,6 +125,8 @@ fun RoutineWorkoutScreen(
         .collectAsStateWithLifecycle(initialValue = true)
     // When the workout in progress was last written to disk, for the "auto saved" indicator.
     val lastAutoSaveAt by viewModel.lastAutoSaveAt.collectAsStateWithLifecycle()
+    val glassEnabled = LocalLiquidGlassEnabled.current
+    val actionBarShape = RoundedCornerShape(16.dp)
 
     if (activeWorkout == null) {
         Box(
@@ -391,11 +397,28 @@ fun RoutineWorkoutScreen(
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
-                shape = RoundedCornerShape(16.dp),
-                color = DarkSurface,
-                border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder),
-                shadowElevation = 8.dp
+                    .padding(start = 14.dp, end = 14.dp, bottom = 14.dp)
+                    .then(
+                        if (glassEnabled) {
+                            Modifier.liquidGlass(
+                                shape = actionBarShape,
+                                enabled = true,
+                                tint = MintGreen,
+                                cornerRadius = 16.dp,
+                                elevation = 14.dp
+                            )
+                        } else {
+                            Modifier
+                        }
+                    ),
+                shape = actionBarShape,
+                color = if (glassEnabled) Color.Transparent else DarkSurface,
+                border = if (glassEnabled) {
+                    null
+                } else {
+                    androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+                },
+                shadowElevation = if (glassEnabled) 0.dp else 8.dp
             ) {
                 Row(
                     modifier = Modifier
@@ -436,7 +459,7 @@ fun RoutineWorkoutScreen(
                         // Finish Button
                         Button(
                             onClick = { showFinishDialog = true },
-                            colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                            colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                             shape = RoundedCornerShape(10.dp),
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                             modifier = Modifier.testTag("routine_finish_bottom_button")
@@ -444,14 +467,14 @@ fun RoutineWorkoutScreen(
                             Icon(
                                 imageVector = Icons.Default.Check,
                                 contentDescription = null,
-                                tint = DarkBg,
+                                tint = OnAccent,
                                 modifier = Modifier.size(16.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = "Finish",
                                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                                color = DarkBg
+                                color = OnAccent
                             )
                         }
                     }
@@ -516,14 +539,14 @@ fun RoutineWorkoutScreen(
                         showExitDialog = false
                         viewModel.stopRoutineWorkout()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = FireRed),
+                    colors = ButtonDefaults.buttonColors(containerColor = FireRed, contentColor = OnDanger),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.testTag("confirm_exit_routine_button")
                 ) {
                     Text(
                         text = "Exit Workout",
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = TextWhite
+                        color = OnDanger
                     )
                 }
             },
@@ -592,14 +615,14 @@ fun RoutineWorkoutScreen(
                         showFinishDialog = false
                         viewModel.finishRoutineWorkout(finishNotes)
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen),
+                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.testTag("confirm_finish_routine_button")
                 ) {
                     Text(
                         text = "Save & Complete",
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = DarkBg
+                        color = OnAccent
                     )
                 }
             },
@@ -1027,7 +1050,7 @@ fun RoutineSetRow(
                 Icon(
                     imageVector = Icons.Default.Check,
                     contentDescription = "Complete Set",
-                    tint = if (isCompleted) DarkBg else TextMuted,
+                    tint = if (isCompleted) OnAccent else TextMuted,
                     modifier = Modifier.size(18.dp)
                 )
             }

@@ -5,6 +5,7 @@ import com.example.data.dao.ChatDao
 import com.example.data.dao.ExerciseDao
 import com.example.data.dao.GeminiSummaryDao
 import com.example.data.dao.SavedRoutineDao
+import com.example.data.dao.ScheduleDao
 import com.example.data.dao.UserProfileDao
 import kotlinx.coroutines.flow.combine
 import com.example.data.dao.WorkoutDao
@@ -15,6 +16,7 @@ import com.example.data.model.Exercise
 import com.example.data.model.GeminiSummary
 import com.example.data.model.LoggedSet
 import com.example.data.model.SavedRoutine
+import com.example.data.model.ScheduledWorkoutDay
 import com.example.data.model.SessionWithSets
 import com.example.data.model.UserProfile
 import com.example.data.model.WorkoutSession
@@ -25,6 +27,7 @@ class FitnessRepository(
     private val workoutDao: WorkoutDao,
     private val userProfileDao: UserProfileDao,
     private val savedRoutineDao: SavedRoutineDao,
+    private val scheduleDao: ScheduleDao,
     private val bodyWeightDao: BodyWeightDao,
     private val chatDao: ChatDao,
     private val geminiSummaryDao: GeminiSummaryDao
@@ -226,6 +229,24 @@ class FitnessRepository(
     suspend fun saveRoutine(routine: SavedRoutine): Long = savedRoutineDao.insertRoutine(routine)
     suspend fun deleteRoutine(routine: SavedRoutine) = savedRoutineDao.deleteRoutine(routine)
 
+    // Workout streak schedule
+    fun getScheduleDays(): Flow<List<ScheduledWorkoutDay>> = scheduleDao.getAllScheduleDays()
+
+    /**
+     * Replaces today and the future with [rows], leaving every past row untouched.
+     *
+     * The delete and insert are one transaction from the caller's point of view: the schedule flow
+     * may emit once with fewer future rows while the insert is in flight, but it will never lose a
+     * past date or double-count a completion.
+     */
+    suspend fun replaceFutureSchedule(fromDate: Long, rows: List<ScheduledWorkoutDay>) {
+        scheduleDao.deleteScheduleFrom(
+            fromKey = com.example.data.model.LocalDateKey.keyOf(fromDate),
+            fromDate = fromDate
+        )
+        if (rows.isNotEmpty()) scheduleDao.insertScheduleDays(rows)
+    }
+
     // Body Weight
     fun getAllWeightLogs(): Flow<List<BodyWeightLog>> = bodyWeightDao.getAllWeightLogs()
     suspend fun insertWeightLog(log: BodyWeightLog): Long = bodyWeightDao.insertWeightLog(log)
@@ -242,6 +263,7 @@ class FitnessRepository(
         workoutDao.deleteAllSets()
         workoutDao.deleteAllSessions()
         savedRoutineDao.deleteAllRoutines()
+        scheduleDao.deleteAllScheduleDays()
         bodyWeightDao.deleteAllWeightLogs()
         chatDao.deleteAllMessages()
         chatDao.deleteAllSessions()

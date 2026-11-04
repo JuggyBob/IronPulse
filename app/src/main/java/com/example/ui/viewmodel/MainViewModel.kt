@@ -2,6 +2,8 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import android.net.Uri
+import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import android.util.Log
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
@@ -19,6 +21,18 @@ import com.example.data.ai.AiService
 import com.example.data.ai.AiToolMode
 import com.example.data.ai.RepositoryAiDataAccess
 import com.example.data.api.ReleaseApi
+import com.example.data.backup.BackupArchiveLimits
+import com.example.data.backup.BackupException
+import com.example.data.backup.BackupFormat
+import com.example.data.backup.BackupOperation
+import com.example.data.backup.BackupPhase
+import com.example.data.backup.BackupPreferencesStore
+import com.example.data.backup.BackupPreview
+import com.example.data.backup.BackupProgress
+import com.example.data.backup.DataTransferState
+import com.example.data.backup.PreparedImport
+import com.example.data.backup.UserDataBackupManager
+import com.example.data.backup.copyWithLimit
 import com.example.data.db.AppDatabase
 import com.example.data.model.ActiveRoutineWorkoutState
 import com.example.data.model.ActiveRestTimerState
@@ -42,6 +56,7 @@ import com.example.data.model.PredefinedRoutines
 import com.example.data.model.ExerciseType
 import com.example.data.model.GeminiSummary
 import com.example.data.model.HomeDashboard
+import com.example.data.model.LocalDateKey
 import com.example.data.model.LoggedSet
 import com.example.data.model.LoggedSetNumbering
 import com.example.data.model.MonthlyExerciseAnalyzer
@@ -60,7 +75,9 @@ import com.example.data.model.ReleaseAsset
 import com.example.data.model.UpdateState
 import com.example.data.model.UpdateVerification
 import com.example.data.model.Weekday
+import com.example.data.model.ScheduledWorkoutDay
 import com.example.data.model.SessionWithSets
+import com.example.data.model.StreakSummary
 import com.example.data.model.RoutineExerciseItem
 import com.example.data.model.RoutineParser
 import com.example.data.model.RoutineDay
@@ -74,11 +91,13 @@ import com.example.data.model.WorkoutDraft
 import com.example.data.model.WorkoutDraftCodec
 import com.example.data.model.WorkoutMetrics
 import com.example.data.model.WorkoutSession
+import com.example.data.model.WorkoutStreak
 import com.example.data.preferences.HomeWidgetConfig
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.repository.FitnessRepository
 import com.example.ui.components.ChartPoint
 import com.example.ui.components.HomeWidget
+import com.example.ui.theme.ThemeMode
 import com.example.util.ExerciseMediaStore
 import com.example.util.ApkInstaller
 import com.example.util.VibrationHelper
@@ -86,6 +105,7 @@ import com.example.util.SoundHelper
 import com.example.util.RestTimerScheduler
 import com.example.util.RestTimerEventManager
 import com.example.util.RestTimerAlertCoordinator
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -97,11 +117,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
@@ -111,6 +134,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -141,12 +165,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         workoutDao = db.workoutDao(),
         userProfileDao = db.userProfileDao(),
         savedRoutineDao = db.savedRoutineDao(),
+        scheduleDao = db.scheduleDao(),
         bodyWeightDao = db.bodyWeightDao(),
         chatDao = db.chatDao(),
         geminiSummaryDao = db.geminiSummaryDao()
     )
 
     private val userPreferencesRepo = UserPreferencesRepository(application)
+
+    private val backupPreferencesStore = BackupPreferencesStore(application)
+    private val backupManager = UserDataBackupManager(application, db, backupPreferencesStore)
+
+    private val _dataTransferState = MutableStateFlow<DataTransferState>(DataTransferState.Idle)
+
+    /** Export/import progress and results shown by Settings. */
+    val dataTransferState: StateFlow<DataTransferState> = _dataTransferState.asStateFlow()
+
+    private var dataTransferJob: Job? = null
+    private var preparedImport: PreparedImport? = null
 
     val geminiApiKey: StateFlow<String> = userPreferencesRepo.geminiApiKeyFlow
         .flowOn(Dispatchers.IO)
@@ -1731,6 +1767,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Does nothing when no workout is running, so the loop can call it unconditionally.
      */
     fun saveActiveWorkoutDraftNow() {
+        // A replacement import owns the preference file while it is applying. The autosave loop
+        // must not write a stale draft over the draft that was just restored.
+        val transfer = _dataTransferState.value
+        if (transfer is DataTransferState.Running && transfer.operation == BackupOperation.IMPORT) return
         val routine = _activeRoutineWorkout.value
         val session = _activeSession.value
         if (routine == null && session == null) return
@@ -1747,6 +1787,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 weekday = routine.weekday ?: Weekday.MONDAY,
                 dayTitle = routine.dayTitle.orEmpty(),
                 dayNote = routine.dayNote,
+                plannedDate = routine.plannedDate,
+                plannedDateKey = routine.plannedDateKey,
                 routineItems = routine.routineItems
             )
         } else {
@@ -1819,7 +1861,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 sets = draft.sets,
                 weekday = draft.weekday,
                 dayTitle = draft.dayTitle,
-                dayNote = draft.dayNote
+                dayNote = draft.dayNote,
+                plannedDate = draft.plannedDate,
+                plannedDateKey = draft.plannedDateKey
             )
         } else {
             val exercises = draft.exerciseIds.mapTo(mutableListOf()) { id ->
@@ -2019,6 +2063,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Pick up any bodyweight record logged in a previous session
             refreshBenchmarkRecords()
         }
+
+
 
         // Offer back the workout that was in progress when the app was closed.
         //
@@ -2268,6 +2314,288 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 currentChatSession.value = freshSession
             }
         }
+    }
+
+    // === USER DATA EXPORT / IMPORT ===
+
+    /**
+     * Writes a verified `.ironpulse` archive to the document the athlete chose with the system
+     * picker. The archive is built and verified in the app's cache first; only then is it copied to
+     * the provider, so a failed provider write can never be reported as a successful backup.
+     */
+    fun exportUserData(uri: Uri, suggestedName: String? = null) {
+        if (_dataTransferState.value is DataTransferState.Running) return
+        preparedImport?.cleanup()
+        preparedImport = null
+        dataTransferJob = viewModelScope.launch(Dispatchers.IO) {
+            var temp: File? = null
+            var destinationWritten = false
+            try {
+                _dataTransferState.value = DataTransferState.Running(
+                    BackupOperation.EXPORT,
+                    BackupProgress(BackupPhase.PREPARING, 0, 8)
+                )
+                val app = getApplication<Application>()
+                temp = File.createTempFile("ironpulse-export-", ".${BackupFormat.EXTENSION}", app.cacheDir)
+                val summary = backupManager.exportToFile(temp) { progress ->
+                    _dataTransferState.value = DataTransferState.Running(BackupOperation.EXPORT, progress)
+                }
+                val displayName = queryDocumentName(uri)
+                    ?: suggestedName
+                    ?: summary.fileName
+                val output = app.contentResolver.openOutputStream(uri, "wt")
+                    ?: throw BackupException(
+                        "The selected destination could not be opened for writing.",
+                        com.example.data.backup.BackupErrorCode.IO_ERROR
+                    )
+                output.use { stream ->
+                    temp.inputStream().use { input ->
+                        copyWithLimit(input, stream, BackupArchiveLimits().maxArchiveBytes)
+                    }
+                    stream.flush()
+                }
+                destinationWritten = true
+                val reportedSize = queryDocumentSize(uri)
+                if (reportedSize != null && reportedSize != summary.sizeBytes) {
+                    destinationWritten = false
+                    deleteDestinationDocument(uri)
+                    throw BackupException(
+                        "The backup file was not fully written to the selected destination.",
+                        com.example.data.backup.BackupErrorCode.IO_ERROR
+                    )
+                }
+                _dataTransferState.value = DataTransferState.Success(
+                    operation = BackupOperation.EXPORT,
+                    title = "Backup saved",
+                    detail = "$displayName • ${formatBytes(summary.sizeBytes)}"
+                )
+            } catch (e: CancellationException) {
+                _dataTransferState.value = DataTransferState.Cancelled(
+                    "Export cancelled. No completed backup was left in IronPulse."
+                )
+                throw e
+            } catch (e: Exception) {
+                if (!destinationWritten) deleteDestinationDocument(uri)
+                _dataTransferState.value = DataTransferState.Error(
+                    message = friendlyBackupError(e, importOperation = false),
+                    destinationPreserved = true
+                )
+            } finally {
+                temp?.delete()
+            }
+        }
+    }
+
+    /**
+     * Copies the selected archive into app-private cache and fully validates it, without touching
+     * any database, preference or file. Success only moves the UI to the destructive confirmation.
+     */
+    fun inspectUserDataImport(uri: Uri) {
+        if (_dataTransferState.value is DataTransferState.Running ||
+            _dataTransferState.value is DataTransferState.ReadyToImport
+        ) {
+            return
+        }
+        dataTransferJob = viewModelScope.launch(Dispatchers.IO) {
+            var temp: File? = null
+            try {
+                _dataTransferState.value = DataTransferState.Running(
+                    BackupOperation.IMPORT,
+                    BackupProgress(BackupPhase.VALIDATING, 0, 5)
+                )
+                val app = getApplication<Application>()
+                temp = File.createTempFile("ironpulse-import-", ".${BackupFormat.EXTENSION}", app.cacheDir)
+                val input = app.contentResolver.openInputStream(uri)
+                    ?: throw BackupException(
+                        "The selected backup could not be opened.",
+                        com.example.data.backup.BackupErrorCode.IO_ERROR
+                    )
+                input.use { stream ->
+                    temp.outputStream().use { output ->
+                        copyWithLimit(stream, output, BackupArchiveLimits().maxArchiveBytes)
+                    }
+                }
+                val prepared = backupManager.inspectFile(
+                    archive = temp,
+                    displayName = queryDocumentName(uri)
+                ) { progress ->
+                    _dataTransferState.value = DataTransferState.Running(BackupOperation.IMPORT, progress)
+                }
+                preparedImport?.cleanup()
+                preparedImport = prepared
+                _dataTransferState.value = DataTransferState.ReadyToImport(prepared.preview)
+            } catch (e: CancellationException) {
+                temp?.delete()
+                _dataTransferState.value = DataTransferState.Cancelled(
+                    "Import cancelled before anything was changed."
+                )
+                throw e
+            } catch (e: Exception) {
+                temp?.delete()
+                _dataTransferState.value = DataTransferState.Error(
+                    message = friendlyBackupError(e, importOperation = true),
+                    destinationPreserved = true
+                )
+            }
+        }
+    }
+
+    /** Applies the already-validated archive after the athlete confirms the replacement. */
+    fun confirmUserDataImport() {
+        val prepared = preparedImport ?: return
+        if (_dataTransferState.value is DataTransferState.Running) return
+        preparedImport = null
+        dataTransferJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                withContext(Dispatchers.Main.immediate) {
+                    resetTransientStateForReplacement()
+                }
+                _dataTransferState.value = DataTransferState.Running(
+                    BackupOperation.IMPORT,
+                    BackupProgress(BackupPhase.STAGING, 0, 9)
+                )
+                val summary = backupManager.applyImport(prepared) { progress ->
+                    _dataTransferState.value = DataTransferState.Running(BackupOperation.IMPORT, progress)
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    resetTransientStateForReplacement()
+                    reloadPendingWorkoutDraftLater()
+                }
+                _dataTransferState.value = DataTransferState.Success(
+                    operation = BackupOperation.IMPORT,
+                    title = "Backup restored",
+                    detail = "Restored the backup created by IronPulse ${summary.preview.appVersionName} " +
+                        "on ${summary.preview.exportedAt}. API keys and your profile picture were kept on this device."
+                )
+            } catch (e: CancellationException) {
+                withContext(Dispatchers.Main.immediate) {
+                    resetTransientStateForReplacement()
+                    reloadPendingWorkoutDraftLater()
+                }
+                _dataTransferState.value = DataTransferState.Cancelled(
+                    "Import cancelled. Your previous data was restored."
+                )
+                throw e
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main.immediate) {
+                    resetTransientStateForReplacement()
+                    reloadPendingWorkoutDraftLater()
+                }
+                _dataTransferState.value = DataTransferState.Error(
+                    message = friendlyBackupError(e, importOperation = true),
+                    destinationPreserved = (e as? BackupException)?.dataPreserved ?: false
+                )
+            } finally {
+                prepared.cleanup()
+            }
+        }
+    }
+
+    /** Drops a validated archive that has not been applied yet. */
+    fun cancelPendingUserDataImport() {
+        preparedImport?.cleanup()
+        preparedImport = null
+        if (_dataTransferState.value is DataTransferState.ReadyToImport) {
+            _dataTransferState.value = DataTransferState.Idle
+        }
+    }
+
+    /** Stops an export (or a pre-apply validation) without touching existing user data. */
+    fun cancelDataTransfer() {
+        val running = _dataTransferState.value as? DataTransferState.Running ?: return
+        val canCancel = running.operation == BackupOperation.EXPORT ||
+            running.progress.phase == BackupPhase.PREPARING ||
+            running.progress.phase == BackupPhase.VALIDATING
+        if (!canCancel) return
+        dataTransferJob?.cancel()
+    }
+
+    /** Clears a completed/failed message so the Settings card returns to its normal state. */
+    fun dismissDataTransferMessage() {
+        if (_dataTransferState.value !is DataTransferState.Running &&
+            _dataTransferState.value !is DataTransferState.ReadyToImport
+        ) {
+            _dataTransferState.value = DataTransferState.Idle
+        }
+    }
+
+    private suspend fun resetTransientStateForReplacement() {
+        stopRestTimer()
+        _activeSession.value = null
+        _activeSets.value = emptyList()
+        _activeSessionExercises.value = emptyList()
+        _activeRoutineWorkout.value = null
+        _pendingWorkoutDraft.value = null
+        currentChatSession.value = null
+        _isChatLoading.value = false
+        selectedExerciseForProgress.value = ""
+        selectedAddedWeightFilter.value = null
+        generatedRoutine.value = ""
+        _unstructuredParseState.value = UnstructuredParseState.Idle
+        _customRoutinePromptState.value = CustomRoutinePromptState.Idle
+        _monthlySummaryState.value = MonthlySummaryState.Idle
+        _availableModels.value = aiService.knownModels(activeAiProvider.value)
+        _modelDiscoveryError.value = null
+    }
+
+    private fun reloadPendingWorkoutDraftLater() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val raw = userPreferencesRepo.activeWorkoutDraftFlow.first { true } ?: return@launch
+            val draft = WorkoutDraftCodec.decode(raw) ?: run {
+                userPreferencesRepo.clearWorkoutDraft()
+                return@launch
+            }
+            _pendingWorkoutDraft.value = draft
+        }
+    }
+
+    private fun queryDocumentName(uri: Uri): String? = runCatching {
+        getApplication<Application>().contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0)?.takeIf { it.isNotBlank() } else null
+        }
+    }.getOrNull()
+
+    private fun queryDocumentSize(uri: Uri): Long? = runCatching {
+        getApplication<Application>().contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.SIZE),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0).takeIf { it > 0L } else null
+        }
+    }.getOrNull()
+
+    private fun deleteDestinationDocument(uri: Uri) {
+        runCatching {
+            val app = getApplication<Application>()
+            if (DocumentsContract.isDocumentUri(app, uri)) {
+                DocumentsContract.deleteDocument(app.contentResolver, uri)
+            }
+        }
+    }
+
+    private fun friendlyBackupError(error: Throwable, importOperation: Boolean): String {
+        if (error is BackupException) return error.message ?: "The backup operation failed."
+        return if (importOperation) {
+            "The import failed unexpectedly. Your existing data was not replaced."
+        } else {
+            "The export failed unexpectedly. Your existing IronPulse data was not changed."
+        }
+    }
+
+    private fun formatBytes(bytes: Long): String {
+        if (bytes < 1024L) return "$bytes B"
+        val kb = bytes / 1024.0
+        if (kb < 1024.0) return String.format(Locale.US, "%.1f KB", kb)
+        return String.format(Locale.US, "%.1f MB", kb / 1024.0)
     }
 
     // === GEMINI MONTHLY SUMMARY (PROGRESS TAB) ===
@@ -2578,6 +2906,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
 
     /**
+     * The single boolean that drives every Liquid Glass surface.
+     *
+     * Kept separate from [appSettings] so the root only recomposes when this one preference changes,
+     * not when the athlete edits the weight unit or the autosave interval.
+     */
+    val liquidGlassEnabled: StateFlow<Boolean> = userPreferencesRepo.liquidGlassEnabledFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    /**
+     * Whether the system bars are hidden.
+     *
+     * The activity applies this to the window. It is kept separate from [appSettings] for the same
+     * reason as Liquid Glass: only the window policy needs to react.
+     */
+    val fullscreenEnabled: StateFlow<Boolean> = userPreferencesRepo.fullscreenEnabledFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    /**
+     * The selected theme.
+     *
+     * Its own flow, like Liquid Glass, so a change to any other preference never re-applies the
+     * theme and a theme change never disturbs an unrelated setting. The initial value is the same
+     * IronPulse default the repository falls back to.
+     */
+    val themeMode: StateFlow<ThemeMode> = userPreferencesRepo.themeModeFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThemeMode.IRONPULSE)
+
+    /** Selects a theme and persists it immediately. */
+    fun setThemeMode(mode: ThemeMode) {
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.setThemeMode(mode)
+        }
+    }
+
+    /**
      * Whether the athlete's week starts on Monday.
      *
      * Read straight from the settings, so the routine editor, the dashboard, the weekly summaries
@@ -2596,6 +2959,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setAutoCheckUpdatesOnStart(enabled: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
             userPreferencesRepo.setAutoCheckUpdatesOnStart(enabled)
+        }
+    }
+
+    /** Turns the Liquid Glass treatment on or off and persists the choice. */
+    fun setLiquidGlassEnabled(enabled: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.setLiquidGlassEnabled(enabled)
+        }
+    }
+
+    /** Hides or restores the system bars and persists the choice. */
+    fun setFullscreenEnabled(enabled: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.setFullscreenEnabled(enabled)
         }
     }
 
@@ -3053,6 +3430,69 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /**
+     * The materialized per-date schedule.
+     *
+     * Past rows are history. Only today and the future are regenerated when the active routine
+     * changes, so an edit cannot silently turn last month's completed day into a missed one.
+     */
+    val scheduleDays: StateFlow<List<ScheduledWorkoutDay>> = repository.getScheduleDays()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** Emits once a minute so a pending today becomes missed at the next local midnight. */
+    private val currentDayTicker: Flow<Long> = flow {
+        while (true) {
+            emit(ActivityHeatmap.startOfDay(System.currentTimeMillis()))
+            delay(60_000L)
+        }
+    }.distinctUntilChanged()
+
+    /**
+     * The current/best streak and the twelve-week adherence heat map.
+     *
+     * Derived from the persisted schedule and the finished sessions, never from a counter that is
+     * incremented when the app opens.
+     */
+    val streakSummary: StateFlow<StreakSummary> = combine(
+        scheduleDays,
+        workoutHistory,
+        weekStartFlow,
+        currentDayTicker
+    ) { schedule, sessions, weekStartsOnMonday, today ->
+        WorkoutStreak.calculate(
+            schedule = schedule,
+            sessions = sessions,
+            today = today,
+            weekStartsOnMonday = weekStartsOnMonday
+        )
+    }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StreakSummary())
+
+    init {
+        // This block is deliberately after activeRoutine, activeRoutineDays and weekStartFlow:
+        // Kotlin initializes properties in declaration order, and collecting them earlier would
+        // observe their default values rather than the athlete's active routine.
+        viewModelScope.launch(Dispatchers.IO) {
+            allExercises.first { it.isNotEmpty() }
+            combine(activeRoutine, activeRoutineDays, weekStartFlow) { routine, days, _ ->
+                routine to days
+            }.collectLatest { (routine, days) ->
+                val today = ActivityHeatmap.startOfDay(System.currentTimeMillis())
+                val rows = if (routine == null) {
+                    emptyList()
+                } else {
+                    WorkoutStreak.buildScheduleRows(
+                        routineId = routine.id,
+                        days = days,
+                        fromDate = today
+                    )
+                }
+                repository.replaceFutureSchedule(fromDate = today, rows = rows)
+            }
+        }
+    }
+
     fun saveRoutine(routine: SavedRoutine) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.saveRoutine(routine)
@@ -3300,8 +3740,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             sets = initialSets,
             weekday = weekday,
             dayTitle = dayTitle,
-            dayNote = dayNote
-        )
+            dayNote = dayNote,
+            // The day this session fulfils, not necessarily the day it is started. A Monday
+            // session done on Wednesday still belongs to Monday's plan.
+            plannedDate = WorkoutStreak.dateForWeekdayInWeek(
+                weekday = weekday,
+                reference = now,
+                weekStartsOnMonday = weekStartsOnMonday()
+            )
+        ).let { state ->
+            state.copy(plannedDateKey = LocalDateKey.keyOf(state.plannedDate))
+        }
     }
 
     fun addSetToRoutineWorkout(exercise: Exercise) {
@@ -3396,7 +3845,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     title = sessionTitle,
                     startTime = current.startTime,
                     endTime = System.currentTimeMillis(),
-                    notes = notes.trim()
+                    notes = notes.trim(),
+                    routineId = current.routineId,
+                    routineWeekday = current.weekday ?: 0,
+                    plannedDate = current.plannedDate,
+                    plannedDateKey = current.plannedDateKey.takeIf { it > 0L }
+                        ?: LocalDateKey.keyOf(current.plannedDate)
                 )
                 val sessionId = repository.insertSession(session)
                 repository.insertSets(setsToSave.map { it.copy(sessionId = sessionId) })

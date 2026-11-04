@@ -15,6 +15,7 @@ import com.example.data.model.Exercise
 import com.example.data.model.GeminiSummary
 import com.example.data.model.LoggedSet
 import com.example.data.model.SavedRoutine
+import com.example.data.model.ScheduledWorkoutDay
 import com.example.data.model.SessionWithSets
 import com.example.data.model.UserProfile
 import com.example.data.model.WorkoutSession
@@ -56,6 +57,22 @@ interface ExerciseDao {
     /** Every exercise row, used by the dataset seeder to decide what to insert or update. */
     @Query("SELECT * FROM exercises")
     suspend fun getAllExercisesList(): List<Exercise>
+
+    /** Every row for the given stable ids, used to verify a restored backup. */
+    @Query("SELECT * FROM exercises WHERE id IN (:ids)")
+    suspend fun getExercisesByIds(ids: List<Long>): List<Exercise>
+
+    /** Every exercise the athlete owns, whichever way it was created. */
+    @Query("DELETE FROM exercises WHERE isCustom = 1 OR isAiGenerated = 1")
+    suspend fun deleteAllUserExercises()
+
+    /** Deletes specific rows, used to remove a destination library row a restored custom exercise replaces. */
+    @Query("DELETE FROM exercises WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<Long>)
+
+    /** Restores rows with their original identifiers, used only by the backup importer. */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(exercises: List<Exercise>)
 
     /** Finds an exercise by its stable row id. Used by the AI tool layer. */
     @Query("SELECT * FROM exercises WHERE id = :id LIMIT 1")
@@ -331,6 +348,14 @@ interface WorkoutDao {
     @Query("SELECT * FROM workout_sessions ORDER BY startTime DESC")
     fun getAllSessions(): Flow<List<WorkoutSession>>
 
+    /** One consistent session snapshot for the backup exporter. */
+    @Query("SELECT * FROM workout_sessions ORDER BY id ASC")
+    suspend fun getAllSessionsOnce(): List<WorkoutSession>
+
+    /** Restores sessions with their original identifiers. */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSessions(sessions: List<WorkoutSession>)
+
     /** Every logged set, used to recompute the athlete's benchmark personal records. */
     @Query("SELECT * FROM logged_sets")
     suspend fun getAllSets(): List<LoggedSet>
@@ -461,6 +486,35 @@ interface WorkoutDao {
     suspend fun repairMissingBodyWeights(profileWeightKg: Double?): Int
 }
 
+/**
+ * The materialized schedule used by the workout streak.
+ *
+ * Past rows are immutable history; a routine edit replaces today and the future only. Keeping the
+ * rows in Room rather than deriving them from the current routine is what stops a future edit from
+ * rewriting last month's adherence.
+ */
+@Dao
+interface ScheduleDao {
+    @Query("SELECT * FROM scheduled_workout_days ORDER BY dateStart ASC")
+    fun getAllScheduleDays(): Flow<List<ScheduledWorkoutDay>>
+
+    @Query("SELECT * FROM scheduled_workout_days ORDER BY dateStart ASC")
+    suspend fun getAllScheduleDaysOnce(): List<ScheduledWorkoutDay>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertScheduleDays(days: List<ScheduledWorkoutDay>)
+
+    /** Removes today and every future row before a new active routine is materialized. */
+    @Query(
+        "DELETE FROM scheduled_workout_days " +
+            "WHERE dateKey >= :fromKey OR (dateKey = 0 AND dateStart >= :fromDate)"
+    )
+    suspend fun deleteScheduleFrom(fromKey: Long, fromDate: Long)
+
+    @Query("DELETE FROM scheduled_workout_days")
+    suspend fun deleteAllScheduleDays()
+}
+
 @Dao
 interface UserProfileDao {
     @Query("SELECT * FROM user_profile WHERE id = 1 LIMIT 1")
@@ -491,6 +545,10 @@ interface SavedRoutineDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRoutine(routine: SavedRoutine): Long
+
+    /** Restores routines with their original identifiers. */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRoutines(routines: List<SavedRoutine>)
 
     @Delete
     suspend fun deleteRoutine(routine: SavedRoutine)
@@ -528,11 +586,19 @@ interface BodyWeightDao {
     @Query("SELECT * FROM body_weight_logs ORDER BY timestamp ASC")
     fun getAllWeightLogs(): Flow<List<BodyWeightLog>>
 
+    /** One consistent weigh-in snapshot for the backup exporter. */
+    @Query("SELECT * FROM body_weight_logs ORDER BY id ASC")
+    suspend fun getAllWeightLogsOnce(): List<BodyWeightLog>
+
     @Query("SELECT COUNT(*) FROM body_weight_logs")
     suspend fun weightLogCount(): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertWeightLog(log: BodyWeightLog): Long
+
+    /** Restores weigh-ins with their original identifiers. */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertWeightLogs(logs: List<BodyWeightLog>)
 
     @Delete
     suspend fun deleteWeightLog(log: BodyWeightLog)
@@ -548,6 +614,18 @@ interface BodyWeightDao {
 interface ChatDao {
     @Query("SELECT * FROM chat_sessions ORDER BY lastUpdatedAt DESC")
     fun getAllSessions(): Flow<List<ChatSession>>
+
+    /** One consistent conversation snapshot for the backup exporter. */
+    @Query("SELECT * FROM chat_sessions ORDER BY id ASC")
+    suspend fun getAllSessionsOnce(): List<ChatSession>
+
+    /** Every message, in the stable insertion order the archive preserves. */
+    @Query("SELECT * FROM chat_messages ORDER BY sessionId ASC, timestamp ASC, id ASC")
+    suspend fun getAllMessagesOnce(): List<ChatMessageEntity>
+
+    /** Restores conversations with their original identifiers. */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSessions(sessions: List<ChatSession>)
 
     @Query("SELECT * FROM chat_sessions WHERE id = :sessionId LIMIT 1")
     suspend fun getSessionById(sessionId: String): ChatSession?
@@ -600,11 +678,19 @@ interface GeminiSummaryDao {
     @Query("SELECT * FROM gemini_summaries ORDER BY createdAt DESC")
     fun getAllSummaries(): Flow<List<GeminiSummary>>
 
+    /** One consistent summary snapshot for the backup exporter. */
+    @Query("SELECT * FROM gemini_summaries ORDER BY id ASC")
+    suspend fun getAllSummariesOnce(): List<GeminiSummary>
+
     @Query("SELECT * FROM gemini_summaries WHERE id = :id LIMIT 1")
     suspend fun getSummaryById(id: Long): GeminiSummary?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSummary(summary: GeminiSummary): Long
+
+    /** Restores summaries with their original identifiers. */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSummaries(summaries: List<GeminiSummary>)
 
     @Delete
     suspend fun deleteSummary(summary: GeminiSummary)
