@@ -309,8 +309,8 @@ To cut a release:
 2. **Tag it.** The tag drives the version:
 
    ```bash
-   git tag -a v4.0.0 -m "IronPulse 4.0.0"
-   git push origin v4.0.0
+   git tag -a v4.1.0 -m "IronPulse 4.1.0"
+   git push origin v4.1.0
    ```
 
 3. **Build the signed release APK** locally with the release key and record its checksum:
@@ -320,13 +320,13 @@ To cut a release:
    sha256sum app/build/outputs/apk/release/app-release.apk
    ```
 
-   Rename the artefact to the release convention (`IronPulse4.0.0-release.apk`) and write the
-   checksum to `IronPulse4.0.0-release.apk.sha256`.
+   Rename the artefact to the release convention (`IronPulse4.1.0-release.apk`) and write the
+   checksum to `IronPulse4.1.0-release.apk.sha256`.
 4. **Attach both to the release**, writing the notes from ``CHANGELOG.md``:
 
    ```bash
-   gh release create v4.0.0 IronPulse4.0.0-release.apk IronPulse4.0.0-release.apk.sha256 \
-     --title "IronPulse 4.0.0" \
+   gh release create v4.1.0 IronPulse4.1.0-release.apk IronPulse4.1.0-release.apk.sha256 \
+     --title "IronPulse 4.1.0" \
      --notes-file CHANGELOG.md \
      --verify-tag
    ```

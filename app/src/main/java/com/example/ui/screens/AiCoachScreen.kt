@@ -139,6 +139,10 @@ import com.example.ui.components.SelectRoutineDayDialog
 import com.example.data.model.Exercise
 import com.example.data.model.RoutineDay
 import com.example.data.model.RoutineParser
+import com.example.data.ai.RoutineModificationProposal
+import com.example.data.model.ChatMessageKind
+import com.example.data.model.ChatMessageStatus
+import com.example.data.model.Weekday
 import com.example.ui.viewmodel.ChatMessage
 import com.example.ui.viewmodel.MainViewModel
 
@@ -270,6 +274,7 @@ fun AiCoachScreen(
 fun AiChatView(viewModel: MainViewModel) {
     val messages by viewModel.chatMessages.collectAsStateWithLifecycle()
     val isLoading by viewModel.isChatLoading.collectAsStateWithLifecycle()
+    val aiDataAccessEnabled by viewModel.aiWorkoutDataAccess.collectAsStateWithLifecycle()
     val sessions by viewModel.chatSessions.collectAsStateWithLifecycle()
     val currentSession by viewModel.currentChatSession.collectAsStateWithLifecycle()
 
@@ -601,7 +606,12 @@ fun AiChatView(viewModel: MainViewModel) {
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(messages, key = { it.id }) { msg ->
-                    ChatBubble(msg)
+                    ChatBubble(
+                        message = msg,
+                        aiDataAccessEnabled = aiDataAccessEnabled,
+                        onApproveProposal = { viewModel.approveRoutineProposal(it) },
+                        onRejectProposal = { viewModel.rejectRoutineProposal(it) }
+                    )
                 }
 
                 if (isLoading) {
@@ -699,13 +709,139 @@ fun AiChatView(viewModel: MainViewModel) {
 }
 
 /**
+ * The in-chat approval card for a controlled routine modification.
+ *
+ * This is deliberately not a dialog: the proposal belongs to the conversation and remains visible
+ * with its final approved, rejected, expired or blocked state.
+ */
+@Composable
+private fun RoutineProposalContent(
+    message: ChatMessage,
+    accessEnabled: Boolean,
+    onApprove: () -> Unit,
+    onReject: () -> Unit
+) {
+    val proposal = RoutineModificationProposal.fromJson(message.payloadJson)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Default.Warning,
+                contentDescription = null,
+                tint = GoldenAmber,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(7.dp))
+            Text(
+                text = "Proposed routine modification",
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                color = TextWhite
+            )
+        }
+        if (message.text.isNotBlank()) {
+            Text(
+                text = message.text,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextWhite
+            )
+        }
+        if (proposal == null) {
+            Text(
+                text = "This proposal could not be read. No changes were made.",
+                style = MaterialTheme.typography.bodySmall,
+                color = FireRed
+            )
+            return@Column
+        }
+        Text(
+            text = "Day: ${Weekday.name(proposal.weekday)}" +
+                if (proposal.dayTitle.isNotBlank()) " (${proposal.dayTitle})" else "",
+            style = MaterialTheme.typography.labelMedium,
+            color = ElectricCyan
+        )
+        Text(
+            text = "Remove: ${proposal.removeExerciseName}\nReplace with: ${proposal.replacementExerciseName}" +
+                if (proposal.generatedExercise != null) " (new AI-generated exercise)" else "",
+            style = MaterialTheme.typography.bodySmall,
+            color = TextWhite
+        )
+        if (proposal.reason.isNotBlank()) {
+            Text(
+                text = "Reason: ${proposal.reason}",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted
+            )
+        }
+        when (message.status) {
+            ChatMessageStatus.PENDING -> {
+                if (accessEnabled) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = onApprove,
+                            colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
+                            shape = RoundedCornerShape(9.dp),
+                            modifier = Modifier.testTag("approve_routine_proposal")
+                        ) {
+                            Text("Grant permission", color = OnAccent, fontWeight = FontWeight.Bold)
+                        }
+                        OutlinedButton(
+                            onClick = onReject,
+                            shape = RoundedCornerShape(9.dp),
+                            modifier = Modifier.testTag("reject_routine_proposal")
+                        ) {
+                            Text("Reject", color = TextMuted)
+                        }
+                    }
+                } else {
+                    Text(
+                        text = "AI workout-data access is disabled. Enable it in Settings before acting " +
+                            "on this proposal. Nothing has been changed.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = FireRed
+                    )
+                }
+            }
+            ChatMessageStatus.APPROVED -> Text(
+                "Approved and applied.",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                color = MintGreen
+            )
+            ChatMessageStatus.REJECTED -> Text(
+                "Rejected. No changes were made.",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                color = TextMuted
+            )
+            ChatMessageStatus.EXPIRED -> Text(
+                "Expired or invalidated. No changes were made.",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                color = FireRed
+            )
+            else -> Text(
+                "This proposal is not actionable.",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted
+            )
+        }
+    }
+}
+
+/**
  * One chat message.
  *
  * The text can be selected with a long press so a single line can be copied, and every answer
  * generated by the coach carries a clipboard button that copies the whole message at once.
  */
 @Composable
-fun ChatBubble(message: ChatMessage) {
+fun ChatBubble(
+    message: ChatMessage,
+    aiDataAccessEnabled: Boolean = true,
+    onApproveProposal: (ChatMessage) -> Unit = {},
+    onRejectProposal: (ChatMessage) -> Unit = {}
+) {
     val isUser = message.sender == ChatMessage.Sender.USER
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
@@ -786,6 +922,13 @@ fun ChatBubble(message: ChatMessage) {
                             color = TextWhite,
                             modifier = Modifier.padding(12.dp)
                         )
+                    } else if (message.kind == ChatMessageKind.ROUTINE_PROPOSAL) {
+                        RoutineProposalContent(
+                            message = message,
+                            accessEnabled = aiDataAccessEnabled,
+                            onApprove = { onApproveProposal(message) },
+                            onReject = { onRejectProposal(message) }
+                        )
                     } else {
                         MarkdownView(
                             markdown = message.text,
@@ -805,7 +948,9 @@ fun ChatBubble(message: ChatMessage) {
                 // Icon only, with no "Copy" word: the action is universally understood, the label
                 // forced the row wider than the narrowest message it sits under, and the outcome is
                 // already carried by the tick that replaces the icon once it is tapped.
-                if (!isUser && message.text.isNotBlank()) {
+                if (!isUser && message.kind != ChatMessageKind.ROUTINE_PROPOSAL &&
+                    message.text.isNotBlank()
+                ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()

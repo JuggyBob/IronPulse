@@ -16,9 +16,14 @@
 local.properties
 *.keystore
 *.jks
+*.p12
+*.pfx
 *.pepk
 *.base64
 .env
+Key.txt
+my-release-key
+my-upload-key.jks
 
 # IDE & OS cache
 .idea/

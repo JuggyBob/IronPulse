@@ -1,3 +1,19 @@
 <resources>
     <string name="app_name">IronPulse</string>
+    <string name="widget_streak_name">Workout Streak</string>
+    <string name="widget_streak_description">Current and best streak with the alive or burnt-out flame</string>
+    <string name="widget_streak_flame">Workout streak flame</string>
+    <string name="widget_weekly_name">Weekly Workout Overview</string>
+    <string name="widget_weekly_description">Seven training days and today\'s workout</string>
+    <string name="widget_weekly_title">LAST 7 DAYS</string>
+    <string name="widget_weekly_today_workout">Today is %1$s</string>
+    <string name="widget_weekly_today_rest">Today is a rest day</string>
+    <string name="widget_weekly_start">Start workout</string>
+    <string name="widget_weekly_choose">Start another workout</string>
+    <string name="widget_profile_name">Workout Profile</string>
+    <string name="widget_profile_description">Name, weight, height and BMI</string>
+    <string name="widget_profile_subtitle">Workout Profile</string>
+    <string name="widget_profile_weight">WEIGHT</string>
+    <string name="widget_profile_height">HEIGHT</string>
+    <string name="widget_profile_bmi">BMI</string>
 </resources>

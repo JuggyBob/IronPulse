@@ -116,7 +116,8 @@ data class AiToolDefinition(
     val description: String,
     val inputSchemaJson: String,
     val permission: AiToolPermission = AiToolPermission.READ_ONLY,
-    val maxResultBytes: Int = DEFAULT_MAX_RESULT_BYTES
+    val maxResultBytes: Int = DEFAULT_MAX_RESULT_BYTES,
+    val domain: AiToolDomain = AiToolDomain.CATALOG
 ) {
     companion object {
         const val DEFAULT_MAX_RESULT_BYTES = 16 * 1024
@@ -206,5 +207,7 @@ data class AiConversationResult(
     val text: String,
     val rounds: Int,
     val toolCallsExecuted: Int,
-    val usedCompatibilityFallback: Boolean
+    val usedCompatibilityFallback: Boolean,
+    /** Present when the model asked for a routine change that needs explicit approval. */
+    val routineProposal: RoutineModificationProposal? = null
 )

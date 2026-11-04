@@ -18,6 +18,7 @@ import com.example.data.model.SavedRoutine
 import com.example.data.model.ScheduledWorkoutDay
 import com.example.data.model.SessionWithSets
 import com.example.data.model.UserProfile
+import com.example.data.model.WorkoutAiSummary
 import com.example.data.model.WorkoutSession
 import kotlinx.coroutines.flow.Flow
 
@@ -352,6 +353,15 @@ interface WorkoutDao {
     @Query("SELECT * FROM workout_sessions ORDER BY id ASC")
     suspend fun getAllSessionsOnce(): List<WorkoutSession>
 
+    /** Completed sessions with their sets, for AI query tools and workout widgets. */
+    @androidx.room.Transaction
+    @Query("SELECT * FROM workout_sessions ORDER BY startTime ASC")
+    suspend fun getAllSessionsWithSetsOnce(): List<SessionWithSets>
+
+    @androidx.room.Transaction
+    @Query("SELECT * FROM workout_sessions WHERE id = :id LIMIT 1")
+    suspend fun getSessionWithSetsOnce(id: Long): SessionWithSets?
+
     /** Restores sessions with their original identifiers. */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSessions(sessions: List<WorkoutSession>)
@@ -651,6 +661,17 @@ interface ChatDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessages(messages: List<ChatMessageEntity>)
 
+    /** Changes only the approval state of one proposal message. */
+    @Query("UPDATE chat_messages SET status = :status WHERE id = :id")
+    suspend fun updateMessageStatus(id: String, status: String)
+
+    /** Permission revocation invalidates every still-pending proposal. */
+    @Query(
+        "UPDATE chat_messages SET status = 'EXPIRED' " +
+            "WHERE kind = 'ROUTINE_PROPOSAL' AND status = 'PENDING'"
+    )
+    suspend fun expirePendingRoutineProposals()
+
     @Query("DELETE FROM chat_messages WHERE sessionId = :sessionId")
     suspend fun deleteMessagesForSession(sessionId: String)
 
@@ -697,5 +718,30 @@ interface GeminiSummaryDao {
 
     @Query("DELETE FROM gemini_summaries")
     suspend fun deleteAllSummaries()
+}
+
+@Dao
+interface WorkoutAiSummaryDao {
+    @Query("SELECT * FROM workout_ai_summaries ORDER BY createdAt DESC")
+    fun getAllSummaries(): Flow<List<WorkoutAiSummary>>
+
+    @Query("SELECT * FROM workout_ai_summaries ORDER BY id ASC")
+    suspend fun getAllSummariesOnce(): List<WorkoutAiSummary>
+
+    @Query("SELECT * FROM workout_ai_summaries WHERE workoutId = :workoutId LIMIT 1")
+    suspend fun getSummaryForWorkout(workoutId: Long): WorkoutAiSummary?
+
+    /** The unique workoutId index makes the insert a safe no-op against an existing summary. */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfAbsent(summary: WorkoutAiSummary): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(summaries: List<WorkoutAiSummary>)
+
+    @Query("DELETE FROM workout_ai_summaries WHERE workoutId = :workoutId")
+    suspend fun deleteForWorkout(workoutId: Long)
+
+    @Query("DELETE FROM workout_ai_summaries")
+    suspend fun deleteAll()
 }
 

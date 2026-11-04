@@ -34,7 +34,13 @@ class AiConversationEngine(
         systemInstruction: String,
         messages: List<AiMessage>,
         enableTools: Boolean = true,
-        generation: AiGenerationConfig = AiGenerationConfig()
+        generation: AiGenerationConfig = AiGenerationConfig(),
+        accessPolicy: AiAccessPolicy = AiAccessPolicy.disabled,
+        /**
+         * Read before every provider request and every tool dispatch. This is what makes revoking
+         * the Settings permission take effect inside an already-running agent loop.
+         */
+        accessPolicyProvider: (suspend () -> AiAccessPolicy)? = null
     ): AiConversationResult {
         validateConfiguration(configuration)
         val provider = providerResolver(configuration.provider)
@@ -48,24 +54,29 @@ class AiConversationEngine(
         var rounds = 0
         var executedCalls = 0
         val cache = mutableMapOf<String, AiToolResult>()
+        suspend fun currentAccess(): AiAccessPolicy =
+            accessPolicyProvider?.invoke() ?: accessPolicy
 
-        fun effectiveSystem(): String {
+        fun effectiveSystem(access: AiAccessPolicy): String {
             if (!enableTools || !compatibility) return systemInstruction
-            return systemInstruction + AiCompatibilityProtocol.systemSuffix(dispatcher.definitions())
+            return systemInstruction +
+                AiCompatibilityProtocol.systemSuffix(dispatcher.definitions(access))
         }
 
         while (rounds < maxRounds) {
             rounds++
             val nativeTools = enableTools && !compatibility
+            val requestAccess = currentAccess()
             val response = try {
                 callProvider(
                     provider = provider,
                     request = buildRequest(
                         configuration = configuration,
-                        systemInstruction = effectiveSystem(),
+                        systemInstruction = effectiveSystem(requestAccess),
                         messages = conversation,
                         nativeTools = nativeTools,
-                        generation = generation
+                        generation = generation,
+                        accessPolicy = requestAccess
                     )
                 )
             } catch (error: AiException) {
@@ -131,12 +142,35 @@ class AiConversationEngine(
                     results.add(cached.copy(callId = call.id))
                     continue
                 }
-                val result = dispatcher.dispatch(call)
+                val result = dispatcher.dispatch(call, currentAccess())
                 cache[key] = result
                 executedCalls++
                 results.add(result)
             }
             conversation.add(AiMessage(role = AiRole.TOOL, toolResults = results))
+
+            // A routine change is a proposal, never an automatic write. Stop here so the app can
+            // render the approval card; the model resumes only after the athlete decides.
+            val proposal = results.asSequence()
+                .mapNotNull { result ->
+                    if (result.isError) return@mapNotNull null
+                    runCatching {
+                        val json = JSONObject(result.contentJson)
+                        json.optJSONObject("proposal")?.let(RoutineModificationProposal::fromJson)
+                    }.getOrNull()
+                }
+                .firstOrNull()
+            if (proposal != null) {
+                return AiConversationResult(
+                    text = response.text.trim().ifBlank {
+                        "I prepared a routine change for your approval."
+                    },
+                    rounds = rounds,
+                    toolCallsExecuted = executedCalls,
+                    usedCompatibilityFallback = usedCompatibility,
+                    routineProposal = proposal
+                )
+            }
         }
 
         // The model kept asking for tools. Ask once more with tools removed so the athlete gets an
@@ -151,7 +185,8 @@ class AiConversationEngine(
                     "information you already have. Do not request any more tools.",
                 messages = conversation,
                 nativeTools = false,
-                generation = generation
+                generation = generation,
+                accessPolicy = currentAccess()
             )
         )
         val finalText = finalResponse.text.trim()
@@ -183,7 +218,8 @@ class AiConversationEngine(
         systemInstruction: String,
         messages: List<AiMessage>,
         nativeTools: Boolean,
-        generation: AiGenerationConfig
+        generation: AiGenerationConfig,
+        accessPolicy: AiAccessPolicy
     ): AiRequest = AiRequest(
         provider = configuration.provider,
         model = configuration.model,
@@ -191,7 +227,7 @@ class AiConversationEngine(
         baseUrl = configuration.baseUrl,
         systemInstruction = systemInstruction,
         messages = messages,
-        tools = if (nativeTools) dispatcher.definitions() else emptyList(),
+        tools = if (nativeTools) dispatcher.definitions(accessPolicy) else emptyList(),
         toolMode = if (nativeTools) AiToolMode.NATIVE else AiToolMode.COMPATIBILITY,
         generation = generation
     )

@@ -57,6 +57,7 @@ import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Subscriptions
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -158,6 +159,7 @@ import androidx.compose.material3.SwitchDefaults
 fun SettingsScreen(
     viewModel: MainViewModel,
     onBack: () -> Unit,
+    onOpenWidgetAppearance: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
@@ -165,7 +167,10 @@ fun SettingsScreen(
     // toggle in the IronPulse card, and both have to see the same settings.
     val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
     val dataTransferState by viewModel.dataTransferState.collectAsStateWithLifecycle()
+    val aiWorkoutDataAccess by viewModel.aiWorkoutDataAccess.collectAsStateWithLifecycle()
+    val postWorkoutAiSummaries by viewModel.postWorkoutAiSummaries.collectAsStateWithLifecycle()
 
+    var showAiAccessInfoDialog by remember { mutableStateOf(false) }
     var showClearDataDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
     var showRestoreWidgetsDialog by remember { mutableStateOf(false) }
@@ -655,6 +660,96 @@ fun SettingsScreen(
                         checked = shareAthleteDataWithAi,
                         onCheckedChange = { viewModel.setShareAthleteDataWithAi(it) },
                         tag = "settings_share_athlete_data"
+                    )
+                }
+            }
+        }
+
+        // AI data access and automatic summaries.
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("ai_data_access_card"),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                shape = RoundedCornerShape(16.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "AI Data Access",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = TextWhite
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Control exactly what the AI Coach may read and change. Both options are off by default.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Allow AI Coach to access workout data",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = TextWhite
+                            )
+                            Text(
+                                text = if (aiWorkoutDataAccess) {
+                                    "The Coach can retrieve your workouts, schedule, exercise history and catalog, and can propose routine changes for approval."
+                                } else {
+                                    "The Coach can chat normally but cannot read or change any workout data."
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted
+                            )
+                        }
+                        IconButton(
+                            onClick = { showAiAccessInfoDialog = true },
+                            modifier = Modifier.testTag("settings_ai_data_info_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = "What the AI can access",
+                                tint = ElectricCyan,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Switch(
+                            checked = aiWorkoutDataAccess,
+                            onCheckedChange = { viewModel.setAiWorkoutDataAccess(it) },
+                            modifier = Modifier.testTag("settings_ai_workout_data_access"),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = OnAccent,
+                                checkedTrackColor = ElectricCyan,
+                                uncheckedThumbColor = TextMuted,
+                                uncheckedTrackColor = DarkSurfaceVariant
+                            )
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    HorizontalDivider(color = DarkBorder)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    SettingSwitchRow(
+                        title = "Post-workout AI summaries",
+                        subtitle = if (postWorkoutAiSummaries) {
+                            "After you finish a workout, IronPulse sends that session and its closest previous comparison to your AI provider and saves the result."
+                        } else {
+                            "No automatic summaries are generated. Previously saved summaries stay available."
+                        },
+                        checked = postWorkoutAiSummaries,
+                        onCheckedChange = { viewModel.setPostWorkoutAiSummaries(it) },
+                        tag = "settings_post_workout_ai_summaries"
                     )
                 }
             }
@@ -1298,6 +1393,53 @@ fun SettingsScreen(
             }
         }
 
+        // Native launcher widgets have their own independent appearance settings.
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("android_widgets_settings_card"),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                shape = RoundedCornerShape(16.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Widgets,
+                            contentDescription = null,
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Android Home Screen Widgets",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = TextWhite
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Add the Workout Streak, Weekly Workout Overview and Workout Profile widgets from your launcher's widget picker. Their appearances are independent of the app theme.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = onOpenWidgetAppearance,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("open_android_widget_appearance"),
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.65f)),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ElectricCyan)
+                    ) {
+                        Text("Widget appearance", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
         // Data Management: portable backup/restore plus the destructive reset.
         item {
             Card(
@@ -1572,6 +1714,10 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+
+    if (showAiAccessInfoDialog) {
+        AiWorkoutAccessInfoDialog(onDismiss = { showAiAccessInfoDialog = false })
     }
 
     val pendingPreview = (dataTransferState as? DataTransferState.ReadyToImport)?.preview
@@ -2986,6 +3132,75 @@ private fun RevertCatalogCard(
             }
         )
     }
+}
+
+@Composable
+private fun AiWorkoutAccessInfoDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = DarkSurface,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.testTag("ai_workout_access_info_dialog"),
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = null,
+                    tint = ElectricCyan,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "What the AI Coach can access",
+                    color = TextWhite,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "THE AI COACH CAN RETRIEVE",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MintGreen
+                )
+                BulletLine("Recent completed workouts and their sets, repetitions, weight, holds and cardio duration.", TextMuted)
+                BulletLine("Your current weekly scheduled routine, including rest days and exercise order.", TextMuted)
+                BulletLine("The exercise catalog, including your custom and AI-generated exercises.", TextMuted)
+                BulletLine("Historical completed performance for an individual exercise.", TextMuted)
+                BulletLine("Relevant retrieved information is sent to the AI provider you selected so it can answer the question.", TextMuted)
+
+                Text(
+                    text = "THE AI COACH CANNOT",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = FireRed
+                )
+                BulletLine("Access the database directly, run SQL, read arbitrary files, or change app settings.", TextMuted)
+                BulletLine("Delete or modify completed workout history, your profile, body measurements, or existing catalog entries.", TextMuted)
+                BulletLine("Create or modify exercises freely, or apply any change without an explicit approval.", TextMuted)
+
+                Text(
+                    text = "THE ONLY PERMITTED CHANGES",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = GoldenAmber
+                )
+                BulletLine("Propose a change to your weekly routine. It appears as a card in the conversation and is applied only after you press Grant permission.", TextMuted)
+                BulletLine("If no existing exercise fits, the same approved proposal may create one AI-generated exercise and add it to that routine day in one transaction.", TextMuted)
+                BulletLine("A proposal is one-time, scoped to the exact displayed change, and expires if the routine changes or permission is revoked.", TextMuted)
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.testTag("close_ai_workout_access_info")
+            ) {
+                Text("Got it", color = ElectricCyan, fontWeight = FontWeight.Bold)
+            }
+        }
+    )
 }
 
 /**

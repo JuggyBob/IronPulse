@@ -28,8 +28,42 @@ interface BackupSchemaMigration {
  */
 object BackupSchemaMigrations {
 
-    /** No migration exists yet: schema v1 is the first format this app can read. */
-    val all: List<BackupSchemaMigration> = emptyList()
+    /**
+     * v2 adds post-workout summaries and the three native-widget theme preferences. Both are
+     * additive: an old backup simply has no rows and no explicit widget appearance.
+     */
+    object MigrateV1ToV2 : BackupSchemaMigration {
+        override val fromVersion: Int = 1
+        override val toVersion: Int = 2
+
+        override fun migrate(sections: MutableMap<String, JsonNode.Obj>) {
+            val ai = sections[BackupFormat.SECTION_AI]
+            if (ai != null && ai["workoutSummaries"] == null) {
+                ai["workoutSummaries"] = JsonNode.Arr()
+            }
+            val preferences = sections[BackupFormat.SECTION_PREFERENCES]
+            if (preferences != null) {
+                if (preferences["widgetThemes"] == null) {
+                    preferences["widgetThemes"] = JsonNode.Obj(
+                        linkedMapOf(
+                            "streak" to JsonNode.Str("ironpulse"),
+                            "weekly" to JsonNode.Str("ironpulse"),
+                            "profile" to JsonNode.Str("ironpulse")
+                        )
+                    )
+                }
+                // New permissions default to off when an old archive is restored.
+                if (preferences["aiWorkoutDataAccess"] == null) {
+                    preferences["aiWorkoutDataAccess"] = JsonNode.Bool(false)
+                }
+                if (preferences["postWorkoutAiSummaries"] == null) {
+                    preferences["postWorkoutAiSummaries"] = JsonNode.Bool(false)
+                }
+            }
+        }
+    }
+
+    val all: List<BackupSchemaMigration> = listOf(MigrateV1ToV2)
 
     fun migrate(
         sections: MutableMap<String, JsonNode.Obj>,

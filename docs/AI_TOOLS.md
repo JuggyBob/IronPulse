@@ -1,9 +1,14 @@
 # AI tools
 
-IronPulse gives its AI models a small, fixed set of **read-only** tools so an answer can be based on
-the athlete's real exercise library and saved routines instead of a guess. The tools are defined by
-the application, not by a provider: Google, OpenAI, Anthropic, OpenRouter, xAI and a custom
-OpenAI-compatible endpoint all see the same five tools, the same validation and the same limits.
+IronPulse gives its AI models a small, fixed set of application-owned tools so an answer can be
+based on the athlete's real exercise library, current routine and completed workout history instead
+of a guess. The tools are defined by the application, not by a provider: Google, OpenAI, Anthropic,
+OpenRouter, xAI and a custom OpenAI-compatible endpoint all see the same tool catalog, the same
+validation and the same limits.
+
+Personal-data tools are available only after **Settings -> AI Data Access -> Allow AI Coach to
+access workout data** is explicitly enabled. The dispatcher enforces that permission on every
+request; a system prompt is not the security boundary.
 
 The implementation lives in
 [`app/src/main/java/com/example/data/ai/AiTools.kt`](../app/src/main/java/com/example/data/ai/AiTools.kt).
@@ -14,15 +19,15 @@ The implementation lives in
 
 | Property | Behavior |
 |---|---|
-| Access | Read-only. No tool creates, edits or deletes an exercise, routine, workout or setting. |
-| Data surface | `AiDataAccess`, implemented by `RepositoryAiDataAccess` over `FitnessRepository`. |
+| Access | Retrieval is read-only. The only write-shaped tool creates a proposal; it does not write until the athlete approves the exact displayed change. |
+| Data surface | `AiDataAccess`, implemented by `RepositoryAiDataAccess` over narrowly scoped `FitnessRepository` reads. |
 | SQL | None. The model cannot send a query; the repository methods are fixed. |
 | Filesystem | None. |
 | Network | None. A tool handler has no HTTP client and cannot choose a host. |
 | Code execution | None. |
 | Tool set | Fixed at build time by `AiToolCatalog`; a provider cannot add or rename a tool. |
-| Result size | Each result is capped at **16 KiB** of UTF-8 JSON (`AiToolDefinition.DEFAULT_MAX_RESULT_BYTES`). |
-| Permissions | Every definition declares `AiToolPermission.READ_ONLY`. |
+| Permissions | The dispatcher checks `AiAccessPolicy` and `AiToolDomain` before every call. |
+| Result size | Default **16 KiB**, 32 KiB for workout/history tools and 48 KiB for the routine overview; results also cap sets and text fields. |
 
 A tool call is validated and executed by `AiToolDispatcher`. Failures become a JSON object with
 `"ok": false` that the model can read and recover from; they are not thrown into the chat as raw
@@ -44,6 +49,8 @@ tools, sends the results back, and repeats until the model answers or a limit is
 | Duplicate calls | Answered once per conversation from a cache keyed by tool name and canonicalized arguments |
 | Ordering | Sequential; calls in one response run one after another |
 | Exhausted budget | One final request with tools removed, so the athlete still gets an answer from the data already gathered |
+| Permission changes | The dispatcher re-reads the access policy before each tool call, so revoking access stops a pending retrieval inside an active loop |
+| Proposal stop | A successful routine proposal ends the tool loop so the app can render the approval card; the model resumes only after the athlete decides |
 
 ### Tool modes
 
@@ -91,8 +98,13 @@ All errors use this shape:
 | `invalid_arguments` | The JSON could not be parsed, a required argument is missing, a type or range is wrong, or a value is too long. |
 | `not_found` | The requested exercise or routine does not exist. |
 | `no_routines` | The athlete has no saved routines, so a routine lookup cannot return one. |
+| `no_active_routine` | No routine is currently scheduled, or the active routine has no weekly days. |
+| `permission_denied` | The tool is not available because AI workout-data access is disabled. |
+| `exercise_not_in_day` / `invalid_day` | The proposed routine change does not match the current routine. |
+| `exercise_not_found` / `exercise_exists` | A replacement must be a real catalog exercise or a genuinely new generated exercise. |
+| `ambiguous_replacement` | A proposal cannot both select an existing exercise and create a new one. |
 | `tool_failed` | The handler failed for an unexpected reason. The message is truncated and does not include a stack trace. |
-| `result_too_large` | The serialized result exceeded 16 KiB. The model is told to narrow the request. |
+| `result_too_large` | The serialized result exceeded its per-tool cap. The model is told to narrow the request. |
 
 ---
 
@@ -302,18 +314,89 @@ in two routines.
 
 ---
 
+### `search_recent_workouts`
+
+**Purpose:** retrieve bounded completed-session data for recent-training, volume, frequency and
+session questions.
+
+| Argument | Type | Required | Rules |
+|---|---|---|---|
+| `daysBack` | integer | no | 1–365, default 30. |
+| `exerciseName` | string | no | Case-insensitive exercise filter. |
+| `limit` | integer | no | 1–20, default 10. |
+| `offset` | integer | no | 0–200, default 0. |
+
+Returns session id/title/date/start/end/duration, routine link, completed set count, and up to 120
+completed sets per session with set number, exercise identity/type, weight, added weight, reps,
+hold seconds, cardio minutes, distance and body-weight snapshot. `hasMore` identifies another page.
+
+---
+
+### `get_current_routine`
+
+**Purpose:** return the active weekly schedule exactly as the routine feature sees it, including
+rest days and exercise order.
+
+| Argument | Type | Required | Rules |
+|---|---|---|---|
+| none | — | — | The active routine is read from preferences. |
+
+The result contains `routineId`, `routineName`, and all seven days with weekday, title, rest-day
+flag, note and each exercise's id, name, type, category, equipment, sets, reps, weight, added weight,
+hold seconds, rest seconds, prescription and a bounded instruction excerpt. With no active routine
+the tool returns `no_active_routine` instead of guessing.
+
+---
+
+### `search_exercise_history`
+
+**Purpose:** inspect one exact exercise's completed performance for progress comparisons.
+
+| Argument | Type | Required | Rules |
+|---|---|---|---|
+| `exerciseName` | string | yes | Exact name; variants such as “Push-up (Wide)” are not merged. |
+| `daysBack` | integer | no | 1–1095, default 180. |
+| `limit` | integer | no | 1–30, default 20. |
+
+Returns sessions newest first with only the matching completed sets and the same performance fields
+as `search_recent_workouts`. An empty result includes an explicit note rather than invented history.
+
+---
+
+### `propose_routine_modification`
+
+**Purpose:** prepare one routine change for explicit approval. This tool **does not modify data**.
+
+| Argument | Type | Required | Rules |
+|---|---|---|---|
+| `routineId` | integer | no | Must be the currently active routine. |
+| `weekday` | integer | yes | 1 = Monday … 7 = Sunday. |
+| `removeExerciseName` | string | yes | Must exist in that day. |
+| `replacementExerciseId` | integer | conditional | Existing catalog exercise. |
+| `replacementExerciseName` | string | yes | Name of the existing or generated replacement. |
+| `newExercise` | object | conditional | Complete generated-exercise record; only when no catalog movement fits. |
+| `reason` | string | no | Short explanation shown on the approval card. |
+
+The response contains a structured proposal and the note that nothing has changed. The app renders
+it inside the conversation. **Grant permission** triggers a fresh permission check, active-routine
+check, routine-signature stale check and one transaction that either replaces the slot or inserts
+the generated exercise and replaces the slot together. **Reject** changes nothing. A proposal is
+one-time and cannot authorize a second edit.
+
+---
+
 ## Adding a tool
 
 Tools are intentionally centralized. To add one:
 
-1. Add a method to `AiDataAccess` and implement it in `RepositoryAiDataAccess` using
+1. Add a narrow method to `AiDataAccess` and implement it in `RepositoryAiDataAccess` using
    `FitnessRepository`. Do not pass a DAO, database handle, file or HTTP client to a handler.
-2. Add an `AiToolDefinition` to `AiToolCatalog` with a JSON Schema, a stable name, a description and
-   `AiToolPermission.READ_ONLY`.
+2. Add an `AiToolDefinition` to `AiToolCatalog` with a JSON Schema, a stable name, a description, a
+   domain (`CATALOG`, `WORKOUT_DATA` or `ROUTINE_WRITE`) and an appropriate result cap.
 3. Add a handler in `AiToolRegistry` and validate every argument through `AiToolArgs`.
-4. Return a JSON object with `"ok": true` and keep it under 16 KiB.
-5. Add dispatcher and engine coverage in
-   [`AiToolExecutionTest`](../app/src/test/java/com/example/AiToolExecutionTest.kt).
+4. Return a JSON object with `"ok": true` and bounded content.
+5. Add dispatcher, permission and engine coverage in the AI tool tests.
 
-A write tool would require extending `AiToolPermission` and the consent/copy that explains what the
-model can change. None exists today.
+A new write capability requires an explicit domain, an application-owned approval path and a
+security review. `propose_routine_modification` is the only write-shaped tool; it has no direct
+database access and cannot apply itself.

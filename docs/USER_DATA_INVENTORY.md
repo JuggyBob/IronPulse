@@ -8,7 +8,7 @@ verified. It is the coverage contract for the `.ironpulse` format.
 
 | Mechanism | Exact location | User data? | Backup treatment |
 |---|---|---|---|
-| Room database | `ironpulse_database`, schema v14, `AppDatabase` | Yes | Tables below are exported section by section inside one Room transaction. |
+| Room database | `ironpulse_database`, schema v15, `AppDatabase` | Yes | Tables below are exported section by section inside one Room transaction. |
 | Preferences DataStore | `user_preferences.preferences_pb` via `Context.userDataStore` | Mixed | Explicit allowlist. Credentials and the avatar path are never read into the archive. |
 | SharedPreferences `ironpulse_library_edits` | `edited_exercise_ids` | Yes | Exported as `editedLibraryExerciseIds`; used to stop the dataset reseed overwriting restored edits. |
 | SharedPreferences `rest_timer_alert_prefs` | `vibration_enabled`, `sound_enabled` | Derived | Mirror of the two DataStore alert settings. Rebuilt from the imported preferences. |
@@ -24,7 +24,7 @@ content was found in `app/src/main/java`.
 
 ## 2. Room tables
 
-Schema version: **14**. Relationships are logical (the schema declares indexes, not foreign keys),
+Schema version: **15**. Relationships are logical (the schema declares indexes, not foreign keys),
 so the importer validates them explicitly.
 
 ### 2.1 `exercises`
@@ -127,13 +127,13 @@ so the importer validates them explicitly.
 
 | Field | Detail |
 |---|---|
-| Data category | Full user/AI message text, sender, ordering timestamp and id |
+| Data category | Full user/AI message text, sender, ordering timestamp, id, message kind, routine-proposal payload and one-time approval status |
 | Model | `ChatMessageEntity` |
-| Relationships | Belongs to one `ChatSession`. |
-| Export strategy | Every message, ordered by session, timestamp and id. |
-| Import strategy | Delete all destination messages and insert with the same ids. |
+| Relationships | Belongs to one `ChatSession`; a routine proposal also references a routine and two exercise names through its payload. |
+| Export strategy | Every message, including `kind`, `payloadJson` and `status`, ordered by session, timestamp and id. |
+| Import strategy | Delete all destination messages and insert with the same ids and proposal metadata. |
 | Exclusions | None. |
-| Verification | Sender is `USER` or `AI`; every message has its session; exact list equality. |
+| Verification | Sender is `USER` or `AI`; kind and approval state are known values; every message has its session; exact list equality. |
 
 ### 2.10 `gemini_summaries`
 
@@ -146,6 +146,18 @@ so the importer validates them explicitly.
 | Import strategy | Delete all destination summaries and insert with the same ids. |
 | Exclusions | None. |
 | Verification | Nonblank exercise name, valid counts, finite numbers, list equality. |
+
+### 2.11 `workout_ai_summaries`
+
+| Field | Detail |
+|---|---|
+| Data category | One immutable AI comparison per completed workout: exact Markdown, provider/model metadata, optional previous-workout id and creation time |
+| Model | `WorkoutAiSummary` |
+| Relationships | `workoutId` is the exact `WorkoutSession.id`; unique index prevents a second summary for the same workout. `previousWorkoutId` is a soft reference to the compared session. |
+| Export strategy | Every saved summary with its original id, exact Markdown and metadata. |
+| Import strategy | Delete all destination summaries and insert with the same ids after the workout rows, then verify the workout references. |
+| Exclusions | None. Summaries are never regenerated during import. |
+| Verification | Unique positive ids, unique workout ids, nonblank Markdown, valid timestamps, and every `workoutId`/`previousWorkoutId` references a session in the archive. |
 
 ## 3. DataStore allowlist
 
@@ -162,6 +174,8 @@ a whole. These keys are exported:
 | Personal records | `pr_push_ups`, `pr_push_ups_added_kg`, `pr_pull_ups`, `pr_pull_ups_added_kg`, `pr_bulgarian_split_squat`, `pr_bulgarian_split_squat_added_kg` |
 | Routine | `active_routine_id` |
 | Home dashboard | `home_widget_order`, `home_widget_hidden`, `home_widget_weekly_goal`; the image is carried as a file and `home_widget_photo_path` is rebuilt locally |
+| AI data and summaries | `ai_workout_data_access`, `post_workout_ai_summaries` |
+| Android widgets | `android_widget_theme_streak`, `android_widget_theme_weekly`, `android_widget_theme_profile` |
 | AI selection | `ai_provider`, `ai_model_<provider>`, `ai_tool_mode_<provider>`, `ai_custom_base_url`, `ai_custom_acknowledged_endpoint`, legacy `gemini_model_name` |
 
 These keys are deliberately **not** exported:

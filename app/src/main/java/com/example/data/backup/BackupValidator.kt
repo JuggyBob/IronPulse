@@ -8,6 +8,8 @@ package com.example.data.backup
 
 import com.example.data.ai.AiProviderId
 import com.example.data.ai.AiToolMode
+import com.example.data.model.ChatMessageKind
+import com.example.data.model.ChatMessageStatus
 import com.example.data.model.ExerciseType
 import com.example.data.model.Weekday
 import com.example.ui.theme.ThemeMode
@@ -128,6 +130,17 @@ object BackupValidator {
             }
             if (ai.customAcknowledgedEndpoint != null && ai.customBaseUrl == null) {
                 invalid("The backup has an endpoint acknowledgement without an endpoint.")
+            }
+        }
+        prefs.widgetThemes?.let { themes ->
+            for ((label, raw) in listOf(
+                "streak" to themes.streak,
+                "weekly" to themes.weekly,
+                "profile" to themes.profile
+            )) {
+                if (raw != null && ThemeMode.values().none { it.storageKey == raw }) {
+                    invalid("The backup contains an unknown Android widget theme for $label.")
+                }
             }
         }
     }
@@ -287,9 +300,9 @@ object BackupValidator {
     }
 
     private fun validateAi(snapshot: UserDataSnapshot) {
-        val sessionIds = snapshot.chatSessions.map { it.id }
-        if (sessionIds.any { it.isBlank() }) invalid("A conversation has no identifier.")
-        if (sessionIds.size != sessionIds.toSet().size) invalid("Two conversations share an identifier.")
+        val chatSessionIds = snapshot.chatSessions.map { it.id }
+        if (chatSessionIds.any { it.isBlank() }) invalid("A conversation has no identifier.")
+        if (chatSessionIds.size != chatSessionIds.toSet().size) invalid("Two conversations share an identifier.")
         for (session in snapshot.chatSessions) {
             if (session.createdAt < 0L || session.lastUpdatedAt < 0L) {
                 invalid("A conversation has an invalid timestamp.")
@@ -299,18 +312,36 @@ object BackupValidator {
         val messageIds = snapshot.chatMessages.map { it.id }
         if (messageIds.any { it.isBlank() }) invalid("An AI message has no identifier.")
         if (messageIds.size != messageIds.toSet().size) invalid("Two AI messages share an identifier.")
-        val knownSessions = sessionIds.toSet()
+        val knownSessions = chatSessionIds.toSet()
         for (message in snapshot.chatMessages) {
             if (message.sessionId !in knownSessions) {
                 invalid("An AI message belongs to a conversation that is not in the backup.", code = BackupErrorCode.RELATIONSHIP_ERROR)
             }
             if (message.sender !in setOf("USER", "AI")) invalid("An AI message has an unknown sender.")
             if (message.timestamp < 0L) invalid("An AI message has an invalid timestamp.")
+            if (message.kind !in setOf(ChatMessageKind.TEXT, ChatMessageKind.ROUTINE_PROPOSAL)) {
+                invalid("An AI message has an unknown kind.")
+            }
+            if (message.status !in setOf(
+                    ChatMessageStatus.NONE,
+                    ChatMessageStatus.PENDING,
+                    ChatMessageStatus.APPROVED,
+                    ChatMessageStatus.REJECTED,
+                    ChatMessageStatus.EXPIRED
+                )
+            ) {
+                invalid("An AI message has an unknown approval state.")
+            }
+            if (message.kind == ChatMessageKind.ROUTINE_PROPOSAL &&
+                message.status == ChatMessageStatus.NONE
+            ) {
+                invalid("A routine proposal has no approval state.")
+            }
         }
 
-        val summaryIds = snapshot.geminiSummaries.map { it.id }
-        if (summaryIds.any { it <= 0L }) invalid("A saved AI summary has an invalid identifier.")
-        if (summaryIds.size != summaryIds.toSet().size) invalid("Two saved AI summaries share an identifier.")
+        val geminiSummaryIds = snapshot.geminiSummaries.map { it.id }
+        if (geminiSummaryIds.any { it <= 0L }) invalid("A saved AI summary has an invalid identifier.")
+        if (geminiSummaryIds.size != geminiSummaryIds.toSet().size) invalid("Two saved AI summaries share an identifier.")
         for (summary in snapshot.geminiSummaries) {
             if (summary.exerciseName.isBlank()) invalid("A saved AI summary has no exercise name.")
             if (summary.windowDays <= 0) invalid("A saved AI summary has an invalid window.")
@@ -318,6 +349,33 @@ object BackupValidator {
             finiteNonNegative("saved AI summary estimate", summary.bestOneRm)
             if (!summary.trendPercent.isFinite()) invalid("A saved AI summary has an invalid trend.")
             if (summary.createdAt < 0L) invalid("A saved AI summary has an invalid timestamp.")
+        }
+
+        val workoutSessionIds = snapshot.sessions.map { it.id }.toSet()
+        val workoutSummaryIds = snapshot.workoutSummaries.map { it.id }
+        if (workoutSummaryIds.any { it <= 0L }) invalid("A post-workout summary has an invalid identifier.")
+        if (workoutSummaryIds.size != workoutSummaryIds.toSet().size) {
+            invalid("Two post-workout summaries share an identifier.")
+        }
+        val summaryWorkouts = snapshot.workoutSummaries.map { it.workoutId }
+        if (summaryWorkouts.size != summaryWorkouts.toSet().size) {
+            invalid("Two post-workout summaries are attached to the same workout.")
+        }
+        for (summary in snapshot.workoutSummaries) {
+            if (summary.workoutId !in workoutSessionIds) {
+                invalid(
+                    "A post-workout summary belongs to a workout that is not in the backup.",
+                    code = BackupErrorCode.RELATIONSHIP_ERROR
+                )
+            }
+            if (summary.summaryMarkdown.isBlank()) invalid("A post-workout summary has no text.")
+            if (summary.previousWorkoutId != 0L && summary.previousWorkoutId !in workoutSessionIds) {
+                invalid(
+                    "A post-workout summary references a missing comparison workout.",
+                    code = BackupErrorCode.RELATIONSHIP_ERROR
+                )
+            }
+            if (summary.createdAt < 0L) invalid("A post-workout summary has an invalid timestamp.")
         }
     }
 

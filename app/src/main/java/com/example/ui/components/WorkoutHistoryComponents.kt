@@ -30,6 +30,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AssignmentTurnedIn
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronLeft
@@ -134,6 +135,10 @@ fun WorkoutHistoryDialog(
     onDismiss: () -> Unit
 ) {
     val allSessions by viewModel.allSessions.collectAsStateWithLifecycle()
+    val workoutSummaries by viewModel.workoutSummaries.collectAsStateWithLifecycle()
+    val summaryByWorkout = remember(workoutSummaries) {
+        workoutSummaries.associateBy { it.workoutId }
+    }
     var selectedSessionForDetail by remember { mutableStateOf<WorkoutSession?>(null) }
     var sessionToDelete by remember { mutableStateOf<WorkoutSession?>(null) }
 
@@ -499,6 +504,30 @@ fun WorkoutHistoryDialog(
                                                     text = dateFormat.format(Date(session.startTime)),
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = TextMuted
+                                                )
+                                            }
+
+                                            // Saved AI summary. Disabled when this workout has none.
+                                            IconButton(
+                                                onClick = { viewModel.openWorkoutSummary(session.id) },
+                                                enabled = summaryByWorkout[session.id] != null,
+                                                modifier = Modifier
+                                                    .size(32.dp)
+                                                    .testTag("workout_summary_${session.id}")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.AssignmentTurnedIn,
+                                                    contentDescription = if (summaryByWorkout[session.id] != null) {
+                                                        "Open AI workout summary"
+                                                    } else {
+                                                        "No AI summary for this workout"
+                                                    },
+                                                    tint = if (summaryByWorkout[session.id] != null) {
+                                                        ElectricCyan
+                                                    } else {
+                                                        TextMuted.copy(alpha = 0.35f)
+                                                    },
+                                                    modifier = Modifier.size(18.dp)
                                                 )
                                             }
 

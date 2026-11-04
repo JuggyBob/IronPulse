@@ -14,6 +14,7 @@ import com.example.data.model.GeminiSummary
 import com.example.data.model.LoggedSet
 import com.example.data.model.SavedRoutine
 import com.example.data.model.ScheduledWorkoutDay
+import com.example.data.model.WorkoutAiSummary
 import com.example.data.model.WorkoutSession
 
 /** Converts the runtime snapshot to frozen v1 DTOs and back. */
@@ -59,7 +60,8 @@ object BackupMapper {
             AiSectionV1(
                 chatSessions = snapshot.chatSessions,
                 chatMessages = snapshot.chatMessages,
-                geminiSummaries = snapshot.geminiSummaries
+                geminiSummaries = snapshot.geminiSummaries,
+                workoutSummaries = snapshot.workoutSummaries
             ),
             AiSectionV1::class.java
         )
@@ -128,6 +130,7 @@ object BackupMapper {
             chatSessions = ai.chatSessions,
             chatMessages = ai.chatMessages,
             geminiSummaries = ai.geminiSummaries,
+            workoutSummaries = ai.workoutSummaries.orEmpty(),
             widgetPhoto = widgetPhoto,
             widgetPhotoPath = null
         )
@@ -308,7 +311,10 @@ object BackupMapper {
         sessionId = message.sessionId,
         sender = message.sender,
         text = message.text,
-        timestamp = message.timestamp
+        timestamp = message.timestamp,
+        kind = message.kind,
+        payloadJson = message.payloadJson,
+        status = message.status
     )
 
     fun chatMessageFromDto(dto: ChatMessageV1): ChatMessageEntity = ChatMessageEntity(
@@ -316,7 +322,10 @@ object BackupMapper {
         sessionId = dto.sessionId,
         sender = dto.sender,
         text = dto.text,
-        timestamp = dto.timestamp
+        timestamp = dto.timestamp,
+        kind = dto.kind,
+        payloadJson = dto.payloadJson,
+        status = dto.status
     )
 
     fun geminiSummaryToDto(summary: GeminiSummary): GeminiSummaryV1 = GeminiSummaryV1(
@@ -340,6 +349,26 @@ object BackupMapper {
         setCount = dto.setCount,
         bestOneRm = dto.bestOneRm,
         trendPercent = dto.trendPercent,
+        createdAt = dto.createdAt
+    )
+
+    fun workoutSummaryToDto(summary: WorkoutAiSummary): WorkoutSummaryV1 = WorkoutSummaryV1(
+        id = summary.id,
+        workoutId = summary.workoutId,
+        summaryMarkdown = summary.summaryMarkdown,
+        provider = summary.provider,
+        model = summary.model,
+        previousWorkoutId = summary.previousWorkoutId,
+        createdAt = summary.createdAt
+    )
+
+    fun workoutSummaryFromDto(dto: WorkoutSummaryV1): WorkoutAiSummary = WorkoutAiSummary(
+        id = dto.id,
+        workoutId = dto.workoutId,
+        summaryMarkdown = dto.summaryMarkdown,
+        provider = dto.provider,
+        model = dto.model,
+        previousWorkoutId = dto.previousWorkoutId,
         createdAt = dto.createdAt
     )
 }

@@ -80,15 +80,23 @@ Worth knowing, because they are deliberate and should stay that way:
 
 - **AI data sharing is off by default.** No profile data is sent with an AI request until the user
   explicitly enables it. `athleteContextPromptBlock()` returns an empty string while it is off.
+- **AI Coach workout-data access is a separate, default-off permission.** Retrieval tools are not
+  registered and direct dispatch is rejected while it is off. Disabling it also expires pending
+  routine proposals.
 - **Credentials stay with their provider.** Each provider has its own key and model in DataStore.
   A key is sent only to that provider's fixed host, or, for the custom endpoint, only to the exact
   normalized URL the user confirmed. Changing the URL requires a new confirmation.
 - **Custom endpoints are opt-in and constrained.** The URL must be HTTP(S) with no embedded
   credentials or fragment. Plain HTTP is accepted only for loopback and private-network hosts, with
   an explicit warning. Redirects are not followed, and TLS certificate checks are never disabled.
-- **AI tools are read-only.** The canonical registry can search and read exercises, routines and
-  their entries through the repository. There is no SQL, filesystem, arbitrary network or code
-  execution tool, and every call is validated, byte-capped and bounded.
+- **AI retrieval tools are read-only.** The registry can search and read completed workouts, the
+  current routine, the exercise catalog and exercise history through narrow repository methods.
+  There is no SQL, filesystem, arbitrary network or code execution tool, and every call is validated,
+  byte-capped and bounded.
+- **AI routine changes require explicit approval.** The model can only create a proposal. A single
+  displayed substitution is applied by the app after the user presses Grant permission, with a
+  permission recheck, active-routine check, stale-signature check and one Room transaction. There is
+  no general AI database-write tool.
 - **The API key is never committed.** `.env`, `local.properties`, `*.jks` and `*.keystore` are
   gitignored, and CI scans every push for secrets.
 - **Release signing keys are not in the repository.**
@@ -111,7 +119,7 @@ Release APKs are attached to the
 checksums.
 
 ```bash
-sha256sum IronPulse4.0.0-release.apk
+sha256sum IronPulse4.1.0-release.apk
 ```
 
 Compare against the checksum in the release notes before installing an APK you did not build

@@ -192,6 +192,7 @@ fun HomeScreen(
     val weeklyGoal by viewModel.homeWidgetWeeklyGoal.collectAsStateWithLifecycle()
     val widgetPhotoError by viewModel.widgetPhotoError.collectAsStateWithLifecycle()
     val fullscreenEnabled by viewModel.fullscreenEnabled.collectAsStateWithLifecycle()
+    val streakFocusRequest by viewModel.homeStreakFocusRequest.collectAsStateWithLifecycle()
     var showWidgetManager by remember { mutableStateOf(false) }
     var showGoalDialog by remember { mutableStateOf(false) }
 
@@ -214,6 +215,15 @@ fun HomeScreen(
         orderedWidgets.filter { it != HomeWidget.WEEK || hasWeekWidget }
     }
     val listState = rememberLazyListState()
+    LaunchedEffect(streakFocusRequest, visibleWidgets) {
+        if (streakFocusRequest > 0) {
+            val index = visibleWidgets.indexOf(HomeWidget.STREAK)
+            if (index >= 0) {
+                // One greeting item precedes the widget items.
+                listState.animateScrollToItem(index + 1)
+            }
+        }
+    }
     var draggingWidgetId by remember { mutableStateOf<String?>(null) }
     // Set for the short glide between the card under the finger and the slot it is released into.
     // While it is non-null the card still floats and the auto-scroll loop is stopped.

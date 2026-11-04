@@ -30,7 +30,8 @@ class FitnessRepository(
     private val scheduleDao: ScheduleDao,
     private val bodyWeightDao: BodyWeightDao,
     private val chatDao: ChatDao,
-    private val geminiSummaryDao: GeminiSummaryDao
+    private val geminiSummaryDao: GeminiSummaryDao,
+    private val workoutAiSummaryDao: com.example.data.dao.WorkoutAiSummaryDao? = null
 ) {
     // Exercises
     fun getAllExercises(): Flow<List<Exercise>> = exerciseDao.getAllExercises()
@@ -176,8 +177,15 @@ class FitnessRepository(
 
     /** A session together with its sets, used by the activity heat map. */
     fun getAllSessionsWithSets(): Flow<List<SessionWithSets>> = workoutDao.getAllSessionsWithSets()
+    suspend fun getAllSessionsWithSetsOnce(): List<SessionWithSets> =
+        workoutDao.getAllSessionsWithSetsOnce()
+    suspend fun getSessionWithSetsOnce(id: Long): SessionWithSets? =
+        workoutDao.getSessionWithSetsOnce(id)
     suspend fun insertSession(session: WorkoutSession): Long = workoutDao.insertSession(session)
-    suspend fun deleteSession(session: WorkoutSession) = workoutDao.deleteSessionWithSets(session)
+    suspend fun deleteSession(session: WorkoutSession) {
+        workoutDao.deleteSessionWithSets(session)
+        workoutAiSummaryDao?.deleteForWorkout(session.id)
+    }
     suspend fun getSessionById(id: Long): WorkoutSession? = workoutDao.getSessionById(id)
 
     // Logged Sets
@@ -268,7 +276,19 @@ class FitnessRepository(
         chatDao.deleteAllMessages()
         chatDao.deleteAllSessions()
         geminiSummaryDao.deleteAllSummaries()
+        workoutAiSummaryDao?.deleteAll()
         userProfileDao.deleteAllProfiles()
+    }
+
+    // Post-workout AI summaries
+    fun getAllWorkoutAiSummaries() = workoutAiSummaryDao?.getAllSummaries() ?: kotlinx.coroutines.flow.flowOf(emptyList())
+    suspend fun getWorkoutAiSummary(workoutId: Long) = workoutAiSummaryDao?.getSummaryForWorkout(workoutId)
+    suspend fun insertWorkoutAiSummary(summary: com.example.data.model.WorkoutAiSummary): Long =
+        workoutAiSummaryDao?.insertIfAbsent(summary) ?: -1L
+    suspend fun getAllWorkoutAiSummariesOnce(): List<com.example.data.model.WorkoutAiSummary> =
+        workoutAiSummaryDao?.getAllSummariesOnce() ?: emptyList()
+    suspend fun deleteWorkoutAiSummaryForWorkout(workoutId: Long) {
+        workoutAiSummaryDao?.deleteForWorkout(workoutId)
     }
 
     // Gemini monthly summaries (Progress tab history)

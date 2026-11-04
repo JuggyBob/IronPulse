@@ -13,6 +13,79 @@ Nothing yet. See [CONTRIBUTING.md](CONTRIBUTING.md) to propose a change.
 
 ---
 
+## [4.1.0] - 2026-11-04
+
+IronPulse 4.1.0 turns the AI Coach into a permission-gated workout-data assistant, adds an explicit
+approval workflow for routine changes, stores post-workout AI comparisons permanently, and brings
+three native Android launcher widgets with independent themes. It also extends the `.ironpulse`
+backup format and remains compatible with older backups.
+
+### Added
+
+- **Database-aware AI Coach.** Four bounded retrieval capabilities cover recent completed workouts,
+  the current weekly routine including rest days, the exercise catalog, and exact-name completed
+  exercise history with sets, reps, weight, hold duration, cardio duration and distance.
+- **Explicit AI workout-data permission.** New Settings switch, off by default, with a detailed
+  information dialog listing what the Coach can retrieve and what it is prohibited from doing.
+- **Inline routine-change approval cards.** The Coach can propose one routine substitution, with an
+  optional single AI-generated exercise, and nothing is written until the athlete presses
+  **Grant permission** in the conversation.
+- **Post-workout AI summaries.** Optional automatic comparison of a finished quick or routine
+  workout against the previous comparable session, using the stable routine id and weekday where
+  available and disclosed partial matching for quick workouts, then persisted against the exact
+  workout.
+- **Workout History summary access.** A clipboard-check action opens the saved summary without
+  contacting the AI provider; workouts without a summary show a clearly disabled control.
+- **Native Android home screen widgets:** Workout Streak (2x2), Weekly Workout Overview (4x2) and
+  Workout Profile (4x2), with real app data and launcher navigation.
+- **Independent widget appearance.** Light, Dark, AMOLED Dark and IronPulse Theme can be selected
+  separately for each widget under Settings -> Android Home Screen Widgets -> Widget appearance.
+
+### Improved
+
+- AI tool execution supports multiple bounded tool rounds and duplicate-call caching while retaining
+  provider-independent Auto/Native/Text behaviour.
+- AI-created exercise validation now uses one shared parser for the routine generator, single
+  exercise creator and routine proposals.
+- The Profile tab keeps editable profile and benchmark records while the AI data explanation now
+  lives in Settings.
+- Widget data reuses the same `WorkoutStreak`, calendar-day, profile, unit and BMI logic as the app.
+
+### Changed
+
+- AI personal-data access is denied unless explicitly enabled; disabling it removes personal-data
+  tools and invalidates pending routine approvals.
+- `.ironpulse` data schema is now v2. Exports include immutable post-workout summaries,
+  proposal-card metadata, AI access/summary switches and the three widget themes.
+- Room schema is now version 15 with the new summary table and chat-message approval metadata.
+
+### Fixed
+
+- Older `.ironpulse` backups import with safe defaults for all new fields.
+- Import verification treats hidden Home widget IDs as a set instead of depending on archive order,
+  keeping the committed v1 fixture importable.
+- Generated routine changes no longer delete the removed movement from the exercise catalog.
+
+### Security
+
+- AI retrieval is read-only and enforced at the tool dispatcher/service layer, not only in prompts.
+- Routine writes require the Settings permission, a still-active routine, a matching routine
+  signature, an unchanged weekday/exercise and an explicit one-time approval.
+- Closing or revoking the permission during an active tool loop blocks the pending tool call.
+- Backups continue to exclude API keys, signing material and other local credentials.
+
+### Technical
+
+- Added `workout_ai_summaries`, `WorkoutAiSummaryDao`, `MIGRATION_14_15`, shared `AiExerciseFactory`
+  and shared `ProfileMetrics`.
+- Added widget providers, metadata, layouts, drawables, navigation actions, midnight/boot/timezone
+  refresh handling and independent DataStore theme preferences.
+- Added focused tests for permission gating, mid-loop revocation, retrieval, proposals, stale
+  approval, generated exercises, summary comparison/immutability, widget data/theming and v1/v2
+  backup compatibility. The suite now has 705 JVM tests across 85 classes.
+
+---
+
 ## [4.0.0] - 2026-11-04
 
 This is the first release since 3.0.0. It adds complete user-data backup and restore, the four-theme
@@ -664,7 +737,8 @@ Entries are grouped under **Added**, **Changed**, **Deprecated**, **Removed**, *
 **Security**, each newest first. Versions follow [SemVer](https://semver.org/): bump the patch for a
 fix, the minor for a feature, the major for a breaking change.
 
-[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v4.0.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v4.1.0...HEAD
+[4.1.0]: https://github.com/JuggyBob/IronPulse/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/JuggyBob/IronPulse/compare/v3.0.0...v4.0.0
 [3.0.0]: https://github.com/JuggyBob/IronPulse/compare/v2.0.1...v3.0.0
 [2.0.1]: https://github.com/JuggyBob/IronPulse/compare/v2.0.0...v2.0.1

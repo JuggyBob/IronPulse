@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.Intent
 import android.graphics.RectF
 import android.os.Build
 import android.os.Bundle
@@ -111,6 +112,7 @@ import com.example.data.model.UpdateState
 import com.example.ui.components.LiquidGlassLens
 import com.example.ui.components.LocalLiquidGlassEnabled
 import com.example.ui.components.StartupUpdateDialog
+import com.example.ui.components.WorkoutSummaryDialog
 import com.example.ui.components.detectLiquidGlassLensGesture
 import com.example.ui.components.drawLiquidGlassLens
 import com.example.ui.components.liquidGlass
@@ -121,6 +123,7 @@ import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.LogWorkoutScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.WidgetAppearanceScreen
 import com.example.ui.screens.ProfileScreen
 import com.example.ui.screens.ProgressScreen
 import com.example.ui.screens.RoutineWorkoutScreen
@@ -146,24 +149,57 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector,
     object Profile : Screen("profile", "Profile", Icons.Default.Person, "nav_profile")
     object AiCoach : Screen("ai_coach", "AI Coach", Icons.Default.AutoAwesome, "nav_ai_coach")
     object Settings : Screen("settings", "Settings", Icons.Default.Settings, "nav_settings")
+    object WidgetAppearance : Screen(
+        "widget_appearance",
+        "Android Widgets",
+        Icons.Default.Settings,
+        "nav_widget_appearance"
+    )
 
     companion object {
         /**
          * The tab that should stay selected for a pushed detail route.
          *
-         * Settings is opened from Profile and is not a sixth destination, so the dock would
-         * otherwise have no selected index. Keeping this mapping pure makes the rule testable and
-         * prevents a future detail route from silently changing another tab's highlight.
+         * Settings and the widget appearance screen are opened from Settings and are not
+         * destinations of their own, so the dock would otherwise have no selected index.
          */
         fun selectedTabRoute(route: String): String =
-            if (route == Settings.route) Profile.route else route
+            if (route == Settings.route || route == WidgetAppearance.route) Profile.route else route
     }
 }
+
+data class WidgetNavigationRequest(val id: Long, val action: String)
 
 class MainActivity : ComponentActivity() {
 
     /** The last mode the athlete chose; reapplied when the window regains focus. */
     private var fullscreenEnabled = true
+
+    private val widgetNavigation = kotlinx.coroutines.flow.MutableStateFlow<WidgetNavigationRequest?>(null)
+    private var widgetNavigationSequence = 0L
+
+    private fun handleWidgetIntent(intent: Intent?) {
+        val action = intent?.getStringExtra(com.example.widget.WidgetNavigation.EXTRA_ACTION)
+            ?: intent?.action
+            ?: return
+        if (action !in setOf(
+                com.example.widget.WidgetNavigation.ACTION_OPEN_STREAK,
+                com.example.widget.WidgetNavigation.ACTION_START_TODAY,
+                com.example.widget.WidgetNavigation.ACTION_SAVED_ROUTINES,
+                com.example.widget.WidgetNavigation.ACTION_OPEN_PROFILE
+            )
+        ) {
+            return
+        }
+        widgetNavigation.value = WidgetNavigationRequest(
+            id = ++widgetNavigationSequence,
+            action = action
+        )
+    }
+
+    private fun consumeWidgetNavigation(id: Long) {
+        if (widgetNavigation.value?.id == id) widgetNavigation.value = null
+    }
 
     /**
      * Applies the optional fullscreen policy immediately.
@@ -205,9 +241,19 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setFullscreenMode(true)
+        handleWidgetIntent(intent)
         setContent {
-            IronPulseApp()
+            IronPulseApp(
+                widgetNavigation = widgetNavigation,
+                onWidgetNavigationHandled = { consumeWidgetNavigation(it) }
+            )
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleWidgetIntent(intent)
     }
 
     /**
@@ -267,7 +313,10 @@ private fun fullscreenCutoutInsets(): WindowInsets {
 }
 
 @Composable
-fun IronPulseApp() {
+fun IronPulseApp(
+    widgetNavigation: kotlinx.coroutines.flow.StateFlow<WidgetNavigationRequest?>? = null,
+    onWidgetNavigationHandled: (Long) -> Unit = {}
+) {
     val viewModel: MainViewModel = viewModel()
     val liquidGlassEnabled by viewModel.liquidGlassEnabled.collectAsStateWithLifecycle()
     val fullscreenEnabled by viewModel.fullscreenEnabled.collectAsStateWithLifecycle()
@@ -278,6 +327,10 @@ fun IronPulseApp() {
     // so a toggle applies immediately without recreating the activity.
     LaunchedEffect(fullscreenEnabled) {
         (context as? MainActivity)?.setFullscreenMode(fullscreenEnabled)
+    }
+    LaunchedEffect(Unit) {
+        com.example.widget.WorkoutWidgetUpdater.updateAll(context)
+        com.example.widget.WidgetMidnightScheduler.schedule(context)
     }
 
     // The theme wraps the whole app, including the navigation bar and every dialog, and is read
@@ -298,17 +351,68 @@ fun IronPulseApp() {
                     .background(DarkBg)
                     .then(insetModifier)
             ) {
-                IronPulseAppContent(viewModel)
+                IronPulseAppContent(
+                    viewModel = viewModel,
+                    widgetNavigation = widgetNavigation,
+                    onWidgetNavigationHandled = onWidgetNavigationHandled
+                )
             }
         }
     }
 }
 
 @Composable
-private fun IronPulseAppContent(viewModel: MainViewModel) {
+private fun IronPulseAppContent(
+    viewModel: MainViewModel,
+    widgetNavigation: kotlinx.coroutines.flow.StateFlow<WidgetNavigationRequest?>? = null,
+    onWidgetNavigationHandled: (Long) -> Unit = {}
+) {
     val navController = rememberNavController()
+    val navigationState = widgetNavigation ?: remember {
+        kotlinx.coroutines.flow.MutableStateFlow<WidgetNavigationRequest?>(null)
+    }
+    val widgetRequest by navigationState.collectAsStateWithLifecycle()
+
+    LaunchedEffect(widgetRequest?.id) {
+        val request = widgetRequest ?: return@LaunchedEffect
+        val navigateHome = {
+            navController.navigate(Screen.Home.route) {
+                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+        when (request.action) {
+            com.example.widget.WidgetNavigation.ACTION_OPEN_STREAK -> {
+                navigateHome()
+                viewModel.requestHomeStreakFocus()
+            }
+            com.example.widget.WidgetNavigation.ACTION_START_TODAY -> {
+                navigateHome()
+                viewModel.startTodayWorkoutFromWidget()
+            }
+            com.example.widget.WidgetNavigation.ACTION_SAVED_ROUTINES -> {
+                viewModel.requestSavedRoutinesTab()
+                navController.navigate(Screen.AiCoach.route) {
+                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
+            com.example.widget.WidgetNavigation.ACTION_OPEN_PROFILE -> {
+                navController.navigate(Screen.Profile.route) {
+                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
+        }
+        onWidgetNavigationHandled(request.id)
+    }
     val activeRoutineWorkout by viewModel.activeRoutineWorkout.collectAsStateWithLifecycle()
     val activeSession by viewModel.activeSession.collectAsStateWithLifecycle()
+    val allSessions by viewModel.allSessions.collectAsStateWithLifecycle()
+    val workoutSummaryState by viewModel.workoutSummaryState.collectAsStateWithLifecycle()
     // Gate rather than a route: the landing pages are a modal flow with no back navigation, and
     // showing the tab bar behind them would let the athlete wander into an empty Profile mid form.
     val onboardingCompleted by viewModel.onboardingCompleted.collectAsStateWithLifecycle()
@@ -623,6 +727,17 @@ private fun IronPulseAppContent(viewModel: MainViewModel) {
                 composable(Screen.Settings.route) {
                     SettingsScreen(
                         viewModel = viewModel,
+                        onBack = { navController.popBackStack() },
+                        onOpenWidgetAppearance = {
+                            navController.navigate(Screen.WidgetAppearance.route) {
+                                launchSingleTop = true
+                            }
+                        }
+                    )
+                }
+                composable(Screen.WidgetAppearance.route) {
+                    WidgetAppearanceScreen(
+                        viewModel = viewModel,
                         onBack = { navController.popBackStack() }
                     )
                 }
@@ -676,6 +791,49 @@ private fun IronPulseAppContent(viewModel: MainViewModel) {
                         }
                     )
                 }
+            }
+
+            when (val summaryState = workoutSummaryState) {
+                is MainViewModel.WorkoutSummaryState.Loading -> {
+                    val session = allSessions.firstOrNull { it.id == summaryState.workoutId }
+                    WorkoutSummaryDialog(
+                        workoutTitle = session?.title ?: "Workout",
+                        workoutDate = summaryDate(session?.startTime ?: 0L),
+                        markdown = null,
+                        loading = true,
+                        error = null,
+                        onRetry = null,
+                        onDismiss = { viewModel.dismissWorkoutSummary() }
+                    )
+                }
+
+                is MainViewModel.WorkoutSummaryState.Success -> {
+                    val session = allSessions.firstOrNull { it.id == summaryState.summary.workoutId }
+                    WorkoutSummaryDialog(
+                        workoutTitle = session?.title ?: "Workout",
+                        workoutDate = summaryDate(session?.startTime ?: 0L),
+                        markdown = summaryState.summary.summaryMarkdown,
+                        loading = false,
+                        error = null,
+                        onRetry = null,
+                        onDismiss = { viewModel.dismissWorkoutSummary() }
+                    )
+                }
+
+                is MainViewModel.WorkoutSummaryState.Error -> {
+                    val session = allSessions.firstOrNull { it.id == summaryState.workoutId }
+                    WorkoutSummaryDialog(
+                        workoutTitle = session?.title ?: "Workout",
+                        workoutDate = summaryDate(session?.startTime ?: 0L),
+                        markdown = null,
+                        loading = false,
+                        error = summaryState.message,
+                        onRetry = { viewModel.retryWorkoutSummary(summaryState.workoutId) },
+                        onDismiss = { viewModel.dismissWorkoutSummary() }
+                    )
+                }
+
+                MainViewModel.WorkoutSummaryState.Idle -> Unit
             }
 
             // Hidden while typing rather than lifted: it cannot be used during a text edit and
@@ -1064,3 +1222,9 @@ internal fun KeepTheKeyboardFromComingBack() {
         }
     }
 }
+
+private fun summaryDate(epochMillis: Long): String =
+    if (epochMillis <= 0L) "" else java.text.SimpleDateFormat(
+        "MMM d, yyyy",
+        java.util.Locale.getDefault()
+    ).format(java.util.Date(epochMillis))

@@ -9,7 +9,9 @@ import androidx.compose.runtime.Immutable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
+import com.example.data.ai.AiAccessPolicy
 import com.example.data.ai.AiConfigurationRepository
+import com.example.data.ai.AiExerciseFactory
 import com.example.data.ai.AiErrorKind
 import com.example.data.ai.AiException
 import com.example.data.ai.AiMessage
@@ -20,6 +22,7 @@ import com.example.data.ai.AiRole
 import com.example.data.ai.AiService
 import com.example.data.ai.AiToolMode
 import com.example.data.ai.RepositoryAiDataAccess
+import com.example.data.ai.RoutineModificationProposal
 import com.example.data.api.ReleaseApi
 import com.example.data.backup.BackupArchiveLimits
 import com.example.data.backup.BackupException
@@ -40,6 +43,8 @@ import com.example.data.model.BodyWeightTimeline
 import com.example.data.model.CustomRestTimer
 import com.example.data.model.BodyWeightLog
 import com.example.data.model.ChatMessageEntity
+import com.example.data.model.ChatMessageKind
+import com.example.data.model.ChatMessageStatus
 import com.example.data.model.ChatSession
 import com.example.data.model.Exercise
 import com.example.data.model.ExerciseSearch
@@ -87,6 +92,8 @@ import com.example.data.model.CustomRoutinePromptState
 import com.example.data.model.WeightUnit
 import com.example.data.model.WeightConversion
 import com.example.data.model.UserProfile
+import com.example.data.ai.WorkoutSummaryGenerator
+import com.example.data.model.WorkoutAiSummary
 import com.example.data.model.WorkoutDraft
 import com.example.data.model.WorkoutDraftCodec
 import com.example.data.model.WorkoutMetrics
@@ -150,7 +157,11 @@ data class ChatMessage(
     val id: String = java.util.UUID.randomUUID().toString(),
     val sender: Sender,
     val text: String,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val kind: String = com.example.data.model.ChatMessageKind.TEXT,
+    val payloadJson: String = "",
+    val status: String = com.example.data.model.ChatMessageStatus.NONE,
+    val sessionId: String = ""
 ) {
     enum class Sender { USER, AI }
 }
@@ -168,10 +179,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         scheduleDao = db.scheduleDao(),
         bodyWeightDao = db.bodyWeightDao(),
         chatDao = db.chatDao(),
-        geminiSummaryDao = db.geminiSummaryDao()
+        geminiSummaryDao = db.geminiSummaryDao(),
+        workoutAiSummaryDao = db.workoutAiSummaryDao()
     )
 
     private val userPreferencesRepo = UserPreferencesRepository(application)
+    private val routineModificationService = com.example.data.ai.RoutineModificationService(db)
 
     private val backupPreferencesStore = BackupPreferencesStore(application)
     private val backupManager = UserDataBackupManager(application, db, backupPreferencesStore)
@@ -203,8 +216,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val aiConfigurationRepository = AiConfigurationRepository(application)
     private val aiService = AiService(
         configurationRepository = aiConfigurationRepository,
-        dataAccess = RepositoryAiDataAccess(repository)
+        dataAccess = RepositoryAiDataAccess(repository, userPreferencesRepo)
     )
+    private val workoutSummaryGenerator = WorkoutSummaryGenerator(repository, aiService)
 
     val activeAiProvider: StateFlow<AiProviderId> = aiService.activeProviderFlow
         .flowOn(Dispatchers.IO)
@@ -558,6 +572,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * continuous, but it is stored with [WEIGH_IN_NOTE_PROFILE_UPDATE] so the log list never shows
      * an "Edit Athlete Profile" change as if it were a morning weigh-in.
      */
+    private fun refreshAndroidWidgets() {
+        com.example.widget.WorkoutWidgetUpdater.requestUpdate(getApplication())
+    }
+
     fun updateProfile(profile: UserProfile) {
         val cleanName = profile.name.trim().take(MAX_NAME_LENGTH)
         val toSave = profile.copy(name = cleanName)
@@ -584,6 +602,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 )
             }
+            refreshAndroidWidgets()
         }
     }
 
@@ -711,77 +730,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Reads the single-exercise JSON answer, tolerating prose around the object. */
-    private fun parseAiExerciseJson(rawResponse: String, fallbackName: String): Exercise? {
-        val cleaned = RoutineParser.extractJson(rawResponse)
-        val obj = try {
-            JSONObject(cleaned)
-        } catch (_: Exception) {
-            return null
-        }
-
-        // The model was told to answer exactly this when the name is not a real exercise
-        if (obj.optString("error").isNotBlank()) return null
-
-        val name = obj.optString("name").trim().ifBlank { fallbackName }
-        if (RoutineParser.looksLikeProseNotExercise(name)) return null
-
-        // A refused name that came back as real prose, or an echo of the gibberish, is not an exercise
-        if (GibberishNameDetector.isGibberish(name)) return null
-
-        val category = obj.optString("category", "").trim()
-        val validCategory = if (MuscleCategory.ALL.contains(category)) category else "Calisthenics"
-        val rawType = obj.optString("exerciseType", "").trim().uppercase()
-        val validType = when (rawType) {
-            ExerciseType.ADDED_WEIGHT -> ExerciseType.ADDED_WEIGHT
-            ExerciseType.PURE_BODYWEIGHT -> ExerciseType.PURE_BODYWEIGHT
-            else -> ExerciseType.STANDARD_WEIGHT
-        }
-        val equipment = obj.optString("equipment", "").trim().ifBlank { "Bodyweight" }
-        val description = obj.optString("description", "").trim().ifBlank {
-            "$name performed with $equipment."
-        }
-
-        // Dataset fields, so an AI created exercise is indistinguishable from a seeded one to every
-        // reader of the row. The AI is asked for the dataset's ten body parts and a target muscle;
-        // anything else it invents is dropped rather than stored, because the body map and the
-        // TARGETS section both filter on exact values.
-        val rawBodyPart = obj.optString("bodyPart", "").trim()
-        val bodyPart = if (ExerciseSchema.isKnownBodyPart(rawBodyPart)) {
-            ExerciseSchema.canonicalBodyPart(rawBodyPart)
-        } else {
-            ExerciseSchema.categoryToBodyPart(validCategory)
-        }
-        // The prompt asks for a primary target muscle and for secondary muscles, and the model
-        // usually supplies them. When it does not, the TARGETS section of the detail dialog is
-        // skipped entirely ÔÇö the row saves fine, looks complete, and simply says nothing about what
-        // the movement trains. Falling back to the category keeps the section populated with
-        // something true, because the category was already validated against the fixed seven.
-        val target = ExerciseSchema.canonicalTarget(
-            obj.optString("target", "").trim().ifBlank { fallbackTargetForCategory(validCategory) }
-        )
-        val secondary = obj.optJSONArray("secondaryMuscles")?.let { arr ->
-            (0 until arr.length())
-                .mapNotNull { ExerciseSchema.canonicalTarget(arr.optString(it)).takeIf(String::isNotBlank) }
-        }.orEmpty()
-
-        return Exercise(
-            name = name,
-            category = validCategory,
-            bodyPart = bodyPart,
-            target = target,
-            secondaryMuscles = secondary.toJsonArray(),
-            exerciseType = validType,
-            instructions = obj.optString("instructions", "").trim(),
-            equipment = equipment,
-            description = description,
-            // No media: the dataset has no animation for an invented movement, and the UI shows the
-            // placeholder rather than borrowing an unrelated one.
-            mediaPath = "",
-            sourceId = "",
-            isCustom = true,
-            isAiGenerated = true
-        )
-    }
+    private fun parseAiExerciseJson(rawResponse: String, fallbackName: String): Exercise? =
+        AiExerciseFactory.parse(rawResponse, fallbackName)
 
     // === BODY WEIGHT BENCHMARK PERSONAL RECORDS ===
     // Stored outside the workout history: deleting the workout that set the record must not
@@ -1698,6 +1648,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
 
+            var savedSessionId: Long? = null
             if (setsToSave.isNotEmpty()) {
                 val finalSession = currentSession.copy(
                     endTime = System.currentTimeMillis(),
@@ -1706,6 +1657,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val sessionId = repository.insertSession(finalSession)
                 val setsWithSessionId = setsToSave.map { it.copy(sessionId = sessionId) }
                 repository.insertSets(setsWithSessionId)
+                savedSessionId = sessionId
                 // A new bodyweight record may have just been set
                 refreshBenchmarkRecords()
             }
@@ -1716,6 +1668,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             // The workout is saved, so there is nothing left to offer back on the next launch.
             clearWorkoutDraft()
+            refreshAndroidWidgets()
+            savedSessionId?.let { maybeGenerateWorkoutSummary(it) }
         }
     }
 
@@ -1918,6 +1872,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Deletes the session AND every logged set attached to it, so the exercises
             // immediately disappear from the Progress page analytics.
             repository.deleteSession(session)
+            refreshAndroidWidgets()
         }
     }
 
@@ -2224,18 +2179,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val updated = currentProfile.copy(currentWeightKg = weightKg)
             userPreferencesRepo.saveUserProfile(updated)
             repository.saveUserProfile(updated)
+            refreshAndroidWidgets()
         }
     }
 
     fun deleteWeightLog(log: BodyWeightLog) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.deleteWeightLog(log)
+            refreshAndroidWidgets()
         }
     }
 
     fun deleteWeightLogById(id: Long) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.deleteWeightLogById(id)
+            refreshAndroidWidgets()
         }
     }
 
@@ -2243,6 +2201,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.deleteSet(set)
             renumberSetsForExercise(set.exerciseName)
+            refreshAndroidWidgets()
         }
     }
 
@@ -2251,6 +2210,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             repository.deleteSets(sets)
             // Every exercise touched by this deletion may now have gaps in its set numbering.
             sets.map { it.exerciseName }.distinct().forEach { renumberSetsForExercise(it) }
+            refreshAndroidWidgets()
         }
     }
 
@@ -2308,6 +2268,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // removed their only references.
                 WidgetPhotoStore.deleteUnreferenced(getApplication(), emptySet())
             }
+            refreshAndroidWidgets()
             // Hand the coach a brand new, empty session so the chat stays usable after the wipe.
             val freshSession = ensureDefaultChatSession()
             withContext(Dispatchers.Main) {
@@ -2461,6 +2422,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     resetTransientStateForReplacement()
                     reloadPendingWorkoutDraftLater()
                 }
+                refreshAndroidWidgets()
                 _dataTransferState.value = DataTransferState.Success(
                     operation = BackupOperation.IMPORT,
                     title = "Backup restored",
@@ -2596,6 +2558,81 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val kb = bytes / 1024.0
         if (kb < 1024.0) return String.format(Locale.US, "%.1f KB", kb)
         return String.format(Locale.US, "%.1f MB", kb / 1024.0)
+    }
+
+    // === POST-WORKOUT AI SUMMARIES ===
+    sealed interface WorkoutSummaryState {
+        data object Idle : WorkoutSummaryState
+        data class Loading(val workoutId: Long) : WorkoutSummaryState
+        data class Success(val summary: WorkoutAiSummary) : WorkoutSummaryState
+        data class Error(val workoutId: Long, val message: String) : WorkoutSummaryState
+    }
+
+    val workoutSummaries: StateFlow<List<WorkoutAiSummary>> = repository.getAllWorkoutAiSummaries()
+        .flowOn(Dispatchers.IO)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    private val _workoutSummaryState = MutableStateFlow<WorkoutSummaryState>(WorkoutSummaryState.Idle)
+    val workoutSummaryState: StateFlow<WorkoutSummaryState> = _workoutSummaryState.asStateFlow()
+
+    fun dismissWorkoutSummary() {
+        _workoutSummaryState.value = WorkoutSummaryState.Idle
+    }
+
+    /** Opens the already persisted summary without contacting any AI provider. */
+    fun openWorkoutSummary(workoutId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val summary = repository.getWorkoutAiSummary(workoutId) ?: return@launch
+            withContext(Dispatchers.Main) {
+                _workoutSummaryState.value = WorkoutSummaryState.Success(summary)
+            }
+        }
+    }
+
+    /** Retries only when no summary exists; an existing immutable summary is never replaced. */
+    fun retryWorkoutSummary(workoutId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (repository.getWorkoutAiSummary(workoutId) != null) {
+                openWorkoutSummary(workoutId)
+                return@launch
+            }
+            if (!userPreferencesRepo.postWorkoutAiSummariesFlow.first()) {
+                withContext(Dispatchers.Main) {
+                    _workoutSummaryState.value = WorkoutSummaryState.Error(
+                        workoutId,
+                        "Post-workout AI summaries are disabled in Settings."
+                    )
+                }
+                return@launch
+            }
+            generateWorkoutSummary(workoutId)
+        }
+    }
+
+    private fun maybeGenerateWorkoutSummary(workoutId: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!userPreferencesRepo.postWorkoutAiSummariesFlow.first()) return@launch
+            if (repository.getWorkoutAiSummary(workoutId) != null) return@launch
+            generateWorkoutSummary(workoutId)
+        }
+    }
+
+    private suspend fun generateWorkoutSummary(workoutId: Long) {
+        withContext(Dispatchers.Main) {
+            _workoutSummaryState.value = WorkoutSummaryState.Loading(workoutId)
+        }
+        val result = workoutSummaryGenerator.generate(workoutId)
+        withContext(Dispatchers.Main) {
+            _workoutSummaryState.value = result.fold(
+                onSuccess = { WorkoutSummaryState.Success(it) },
+                onFailure = { error ->
+                    WorkoutSummaryState.Error(
+                        workoutId,
+                        geminiErrorMessage(error, "The post-workout summary")
+                    )
+                }
+            )
+        }
     }
 
     // === GEMINI MONTHLY SUMMARY (PROGRESS TAB) ===
@@ -2905,6 +2942,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             UserPreferencesRepository.AppSettings()
         )
 
+    /** Explicit permission for personal workout retrieval and routine proposals. */
+    val aiWorkoutDataAccess: StateFlow<Boolean> = userPreferencesRepo.aiWorkoutDataAccessFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** Optional automatic post-workout summary generation. */
+    val postWorkoutAiSummaries: StateFlow<Boolean> = userPreferencesRepo.postWorkoutAiSummariesFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun setAiWorkoutDataAccess(enabled: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.setAiWorkoutDataAccess(enabled)
+            if (!enabled) {
+                db.chatDao().expirePendingRoutineProposals()
+            }
+        }
+    }
+
+    fun setPostWorkoutAiSummaries(enabled: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.setPostWorkoutAiSummaries(enabled)
+        }
+    }
+
+    val androidWidgetThemes: StateFlow<com.example.data.model.AndroidWidgetThemes> =
+        userPreferencesRepo.androidWidgetThemesFlow
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                com.example.data.model.AndroidWidgetThemes()
+            )
+
+    fun setAndroidWidgetTheme(
+        kind: com.example.data.model.AndroidWidgetKind,
+        mode: com.example.ui.theme.ThemeMode
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.setAndroidWidgetTheme(kind, mode)
+            com.example.widget.WorkoutWidgetUpdater.updateAll(getApplication())
+        }
+    }
+
     /**
      * The single boolean that drives every Liquid Glass surface.
      *
@@ -3145,12 +3223,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Changes the first day of the week. */
     fun setWeekStartsOnMonday(enabled: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) { userPreferencesRepo.setWeekStartsOnMonday(enabled) }
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.setWeekStartsOnMonday(enabled)
+            refreshAndroidWidgets()
+        }
     }
 
     fun setWeightUnit(unit: String) {
         viewModelScope.launch(Dispatchers.IO) {
             userPreferencesRepo.setWeightUnit(unit)
+            refreshAndroidWidgets()
             // Keep the profile in sync so every body weight calculation follows the setting.
             //
             // Only an existing profile is touched. Writing one when there is none would invent a
@@ -3162,6 +3244,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val updated = profile.copy(preferredUnit = unit)
             userPreferencesRepo.saveUserProfile(updated)
             repository.saveUserProfile(updated)
+            refreshAndroidWidgets()
         }
     }
 
@@ -3323,6 +3406,35 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _savedRoutinesTabRequest = MutableStateFlow(0)
     val savedRoutinesTabRequest: StateFlow<Int> = _savedRoutinesTabRequest.asStateFlow()
 
+    private val _homeStreakFocusRequest = MutableStateFlow(0)
+    val homeStreakFocusRequest: StateFlow<Int> = _homeStreakFocusRequest.asStateFlow()
+
+    fun requestHomeStreakFocus() {
+        _homeStreakFocusRequest.value = _homeStreakFocusRequest.value + 1
+    }
+
+    /** Starts today's scheduled routine day from the launcher widget. */
+    fun startTodayWorkoutFromWidget() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val activeId = userPreferencesRepo.activeRoutineIdFlow.first()
+            val routine = repository.getSavedRoutineById(activeId) ?: return@launch
+            val exercises = repository.getAllExercisesOnce()
+            val days = com.example.data.model.RoutineParser.parseWeek(
+                routine.exercisesJson,
+                exercises,
+                weekStartsOnMonday = userPreferencesRepo.appSettingsFlow.first().weekStartsOnMonday
+            )
+            val today = com.example.data.model.LocalDateKey.isoDayOfWeek(
+                com.example.data.model.LocalDateKey.keyOf(System.currentTimeMillis())
+            )
+            val day = days.firstOrNull { it.weekday == today && it.exercises.isNotEmpty() }
+                ?: return@launch
+            withContext(Dispatchers.Main) {
+                startRoutineWorkout(routine, targetWeekday = day.weekday)
+            }
+        }
+    }
+
     fun requestSavedRoutinesTab() {
         _savedRoutinesTabRequest.value = _savedRoutinesTabRequest.value + 1
     }
@@ -3410,7 +3522,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Schedules a routine as the athlete's week, or clears it with 0. */
     fun setActiveRoutine(routineId: Long) {
-        viewModelScope.launch(Dispatchers.IO) { userPreferencesRepo.setActiveRoutineId(routineId) }
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.setActiveRoutineId(routineId)
+            refreshAndroidWidgets()
+        }
     }
 
     /**
@@ -3489,6 +3604,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
                 repository.replaceFutureSchedule(fromDate = today, rows = rows)
+                refreshAndroidWidgets()
             }
         }
     }
@@ -3496,6 +3612,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun saveRoutine(routine: SavedRoutine) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.saveRoutine(routine)
+            refreshAndroidWidgets()
         }
     }
 
@@ -3516,12 +3633,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 exercisesJson = exercisesJson
             )
             repository.saveRoutine(routine)
+            refreshAndroidWidgets()
         }
     }
 
     fun deleteRoutine(routine: SavedRoutine) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.deleteRoutine(routine)
+            refreshAndroidWidgets()
         }
     }
 
@@ -3558,6 +3677,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     exercisesJson = RoutineParser.serializeExercises(resolved)
                 )
             )
+            refreshAndroidWidgets()
         }
     }
 
@@ -3568,6 +3688,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun saveEditedRoutine(routine: SavedRoutine) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.saveRoutine(routine)
+            refreshAndroidWidgets()
         }
     }
 
@@ -3582,6 +3703,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 createdAt = System.currentTimeMillis()
             )
             repository.saveRoutine(copy)
+            refreshAndroidWidgets()
         }
     }
 
@@ -3835,6 +3957,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
             // A workout without any logged set is not a workout, so nothing is persisted.
+            var savedSessionId: Long? = null
             if (setsToSave.isNotEmpty()) {
                 val sessionTitle = if (!current.dayTitle.isNullOrBlank() && !current.routineName.contains(current.dayTitle, ignoreCase = true)) {
                     "${current.routineName} (${current.dayTitle})"
@@ -3854,6 +3977,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 val sessionId = repository.insertSession(session)
                 repository.insertSets(setsToSave.map { it.copy(sessionId = sessionId) })
+                savedSessionId = sessionId
             }
 
             withContext(Dispatchers.Main) {
@@ -3865,6 +3989,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             // The workout is saved, so there is nothing left to offer back on the next launch.
             clearWorkoutDraft()
+            refreshAndroidWidgets()
+            savedSessionId?.let { maybeGenerateWorkoutSummary(it) }
         }
     }
 
@@ -3887,7 +4013,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             id = entity.id,
                             sender = if (entity.sender == "USER") ChatMessage.Sender.USER else ChatMessage.Sender.AI,
                             text = entity.text,
-                            timestamp = entity.timestamp
+                            timestamp = entity.timestamp,
+                            kind = entity.kind,
+                            payloadJson = entity.payloadJson,
+                            status = entity.status,
+                            sessionId = entity.sessionId
                         )
                     }
                 }
@@ -3987,40 +4117,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
 
+            val dataAccessEnabled = userPreferencesRepo.aiWorkoutDataAccessFlow.first()
             val result = runCatching {
                 val provider = aiService.activeProviderFlow.first()
                 aiService.complete(
-                    systemInstruction = buildString {
-                        append(AiService.DEFAULT_COACH_SYSTEM)
-                        append("\n\n")
-                        append(
-                            athleteContextPromptBlock(
-                                includeBenchmarks = true,
-                                purpose = "tailored coaching answers"
-                            )
-                        )
-                        append("\n\nTOOL USE:\n")
-                        append("- The read-only tools return the athlete's real exercise library and saved routines.\n")
-                        append("- Use them when the answer depends on a catalog name, exercise instructions, or an existing routine.\n")
-                        append("- Never invent an exercise name or claim a routine exists without checking.\n")
-                    },
+                    systemInstruction = buildCoachSystemInstruction(dataAccessEnabled),
                     messages = conversation,
                     enableTools = true,
                     provider = provider,
-                    apiKeyFallback = fallbackApiKey(provider)
-                ).text
+                    apiKeyFallback = fallbackApiKey(provider),
+                    accessPolicy = AiAccessPolicy(
+                        personalData = dataAccessEnabled,
+                        routineModification = dataAccessEnabled
+                    ),
+                    accessPolicyProvider = {
+                        val enabledNow = userPreferencesRepo.aiWorkoutDataAccessFlow.first()
+                        AiAccessPolicy(
+                            personalData = enabledNow,
+                            routineModification = enabledNow
+                        )
+                    }
+                )
             }
 
             result.fold(
-                onSuccess = { replyText ->
-                    repository.insertChatMessage(
-                        ChatMessageEntity(
-                            sessionId = session.id,
-                            sender = "AI",
-                            text = replyText,
-                            timestamp = System.currentTimeMillis()
+                onSuccess = { conversationResult ->
+                    if (conversationResult.routineProposal != null) {
+                        val proposal = conversationResult.routineProposal
+                        repository.insertChatMessage(
+                            ChatMessageEntity(
+                                sessionId = session.id,
+                                sender = "AI",
+                                text = conversationResult.text,
+                                timestamp = System.currentTimeMillis(),
+                                kind = ChatMessageKind.ROUTINE_PROPOSAL,
+                                payloadJson = proposal.toJson().toString(),
+                                status = ChatMessageStatus.PENDING
+                            )
                         )
-                    )
+                    } else {
+                        repository.insertChatMessage(
+                            ChatMessageEntity(
+                                sessionId = session.id,
+                                sender = "AI",
+                                text = conversationResult.text,
+                                timestamp = System.currentTimeMillis()
+                            )
+                        )
+                    }
                 },
                 onFailure = { error ->
                     // No mock answers: surface the real reason instead
@@ -4031,6 +4175,185 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             withContext(Dispatchers.Main) {
                 _isChatLoading.value = false
             }
+        }
+    }
+
+    /**
+     * Applies exactly one proposal after the athlete taps Grant permission.
+     *
+     * The proposal is parsed from the card payload, revalidated against the current routine and
+     * applied in one transaction. It never authorizes a second edit.
+     */
+    fun approveRoutineProposal(message: ChatMessage) {
+        if (message.status != ChatMessageStatus.PENDING) return
+        val proposal = RoutineModificationProposal.fromJson(message.payloadJson)
+        if (proposal == null) {
+            viewModelScope.launch(Dispatchers.IO) {
+                db.chatDao().updateMessageStatus(message.id, ChatMessageStatus.EXPIRED)
+            }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val enabled = userPreferencesRepo.aiWorkoutDataAccessFlow.first()
+            val activeRoutineId = userPreferencesRepo.activeRoutineIdFlow.first()
+            val result = if (!enabled) {
+                Result.failure(IllegalStateException("AI workout-data access is disabled."))
+            } else if (proposal.routineId != activeRoutineId) {
+                Result.failure(IllegalStateException("The active routine changed after this proposal was created."))
+            } else {
+                routineModificationService.apply(proposal, accessEnabled = true)
+            }
+            result.fold(
+                onSuccess = { change ->
+                    db.chatDao().updateMessageStatus(message.id, ChatMessageStatus.APPROVED)
+                    refreshAndroidWidgets()
+                    val fallback = "Approved and applied: **${change.removedExercise}** was replaced " +
+                        "by **${change.addedExercise}** on ${change.weekdayName}. " +
+                        "The rest of the routine was not changed."
+                    val explanation = continueAfterProposalDecision(
+                        sessionId = message.sessionId,
+                        instruction = "The athlete approved the proposal and IronPulse applied exactly " +
+                            "this change: removed ${change.removedExercise}, added " +
+                            "${change.addedExercise} on ${change.weekdayName}. Confirm what changed, " +
+                            "explain briefly why it addresses the request, and explicitly state that " +
+                            "nothing else in the routine was changed. Do not claim any further edit " +
+                            "and do not propose another modification.",
+                        fallback = fallback
+                    )
+                    repository.insertChatMessage(
+                        ChatMessageEntity(
+                            sessionId = message.sessionId,
+                            sender = "AI",
+                            text = explanation,
+                            timestamp = System.currentTimeMillis()
+                        )
+                    )
+                },
+                onFailure = { error ->
+                    db.chatDao().updateMessageStatus(message.id, ChatMessageStatus.EXPIRED)
+                    repository.insertChatMessage(
+                        ChatMessageEntity(
+                            sessionId = message.sessionId,
+                            sender = "AI",
+                            text = "That proposal could not be applied because the routine changed " +
+                                "or is no longer valid. No changes were made. ${error.message.orEmpty()}",
+                            timestamp = System.currentTimeMillis()
+                        )
+                    )
+                }
+            )
+        }
+    }
+
+    /** Rejects a proposal without touching the routine, then continues the explanation in chat. */
+    fun rejectRoutineProposal(message: ChatMessage) {
+        if (message.status != ChatMessageStatus.PENDING) return
+        val proposal = RoutineModificationProposal.fromJson(message.payloadJson)
+        viewModelScope.launch(Dispatchers.IO) {
+            db.chatDao().updateMessageStatus(message.id, ChatMessageStatus.REJECTED)
+            val fallback = if (proposal != null) {
+                "No changes were made. I suggested replacing **${proposal.removeExerciseName}** " +
+                    "with **${proposal.replacementExerciseName}** on " +
+                    "${com.example.data.model.Weekday.name(proposal.weekday)}. " +
+                    "You can ask me to explain the reasoning or propose a different option."
+            } else {
+                "No changes were made. Ask me for a different routine option when you are ready."
+            }
+            val explanation = continueAfterProposalDecision(
+                sessionId = message.sessionId,
+                instruction = "The athlete rejected the routine proposal. Nothing was changed in " +
+                    "the database. Explain the recommendation in normal language without applying " +
+                    "it, mention the trade-offs and a safe alternative, and do not claim that any " +
+                    "edit happened.",
+                fallback = fallback
+            )
+            repository.insertChatMessage(
+                ChatMessageEntity(
+                    sessionId = message.sessionId,
+                    sender = "AI",
+                    text = explanation,
+                    timestamp = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    /**
+     * Lets the coach respond to an approval or rejection as a normal chat turn.
+     *
+     * The explanation call deliberately has tools disabled: the decision is already final, and a
+     * second proposal inside the explanation would be confusing and could invite an unintended
+     * edit. A provider failure falls back to a factual local message, so the athlete is never left
+     * without an answer.
+     */
+    private suspend fun continueAfterProposalDecision(
+        sessionId: String,
+        instruction: String,
+        fallback: String
+    ): String {
+        if (sessionId.isBlank()) return fallback
+        val history = repository.getMessagesListForSession(sessionId)
+            .filter { it.kind == ChatMessageKind.TEXT && it.text.isNotBlank() }
+            .takeLast(20)
+            .map { entity ->
+                AiMessage(
+                    role = if (entity.sender == "USER") AiRole.USER else AiRole.ASSISTANT,
+                    text = entity.text
+                )
+            }
+        return try {
+            val provider = aiService.activeProviderFlow.first()
+            aiService.complete(
+                systemInstruction = "${AiService.DEFAULT_COACH_SYSTEM}\n\n$instruction",
+                messages = history + AiMessage(AiRole.USER, "I made my decision in the card."),
+                enableTools = false,
+                provider = provider,
+                apiKeyFallback = fallbackApiKey(provider),
+                accessPolicy = AiAccessPolicy.disabled
+            ).text.trim().takeIf { it.isNotBlank() } ?: fallback
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            fallback
+        }
+    }
+
+    /**
+     * Builds the coach instruction for one request.
+     *
+     * Personal context is appended only after the explicit permission check. When permission is
+     * off, no profile, benchmark or workout data is placed in the prompt; the model is told it must
+     * say that it cannot access the database instead of guessing.
+     */
+    private fun buildCoachSystemInstruction(dataAccessEnabled: Boolean): String = buildString {
+        append(AiService.DEFAULT_COACH_SYSTEM)
+        append("\n\n")
+        if (dataAccessEnabled) {
+            append(
+                "You are also IronPulse's evidence-based workout data assistant. For any question " +
+                    "about the athlete's workouts, routines, exercise history, progress or schedule, " +
+                    "you MUST call the provided retrieval tools before answering. Never invent a " +
+                    "session, measurement, date, personal record or percentage. Compare only the same " +
+                    "exercise name and compatible units. If there is not enough data, say so plainly. " +
+                    "Keep dates and units explicit. Do not return raw database dumps.\n" +
+                    "You may propose at most one routine change with the proposal tool. A proposal " +
+                    "does not modify anything; the app shows it for explicit approval. Never claim a " +
+                    "change happened before approval. Do not diagnose injuries or guarantee that an " +
+                    "exercise is medically safe; advise professional guidance when appropriate.\n\n"
+            )
+            append(
+                athleteContextPromptBlock(
+                    includeBenchmarks = true,
+                    purpose = "tailored, data-grounded answers"
+                )
+            )
+        } else {
+            append(
+                "The athlete has not enabled AI workout-data access. You have no access to their " +
+                    "workout history, current routine, exercise history, profile or benchmark data. " +
+                    "Do not imply that you can see them and do not invent values. You may still give " +
+                    "general coaching advice and explain how to enable the permission in Settings.\n"
+            )
         }
     }
 
@@ -4276,16 +4599,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * The dataset's own vocabulary, matched to the exercise's category, so the TARGETS section of
      * the detail dialog says something true rather than nothing at all.
      */
-    private fun fallbackTargetForCategory(category: String): String = when (category) {
-        "Chest" -> "Pectorals"
-        "Back" -> "Lats"
-        "Shoulders" -> "Deltoids"
-        "Arms" -> "Biceps"
-        "Core" -> "Abdominals"
-        "Legs" -> "Quadriceps"
-        else -> "Quadriceps"
-    }
-
     suspend fun insertCustomExercise(exercise: Exercise): Long {
         return repository.createAiGeneratedExercise(exercise)
     }

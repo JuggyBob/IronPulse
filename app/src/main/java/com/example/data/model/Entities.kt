@@ -407,7 +407,56 @@ data class ChatMessageEntity(
     val sessionId: String,
     val sender: String, // "USER" or "AI"
     val text: String,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    /** TEXT for an ordinary message, ROUTINE_PROPOSAL for an approval card. */
+    @ColumnInfo(defaultValue = "TEXT")
+    val kind: String = ChatMessageKind.TEXT,
+    /** Structured proposal payload for a ROUTINE_PROPOSAL message; empty for text. */
+    @ColumnInfo(defaultValue = "")
+    val payloadJson: String = "",
+    /** NONE for text, PENDING/APPROVED/REJECTED/EXPIRED for a proposal. */
+    @ColumnInfo(defaultValue = "NONE")
+    val status: String = ChatMessageStatus.NONE
+)
+
+object ChatMessageKind {
+    const val TEXT = "TEXT"
+    const val ROUTINE_PROPOSAL = "ROUTINE_PROPOSAL"
+}
+
+object ChatMessageStatus {
+    const val NONE = "NONE"
+    const val PENDING = "PENDING"
+    const val APPROVED = "APPROVED"
+    const val REJECTED = "REJECTED"
+    const val EXPIRED = "EXPIRED"
+}
+
+/**
+ * An immutable AI comparison generated after a completed workout.
+ *
+ * The summary belongs to exactly one workout through [workoutId]. The unique index is the
+ * immutability guard: a second generation attempt must find this row and must not replace it.
+ */
+@Immutable
+@Entity(
+    tableName = "workout_ai_summaries",
+    indices = [
+        Index(value = ["workoutId"], unique = true),
+        Index(value = ["createdAt"])
+    ]
+)
+data class WorkoutAiSummary(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val workoutId: Long,
+    val summaryMarkdown: String,
+    val provider: String = "",
+    val model: String = "",
+    /** The previous session used for the comparison, or 0 when none was available. */
+    @ColumnInfo(defaultValue = "0")
+    val previousWorkoutId: Long = 0,
+    val createdAt: Long = System.currentTimeMillis()
 )
 
 /**

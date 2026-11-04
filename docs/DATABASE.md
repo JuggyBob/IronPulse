@@ -1,7 +1,7 @@
 # Database and migrations
 
 IronPulse stores everything on the device in a Room (SQLite) database named
-`ironpulse_database`. The current schema is **version 14**. The database is created and upgraded by
+`ironpulse_database`. The current schema is **version 15**. The database is created and upgraded by
 [`AppDatabase.kt`](../app/src/main/java/com/example/data/db/AppDatabase.kt); the entities live in
 [`Entities.kt`](../app/src/main/java/com/example/data/model/Entities.kt).
 
@@ -21,8 +21,9 @@ database, so the app never depends on a remote restore.
 | `saved_routines` | A saved routine and its seven-day plan as JSON, plus goal, frequency and schedule version. | `createdAt`. |
 | `body_weight_logs` | Weigh-in history used by the timeline and the body-weight repair. | `timestamp`. |
 | `chat_sessions` | AI coach conversations. | `lastUpdatedAt`. |
-| `chat_messages` | Messages belonging to a conversation. | `sessionId`, `timestamp`. |
+| `chat_messages` | Messages belonging to a conversation; a routine-approval card also stores its kind, structured payload and one-time approval status. | `sessionId`, `timestamp`. |
 | `gemini_summaries` | Cached monthly exercise reports. The table and entity keep their historical name so existing installs keep their data; the feature itself works with every AI provider. | `createdAt`. |
+| `workout_ai_summaries` | One immutable post-workout AI comparison per completed workout: Markdown, provider/model metadata, comparison workout id and creation time. | Unique `workoutId`, `createdAt`. |
 | `scheduled_workout_days` | One materialized plan row per calendar date, including rest days; stores routine, weekday, day title, exercise count and a timezone-stable `yyyyMMdd` key. | Primary key `dateStart`, `routineId`. |
 
 `workout_sessions` also stores the routine, weekday, planned local date and planned date key that a
@@ -37,7 +38,7 @@ it keeps the related rows in step.
 
 ## Migration history
 
-Every step is registered in the builder; there is no gap in the chain from 1 to 14.
+Every step is registered in the builder; there is no gap in the chain from 1 to 15.
 
 | Step | What it does |
 |---|---|
@@ -54,6 +55,7 @@ Every step is registered in the builder; there is no gap in the chain from 1 to 
 | 11 → 12 | Adds the hot-query indexes; no table or row is rewritten. |
 | 12 -> 13 | Adds `routineId`, `routineWeekday` and `plannedDate` to workout sessions and creates `scheduled_workout_days` with its `routineId` index. Existing sessions keep 0, which means untracked rather than retroactively missed. |
 | 13 -> 14 | Adds `dateKey` to scheduled days and `plannedDateKey` to sessions, so plans and completions survive timezone changes. Existing rows derive the key from their local date when read. |
+| 14 -> 15 | Creates `workout_ai_summaries` with a unique workout id, and adds `kind`, `payloadJson` and `status` to chat messages for inline routine-approval cards. Existing messages default to `TEXT`/`NONE`. |
 
 ### 11 → 12 indexes
 

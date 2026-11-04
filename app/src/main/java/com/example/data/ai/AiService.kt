@@ -83,7 +83,9 @@ class AiService(
         enableTools: Boolean = true,
         generation: AiGenerationConfig = AiGenerationConfig(),
         provider: AiProviderId? = null,
-        apiKeyFallback: String = ""
+        apiKeyFallback: String = "",
+        accessPolicy: AiAccessPolicy = AiAccessPolicy.disabled,
+        accessPolicyProvider: (suspend () -> AiAccessPolicy)? = null
     ): AiConversationResult {
         val config = resolveConfiguration(provider, apiKeyFallback)
         ensureEndpointAllowed(config)
@@ -92,7 +94,9 @@ class AiService(
             systemInstruction = systemInstruction,
             messages = messages,
             enableTools = enableTools,
-            generation = generation
+            generation = generation,
+            accessPolicy = if (enableTools) accessPolicy else AiAccessPolicy.disabled,
+            accessPolicyProvider = if (enableTools) accessPolicyProvider else null
         )
     }
 

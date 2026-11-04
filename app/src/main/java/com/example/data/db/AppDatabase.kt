@@ -13,6 +13,7 @@ import com.example.data.dao.GeminiSummaryDao
 import com.example.data.dao.SavedRoutineDao
 import com.example.data.dao.ScheduleDao
 import com.example.data.dao.UserProfileDao
+import com.example.data.dao.WorkoutAiSummaryDao
 import com.example.data.dao.WorkoutDao
 import com.example.data.model.BodyWeightLog
 import com.example.data.model.ChatMessageEntity
@@ -24,6 +25,7 @@ import com.example.data.model.LoggedSet
 import com.example.data.model.SavedRoutine
 import com.example.data.model.ScheduledWorkoutDay
 import com.example.data.model.UserProfile
+import com.example.data.model.WorkoutAiSummary
 import com.example.data.model.WorkoutSession
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.seed.DatasetSeeder
@@ -44,9 +46,10 @@ import kotlinx.coroutines.sync.withLock
         ChatSession::class,
         ChatMessageEntity::class,
         GeminiSummary::class,
-        ScheduledWorkoutDay::class
+        ScheduledWorkoutDay::class,
+        WorkoutAiSummary::class
     ],
-    version = 14,
+    version = 15,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -59,6 +62,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun bodyWeightDao(): BodyWeightDao
     abstract fun chatDao(): ChatDao
     abstract fun geminiSummaryDao(): GeminiSummaryDao
+    abstract fun workoutAiSummaryDao(): WorkoutAiSummaryDao
 
     companion object {
         @Volatile
@@ -435,6 +439,60 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Adds persistent post-workout AI summaries and the structured chat-message metadata used
+         * by routine approval cards. Existing text messages keep TEXT/NONE defaults.
+         */
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                fun hasColumn(table: String, column: String): Boolean {
+                    db.query("PRAGMA table_info(`$table`)", emptyArray()).use { cursor ->
+                        while (cursor.moveToNext()) {
+                            if (cursor.getString(1) == column) return true
+                        }
+                    }
+                    return false
+                }
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `workout_ai_summaries` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `workoutId` INTEGER NOT NULL,
+                        `summaryMarkdown` TEXT NOT NULL,
+                        `provider` TEXT NOT NULL,
+                        `model` TEXT NOT NULL,
+                        `previousWorkoutId` INTEGER NOT NULL DEFAULT 0,
+                        `createdAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_workout_ai_summaries_workoutId` " +
+                        "ON `workout_ai_summaries` (`workoutId`)"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_workout_ai_summaries_createdAt` " +
+                        "ON `workout_ai_summaries` (`createdAt`)"
+                )
+                if (!hasColumn("chat_messages", "kind")) {
+                    db.execSQL(
+                        "ALTER TABLE `chat_messages` ADD COLUMN `kind` TEXT NOT NULL DEFAULT 'TEXT'"
+                    )
+                }
+                if (!hasColumn("chat_messages", "payloadJson")) {
+                    db.execSQL(
+                        "ALTER TABLE `chat_messages` ADD COLUMN `payloadJson` TEXT NOT NULL DEFAULT ''"
+                    )
+                }
+                if (!hasColumn("chat_messages", "status")) {
+                    db.execSQL(
+                        "ALTER TABLE `chat_messages` ADD COLUMN `status` TEXT NOT NULL DEFAULT 'NONE'"
+                    )
+                }
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -455,7 +513,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_10_11,
                         MIGRATION_11_12,
                         MIGRATION_12_13,
-                        MIGRATION_13_14
+                        MIGRATION_13_14,
+                        MIGRATION_14_15
                     )
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .addCallback(DatabasePrepopulationCallback(context))

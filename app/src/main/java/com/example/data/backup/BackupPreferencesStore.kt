@@ -7,12 +7,14 @@
 package com.example.data.backup
 
 import android.content.Context
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import com.example.data.ai.AiConfigurationRepository
 import com.example.data.ai.AiProviderId
 import com.example.data.ai.AiToolMode
 import com.example.data.preferences.UserPreferencesRepository
+import com.example.ui.theme.ThemeMode
 import com.example.data.preferences.userDataStore
 import com.example.data.seed.LibraryEditTracker
 import com.example.util.RestTimerAlertCoordinator
@@ -144,6 +146,8 @@ open class BackupPreferencesStore(private val context: Context) {
             preferences.weekStartsOnMonday?.let { prefs[UserPreferencesRepository.WEEK_STARTS_ON_MONDAY] = it }
             preferences.autoSaveIntervalSeconds?.let { prefs[UserPreferencesRepository.AUTO_SAVE_INTERVAL_SECONDS] = it }
             preferences.autoCheckUpdatesOnStart?.let { prefs[UserPreferencesRepository.AUTO_CHECK_UPDATES_ON_START] = it }
+            preferences.aiWorkoutDataAccess?.let { prefs[UserPreferencesRepository.AI_WORKOUT_DATA_ACCESS] = it }
+            preferences.postWorkoutAiSummaries?.let { prefs[UserPreferencesRepository.POST_WORKOUT_AI_SUMMARIES] = it }
             preferences.activeRoutineId?.let { prefs[UserPreferencesRepository.ACTIVE_ROUTINE_ID] = it }
             preferences.restTimers?.let { timers ->
                 prefs[UserPreferencesRepository.SAVED_REST_TIMERS_JSON] = encodeRestTimers(timers)
@@ -155,6 +159,23 @@ open class BackupPreferencesStore(private val context: Context) {
                 benchmark.pullUpsAddedKg?.let { prefs[UserPreferencesRepository.PR_PULL_UPS_ADDED] = it }
                 benchmark.bulgarianSplitSquat?.let { prefs[UserPreferencesRepository.PR_BULGARIAN_SPLIT_SQUAT] = it }
                 benchmark.bulgarianSplitSquatAddedKg?.let { prefs[UserPreferencesRepository.PR_BULGARIAN_SPLIT_SQUAT_ADDED] = it }
+            }
+            preferences.widgetThemes?.let { themes ->
+                writeWidgetTheme(
+                    prefs,
+                    UserPreferencesRepository.ANDROID_WIDGET_THEME_STREAK,
+                    themes.streak
+                )
+                writeWidgetTheme(
+                    prefs,
+                    UserPreferencesRepository.ANDROID_WIDGET_THEME_WEEKLY,
+                    themes.weekly
+                )
+                writeWidgetTheme(
+                    prefs,
+                    UserPreferencesRepository.ANDROID_WIDGET_THEME_PROFILE,
+                    themes.profile
+                )
             }
             preferences.ai?.let { ai ->
                 ai.activeProvider?.let { prefs[AiConfigurationRepository.ACTIVE_PROVIDER] = it }
@@ -305,11 +326,34 @@ open class BackupPreferencesStore(private val context: Context) {
             weekStartsOnMonday = prefs[UserPreferencesRepository.WEEK_STARTS_ON_MONDAY],
             autoSaveIntervalSeconds = prefs[UserPreferencesRepository.AUTO_SAVE_INTERVAL_SECONDS],
             autoCheckUpdatesOnStart = prefs[UserPreferencesRepository.AUTO_CHECK_UPDATES_ON_START],
+            aiWorkoutDataAccess = prefs[UserPreferencesRepository.AI_WORKOUT_DATA_ACCESS],
+            postWorkoutAiSummaries = prefs[UserPreferencesRepository.POST_WORKOUT_AI_SUMMARIES],
             activeRoutineId = prefs[UserPreferencesRepository.ACTIVE_ROUTINE_ID],
             restTimers = timers,
             benchmark = benchmark,
-            ai = ai
+            ai = ai,
+            widgetThemes = WidgetThemesV1(
+                streak = readWidgetTheme(prefs[UserPreferencesRepository.ANDROID_WIDGET_THEME_STREAK]),
+                weekly = readWidgetTheme(prefs[UserPreferencesRepository.ANDROID_WIDGET_THEME_WEEKLY]),
+                profile = readWidgetTheme(prefs[UserPreferencesRepository.ANDROID_WIDGET_THEME_PROFILE])
+            )
         )
+    }
+
+    private fun readWidgetTheme(raw: String?): String {
+        val key = raw?.takeIf { value ->
+            ThemeMode.values().any { it.storageKey == value }
+        }
+        return key ?: ThemeMode.IRONPULSE.storageKey
+    }
+
+    private fun writeWidgetTheme(
+        prefs: MutablePreferences,
+        key: Preferences.Key<String>,
+        raw: String?
+    ) {
+        val mode = ThemeMode.values().firstOrNull { it.storageKey == raw } ?: ThemeMode.IRONPULSE
+        prefs[key] = mode.storageKey
     }
 
     private fun readDashboard(prefs: Preferences): DashboardSectionV1 {
@@ -398,6 +442,11 @@ open class BackupPreferencesStore(private val context: Context) {
             UserPreferencesRepository.WEEK_STARTS_ON_MONDAY,
             UserPreferencesRepository.AUTO_SAVE_INTERVAL_SECONDS,
             UserPreferencesRepository.AUTO_CHECK_UPDATES_ON_START,
+            UserPreferencesRepository.AI_WORKOUT_DATA_ACCESS,
+            UserPreferencesRepository.POST_WORKOUT_AI_SUMMARIES,
+            UserPreferencesRepository.ANDROID_WIDGET_THEME_STREAK,
+            UserPreferencesRepository.ANDROID_WIDGET_THEME_WEEKLY,
+            UserPreferencesRepository.ANDROID_WIDGET_THEME_PROFILE,
             UserPreferencesRepository.ACTIVE_ROUTINE_ID,
             UserPreferencesRepository.HOME_WIDGET_ORDER,
             UserPreferencesRepository.HOME_WIDGET_HIDDEN,

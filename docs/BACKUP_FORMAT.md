@@ -40,7 +40,7 @@ destination category on import.
 |---|---|
 | `format` | Always `ironpulse-backup`. |
 | `formatVersion` | Container/manifest structure version. Currently `1`. |
-| `dataSchemaVersion` | Serialized user-data schema. Currently `1`. It is independent of both the app version and the Room schema. |
+| `dataSchemaVersion` | Serialized user-data schema. Currently `2`. It is independent of both the app version and the Room schema. |
 | `appVersionName`, `appVersionCode` | Source IronPulse version. Informational; never used to decide how to parse. |
 | `exportedAt` | ISO-8601 UTC timestamp with milliseconds. |
 | `exportedAtEpochMillis` | Same instant in epoch milliseconds, for display without timezone parsing. |
@@ -72,7 +72,8 @@ During import the reader verifies:
 - The ZIP entry set is exactly the checksum set plus `manifest.json` and `checksums.json`.
 - Every entry's actual SHA-256 matches its checksum.
 - Every file's size matches its manifest entry.
-- Every section's `recordCount` matches the restored DTO's count.
+- Every data section's `recordCount` matches the restored DTO's count. The `preferences` count is
+  advisory so an older archive keeps importing after additive preference fields are introduced.
 
 A failure at any point produces a user-facing error and leaves destination data untouched.
 
@@ -81,13 +82,13 @@ A failure at any point produces a user-facing error and leaves destination data 
 | Section | DTO | Contents |
 |---|---|---|
 | `profile` | `ProfileSectionV1` | DataStore profile fields and Room profile fields; `customApiKey` is not present. |
-| `preferences` | `PreferencesSectionV1` | Explicit allowlist of non-secret preferences, benchmark records, rest timers and AI provider/model/tool-mode selections. |
+| `preferences` | `PreferencesSectionV1` | Explicit allowlist of non-secret preferences, benchmark records, rest timers, AI provider/model/tool-mode selections, the AI Coach workout-data and post-workout-summary switches, and the three independent Android widget themes. |
 | `dashboard` | `DashboardSectionV1` | Widget order, hidden ids, weekly goal and Home photo metadata. |
 | `exercises` | `ExerciseSectionV1` | User-created/AI exercises, athlete-edited library rows, and the edited-library id set. Local media fields are absent. |
 | `workouts` | `WorkoutsSectionV1` | All `WorkoutSessionV1` rows and all `LoggedSetV1` rows, ids preserved. |
 | `routines` | `RoutinesSectionV1` | All saved routines and all materialized schedule days, ids/date keys preserved. |
 | `progress` | `ProgressSectionV1` | All body-weight logs. |
-| `ai` | `AiSectionV1` | All chat sessions, all messages and all saved Gemini summaries. |
+| `ai` | `AiSectionV1` | All chat sessions, all messages (including routine-proposal kind/payload/status), all saved Gemini summaries, and every immutable post-workout AI summary keyed by workout id. |
 | `files/widget_photo.*` | binary | The referenced Home photo, stored without recompression. |
 
 ## Compression and limits

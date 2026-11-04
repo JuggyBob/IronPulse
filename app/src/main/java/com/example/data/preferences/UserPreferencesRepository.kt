@@ -44,6 +44,22 @@ class UserPreferencesRepository(private val context: Context) {
     companion object {
         val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
         val GEMINI_MODEL_NAME = stringPreferencesKey("gemini_model_name")
+
+        /**
+         * The explicit permission boundary for personal workout data in the AI Coach.
+         *
+         * False by default: no personal retrieval tool is registered and no athlete context is
+         * injected. The tool dispatcher checks this at execution time as well as the UI.
+         */
+        val AI_WORKOUT_DATA_ACCESS = booleanPreferencesKey("ai_workout_data_access")
+
+        /** Optional automatic AI comparison after a completed workout. */
+        val POST_WORKOUT_AI_SUMMARIES = booleanPreferencesKey("post_workout_ai_summaries")
+
+        /** Independent appearance for each native launcher widget. */
+        val ANDROID_WIDGET_THEME_STREAK = stringPreferencesKey("android_widget_theme_streak")
+        val ANDROID_WIDGET_THEME_WEEKLY = stringPreferencesKey("android_widget_theme_weekly")
+        val ANDROID_WIDGET_THEME_PROFILE = stringPreferencesKey("android_widget_theme_profile")
         val PROFILE_IS_SAVED = booleanPreferencesKey("profile_is_saved")
         val PROFILE_NAME = stringPreferencesKey("profile_name")
         val PROFILE_HEIGHT_CM = doublePreferencesKey("profile_height_cm")
@@ -259,7 +275,11 @@ class UserPreferencesRepository(private val context: Context) {
         /** How often the in-progress workout is auto saved, in seconds. */
         val autoSaveIntervalSeconds: Int = DEFAULT_AUTO_SAVE_INTERVAL_SECONDS,
         /** Whether a newer release is looked up automatically when the app starts. */
-        val autoCheckUpdatesOnStart: Boolean = true
+        val autoCheckUpdatesOnStart: Boolean = true,
+        /** Explicit permission for the AI Coach to retrieve personal workout data. */
+        val aiWorkoutDataAccess: Boolean = false,
+        /** Whether a completed workout automatically receives an AI comparison. */
+        val postWorkoutAiSummaries: Boolean = false
     )
 
     val appSettingsFlow: Flow<AppSettings> = context.userDataStore.data.map { prefs ->
@@ -275,8 +295,47 @@ class UserPreferencesRepository(private val context: Context) {
             weekStartsOnMonday = prefs[WEEK_STARTS_ON_MONDAY] ?: true,
             autoSaveIntervalSeconds = (prefs[AUTO_SAVE_INTERVAL_SECONDS]
                 ?: DEFAULT_AUTO_SAVE_INTERVAL_SECONDS).coerceIn(5, 300),
-            autoCheckUpdatesOnStart = prefs[AUTO_CHECK_UPDATES_ON_START] ?: true
+            autoCheckUpdatesOnStart = prefs[AUTO_CHECK_UPDATES_ON_START] ?: true,
+            aiWorkoutDataAccess = prefs[AI_WORKOUT_DATA_ACCESS] ?: false,
+            postWorkoutAiSummaries = prefs[POST_WORKOUT_AI_SUMMARIES] ?: false
         )
+    }
+
+    val aiWorkoutDataAccessFlow: Flow<Boolean> = context.userDataStore.data.map { prefs ->
+        prefs[AI_WORKOUT_DATA_ACCESS] ?: false
+    }
+
+    suspend fun setAiWorkoutDataAccess(enabled: Boolean) {
+        context.userDataStore.edit { it[AI_WORKOUT_DATA_ACCESS] = enabled }
+    }
+
+    val postWorkoutAiSummariesFlow: Flow<Boolean> = context.userDataStore.data.map { prefs ->
+        prefs[POST_WORKOUT_AI_SUMMARIES] ?: false
+    }
+
+    suspend fun setPostWorkoutAiSummaries(enabled: Boolean) {
+        context.userDataStore.edit { it[POST_WORKOUT_AI_SUMMARIES] = enabled }
+    }
+
+    val androidWidgetThemesFlow: Flow<com.example.data.model.AndroidWidgetThemes> =
+        context.userDataStore.data.map { prefs ->
+            com.example.data.model.AndroidWidgetThemes(
+                streak = widgetTheme(prefs[ANDROID_WIDGET_THEME_STREAK]),
+                weekly = widgetTheme(prefs[ANDROID_WIDGET_THEME_WEEKLY]),
+                profile = widgetTheme(prefs[ANDROID_WIDGET_THEME_PROFILE])
+            )
+        }
+
+    private fun widgetTheme(raw: String?): ThemeMode =
+        ThemeMode.values().firstOrNull { it.storageKey == raw } ?: ThemeMode.IRONPULSE
+
+    suspend fun setAndroidWidgetTheme(kind: com.example.data.model.AndroidWidgetKind, mode: ThemeMode) {
+        val key = when (kind) {
+            com.example.data.model.AndroidWidgetKind.STREAK -> ANDROID_WIDGET_THEME_STREAK
+            com.example.data.model.AndroidWidgetKind.WEEKLY -> ANDROID_WIDGET_THEME_WEEKLY
+            com.example.data.model.AndroidWidgetKind.PROFILE -> ANDROID_WIDGET_THEME_PROFILE
+        }
+        context.userDataStore.edit { it[key] = mode.storageKey }
     }
 
     suspend fun setWeightUnit(unit: String) {

@@ -1,5 +1,6 @@
 package com.example
 
+import com.example.data.ai.AiAccessPolicy
 import com.example.data.ai.AiConversationEngine
 import com.example.data.ai.AiDataAccess
 import com.example.data.ai.AiErrorKind
@@ -17,12 +18,15 @@ import com.example.data.ai.AiToolCatalog
 import com.example.data.ai.AiToolDispatcher
 import com.example.data.ai.AiToolMode
 import com.example.data.ai.AiToolRegistry
+import com.example.data.ai.AiRoutineSchedule
+import com.example.data.ai.AiWorkoutSearchPage
 import com.example.data.ai.ExerciseListPage
 import com.example.data.model.Exercise
 import com.example.data.model.ExerciseType
 import com.example.data.model.RoutineExerciseItem
 import com.example.data.model.RoutineParser
 import com.example.data.model.SavedRoutine
+import com.example.data.model.SessionWithSets
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -178,11 +182,44 @@ class AiToolExecutionTest {
             routines.firstOrNull { it.id == id }
 
         override suspend fun listRoutines(): List<SavedRoutine> = routines
+
+        override suspend fun recentWorkouts(
+            fromMillis: Long?,
+            toMillis: Long?,
+            exerciseName: String?,
+            limit: Int,
+            offset: Int
+        ): AiWorkoutSearchPage = AiWorkoutSearchPage(emptyList(), 0)
+
+        override suspend fun exerciseHistory(
+            exerciseName: String,
+            fromMillis: Long?,
+            toMillis: Long?,
+            limit: Int
+        ): List<SessionWithSets> = emptyList()
+
+        override suspend fun currentRoutineSchedule(): AiRoutineSchedule? = null
     }
+
+    /**
+     * The production dispatcher defaults to deny. These pre-feature tests exercise the catalog and
+     * routine handlers, so the helper opts in explicitly instead of weakening the production
+     * default for every caller.
+     */
+    private class ExplicitlyAllowedDispatcher(private val inner: AiToolDispatcher) {
+        suspend fun dispatch(
+            call: AiToolCall,
+            access: AiAccessPolicy = AiAccessPolicy.all
+        ) = inner.dispatch(call, access)
+    }
+
+    private fun rawDispatcher(
+        dataAccess: AiDataAccess = FakeDataAccess(exercises, listOf(pushRoutine, pullRoutine))
+    ) = AiToolDispatcher(AiToolRegistry(dataAccess))
 
     private fun dispatcher(
         dataAccess: AiDataAccess = FakeDataAccess(exercises, listOf(pushRoutine, pullRoutine))
-    ) = AiToolDispatcher(AiToolRegistry(dataAccess))
+    ) = ExplicitlyAllowedDispatcher(rawDispatcher(dataAccess))
 
     private fun call(name: String, arguments: String = "{}", id: String = "call_1") =
         AiToolCall(id = id, name = name, argumentsJson = arguments)
@@ -404,19 +441,40 @@ class AiToolExecutionTest {
         toolMode = toolMode
     )
 
+    private class ExplicitlyAllowedEngine(private val inner: AiConversationEngine) {
+        suspend fun run(
+            configuration: AiProviderConfiguration,
+            systemInstruction: String,
+            messages: List<AiMessage>,
+            enableTools: Boolean = true,
+            generation: com.example.data.ai.AiGenerationConfig =
+                com.example.data.ai.AiGenerationConfig(),
+            accessPolicy: AiAccessPolicy = AiAccessPolicy.all
+        ) = inner.run(
+            configuration = configuration,
+            systemInstruction = systemInstruction,
+            messages = messages,
+            enableTools = enableTools,
+            generation = generation,
+            accessPolicy = accessPolicy
+        )
+    }
+
     private fun engine(
         provider: AiProvider,
         maxRounds: Int = 4,
         maxToolCalls: Int = 12,
         requestTimeoutMillis: Long = 5_000,
         maxRetries: Int = 1
-    ) = AiConversationEngine(
-        dispatcher = dispatcher(),
-        providerResolver = { provider },
-        maxRounds = maxRounds,
-        maxToolCalls = maxToolCalls,
-        requestTimeoutMillis = requestTimeoutMillis,
-        maxRetries = maxRetries
+    ) = ExplicitlyAllowedEngine(
+        AiConversationEngine(
+            dispatcher = rawDispatcher(),
+            providerResolver = { provider },
+            maxRounds = maxRounds,
+            maxToolCalls = maxToolCalls,
+            requestTimeoutMillis = requestTimeoutMillis,
+            maxRetries = maxRetries
+        )
     )
 
     private fun nativeCall(name: String, arguments: String, id: String = "call_1") =

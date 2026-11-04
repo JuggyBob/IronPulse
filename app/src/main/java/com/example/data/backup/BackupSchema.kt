@@ -30,7 +30,7 @@ object BackupFormat {
 
     const val CURRENT_FORMAT_VERSION = 1
     const val MIN_SUPPORTED_FORMAT_VERSION = 1
-    const val CURRENT_DATA_SCHEMA_VERSION = 1
+    const val CURRENT_DATA_SCHEMA_VERSION = 2
     const val MIN_SUPPORTED_DATA_SCHEMA_VERSION = 1
 
     const val SECTION_PROFILE = "profile"
@@ -148,10 +148,21 @@ data class PreferencesSectionV1(
     val weekStartsOnMonday: Boolean? = null,
     val autoSaveIntervalSeconds: Int? = null,
     val autoCheckUpdatesOnStart: Boolean? = null,
+    val aiWorkoutDataAccess: Boolean? = null,
+    val postWorkoutAiSummaries: Boolean? = null,
     val activeRoutineId: Long? = null,
     val restTimers: List<RestTimerV1>? = null,
     val benchmark: BenchmarkPreferencesV1? = null,
-    val ai: AiPreferencesV1? = null
+    val ai: AiPreferencesV1? = null,
+    /** Three independent native-widget appearances. Null in v1 backups. */
+    val widgetThemes: WidgetThemesV1? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class WidgetThemesV1(
+    val streak: String? = null,
+    val weekly: String? = null,
+    val profile: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -297,7 +308,20 @@ data class BodyWeightLogV1(
 data class AiSectionV1(
     val chatSessions: List<ChatSessionV1> = emptyList(),
     val chatMessages: List<ChatMessageV1> = emptyList(),
-    val geminiSummaries: List<GeminiSummaryV1> = emptyList()
+    val geminiSummaries: List<GeminiSummaryV1> = emptyList(),
+    /** Post-workout summaries. Null in v1 backups, empty for an athlete with none. */
+    val workoutSummaries: List<WorkoutSummaryV1>? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class WorkoutSummaryV1(
+    val id: Long,
+    val workoutId: Long,
+    val summaryMarkdown: String,
+    val provider: String = "",
+    val model: String = "",
+    val previousWorkoutId: Long = 0,
+    val createdAt: Long = 0
 )
 
 @JsonClass(generateAdapter = true)
@@ -314,7 +338,13 @@ data class ChatMessageV1(
     val sessionId: String,
     val sender: String,
     val text: String,
-    val timestamp: Long
+    val timestamp: Long,
+    /** TEXT or ROUTINE_PROPOSAL. Missing in data schema v1 and defaulted to TEXT. */
+    val kind: String = com.example.data.model.ChatMessageKind.TEXT,
+    /** Structured routine proposal for an approval card; empty for ordinary text. */
+    val payloadJson: String = "",
+    /** NONE, PENDING, APPROVED, REJECTED or EXPIRED. */
+    val status: String = com.example.data.model.ChatMessageStatus.NONE
 )
 
 @JsonClass(generateAdapter = true)
@@ -365,6 +395,7 @@ data class UserDataSnapshot(
     val chatSessions: List<ChatSessionV1>,
     val chatMessages: List<ChatMessageV1>,
     val geminiSummaries: List<GeminiSummaryV1>,
+    val workoutSummaries: List<WorkoutSummaryV1> = emptyList(),
     val widgetPhoto: WidgetPhotoData?,
     /**
      * Destination path of the current Home photo. Runtime-only: it is never serialized and is used
@@ -381,7 +412,9 @@ data class UserDataSnapshot(
             BackupFormat.SECTION_WORKOUTS to (sessions.size + sets.size),
             BackupFormat.SECTION_ROUTINES to (routines.size + scheduleDays.size),
             BackupFormat.SECTION_PROGRESS to bodyWeightLogs.size,
-            BackupFormat.SECTION_AI to (chatSessions.size + chatMessages.size + geminiSummaries.size)
+            BackupFormat.SECTION_AI to (
+                chatSessions.size + chatMessages.size + geminiSummaries.size + workoutSummaries.size
+                )
         )
 }
 
@@ -400,10 +433,13 @@ private fun PreferencesSectionV1.filledFieldCount(): Int {
     if (weekStartsOnMonday != null) count++
     if (autoSaveIntervalSeconds != null) count++
     if (autoCheckUpdatesOnStart != null) count++
+    if (aiWorkoutDataAccess != null) count++
+    if (postWorkoutAiSummaries != null) count++
     if (activeRoutineId != null) count++
     if (restTimers != null) count++
     if (benchmark != null) count++
     if (ai != null) count++
+    if (widgetThemes != null) count++
     return count
 }
 

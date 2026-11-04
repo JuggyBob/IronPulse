@@ -1,17 +1,62 @@
 package com.example.data.ai
 
 import com.example.data.model.Exercise
+import com.example.data.model.RoutineDay
 import com.example.data.model.RoutineParser
 import com.example.data.model.SavedRoutine
+import com.example.data.model.SessionWithSets
+import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.repository.FitnessRepository
+import kotlinx.coroutines.flow.first
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /** One bounded page of the exercise catalog. */
 data class ExerciseListPage(
     val items: List<Exercise>,
     val total: Int
 )
+
+/** One page of completed workout sessions for a retrieval tool. */
+data class AiWorkoutSearchPage(
+    val sessions: List<SessionWithSets>,
+    val total: Int
+)
+
+/** The active weekly routine exactly as the schedule feature sees it. */
+data class AiRoutineSchedule(
+    val routineId: Long,
+    val routineName: String,
+    val days: List<RoutineDay>
+)
+
+/**
+ * The access policy enforced by the dispatcher, not only by the prompt.
+ *
+ * Personal data and routine proposals share the same explicit Settings permission. When it is
+ * false the model receives no tools at all: the exercise catalog may contain the athlete's custom
+ * exercises, so it is personal data too.
+ */
+data class AiAccessPolicy(
+    val personalData: Boolean = false,
+    val routineModification: Boolean = false
+) {
+    fun permits(domain: AiToolDomain): Boolean = when (domain) {
+        AiToolDomain.CATALOG -> personalData
+        AiToolDomain.WORKOUT_DATA -> personalData
+        AiToolDomain.ROUTINE_WRITE -> personalData && routineModification
+    }
+
+    companion object {
+        val disabled = AiAccessPolicy()
+        val all = AiAccessPolicy(personalData = true, routineModification = true)
+    }
+}
+
+enum class AiToolDomain { CATALOG, WORKOUT_DATA, ROUTINE_WRITE }
 
 /**
  * The only data surface a tool handler can reach.
@@ -33,10 +78,27 @@ interface AiDataAccess {
     suspend fun allExercises(): List<Exercise>
     suspend fun getRoutineById(id: Long): SavedRoutine?
     suspend fun listRoutines(): List<SavedRoutine>
+    suspend fun recentWorkouts(
+        fromMillis: Long?,
+        toMillis: Long?,
+        exerciseName: String?,
+        limit: Int,
+        offset: Int
+    ): AiWorkoutSearchPage
+    suspend fun exerciseHistory(
+        exerciseName: String,
+        fromMillis: Long?,
+        toMillis: Long?,
+        limit: Int
+    ): List<SessionWithSets>
+    suspend fun currentRoutineSchedule(): AiRoutineSchedule?
 }
 
 /** Repository-backed implementation used by the app. */
-class RepositoryAiDataAccess(private val repository: FitnessRepository) : AiDataAccess {
+class RepositoryAiDataAccess(
+    private val repository: FitnessRepository,
+    private val preferences: UserPreferencesRepository? = null
+) : AiDataAccess {
 
     override suspend fun searchExercises(query: String, limit: Int): List<Exercise> {
         val all = repository.getAllExercisesOnce()
@@ -68,6 +130,72 @@ class RepositoryAiDataAccess(private val repository: FitnessRepository) : AiData
     override suspend fun getRoutineById(id: Long): SavedRoutine? = repository.getSavedRoutineById(id)
 
     override suspend fun listRoutines(): List<SavedRoutine> = repository.getAllSavedRoutinesOnce()
+
+    override suspend fun recentWorkouts(
+        fromMillis: Long?,
+        toMillis: Long?,
+        exerciseName: String?,
+        limit: Int,
+        offset: Int
+    ): AiWorkoutSearchPage {
+        val query = exerciseName?.trim()?.lowercase()
+        val matching = repository.getAllSessionsWithSetsOnce()
+            .asSequence()
+            .filter { it.sets.any { set -> set.isCompleted } }
+            .filter { it.session.startTime >= (fromMillis ?: Long.MIN_VALUE) }
+            .filter { it.session.startTime <= (toMillis ?: Long.MAX_VALUE) }
+            .filter { wrapper ->
+                query.isNullOrBlank() || wrapper.sets.any {
+                    it.isCompleted && it.exerciseName.trim().lowercase().contains(query)
+                }
+            }
+            .sortedByDescending { it.session.startTime }
+            .toList()
+        return AiWorkoutSearchPage(
+            sessions = matching.drop(offset).take(limit),
+            total = matching.size
+        )
+    }
+
+    override suspend fun exerciseHistory(
+        exerciseName: String,
+        fromMillis: Long?,
+        toMillis: Long?,
+        limit: Int
+    ): List<SessionWithSets> {
+        val query = exerciseName.trim().lowercase()
+        return repository.getAllSessionsWithSetsOnce()
+            .asSequence()
+            .filter { it.session.startTime >= (fromMillis ?: Long.MIN_VALUE) }
+            .filter { it.session.startTime <= (toMillis ?: Long.MAX_VALUE) }
+            .mapNotNull { wrapper ->
+                val matchingSets = wrapper.sets.filter {
+                    it.isCompleted && it.exerciseName.trim().lowercase() == query
+                }
+                if (matchingSets.isEmpty()) null else wrapper.copy(sets = matchingSets)
+            }
+            .sortedByDescending { it.session.startTime }
+            .take(limit)
+            .toList()
+    }
+
+    override suspend fun currentRoutineSchedule(): AiRoutineSchedule? {
+        val pref = preferences ?: return null
+        val activeId = pref.activeRoutineIdFlow.first()
+        if (activeId <= 0L) return null
+        val routine = repository.getSavedRoutineById(activeId) ?: return null
+        val exercises = repository.getAllExercisesOnce()
+        val weekStartsOnMonday = pref.appSettingsFlow.first().weekStartsOnMonday
+        return AiRoutineSchedule(
+            routineId = routine.id,
+            routineName = routine.name,
+            days = RoutineParser.parseWeek(
+                routine.exercisesJson,
+                exercises,
+                weekStartsOnMonday = weekStartsOnMonday
+            )
+        )
+    }
 }
 
 /**
@@ -203,6 +331,14 @@ object AiToolCatalog {
     const val LIST_EXERCISES = "list_exercises"
     const val GET_ROUTINE = "get_routine"
     const val LIST_ROUTINES = "list_routines"
+    const val SEARCH_RECENT_WORKOUTS = "search_recent_workouts"
+    const val GET_CURRENT_ROUTINE = "get_current_routine"
+    const val SEARCH_EXERCISE_HISTORY = "search_exercise_history"
+    const val PROPOSE_ROUTINE_MODIFICATION = "propose_routine_modification"
+
+    /** Tools exposed for one request under the athlete's explicit permission. */
+    fun available(access: AiAccessPolicy): List<AiToolDefinition> =
+        definitions.filter { access.permits(it.domain) }
 
     val definitions: List<AiToolDefinition> = listOf(
         AiToolDefinition(
@@ -304,7 +440,8 @@ object AiToolCatalog {
                   },
                   "additionalProperties": false
                 }
-            """.trimIndent()
+            """.trimIndent(),
+            domain = AiToolDomain.WORKOUT_DATA
         ),
         AiToolDefinition(
             name = LIST_ROUTINES,
@@ -323,7 +460,156 @@ object AiToolCatalog {
                   },
                   "additionalProperties": false
                 }
-            """.trimIndent()
+            """.trimIndent(),
+            domain = AiToolDomain.WORKOUT_DATA
+        ),
+        AiToolDefinition(
+            name = SEARCH_RECENT_WORKOUTS,
+            description = "Retrieve completed workout sessions in a time range, optionally filtered " +
+                "by exercise name. Returns dates, duration, order and completed set performance. Use " +
+                "it for questions about recent training, volume, frequency or a specific session.",
+            inputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "daysBack": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 365,
+                      "default": 30,
+                      "description": "Include sessions from the last N days."
+                    },
+                    "exerciseName": {
+                      "type": "string",
+                      "description": "Optional exercise name to filter sessions."
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 20,
+                      "default": 10
+                    },
+                    "offset": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 200,
+                      "default": 0
+                    }
+                  },
+                  "additionalProperties": false
+                }
+            """.trimIndent(),
+            domain = AiToolDomain.WORKOUT_DATA,
+            maxResultBytes = 32 * 1024
+        ),
+        AiToolDefinition(
+            name = GET_CURRENT_ROUTINE,
+            description = "Read the athlete's actual current weekly scheduled routine, including " +
+                "rest days, day titles and every exercise in order. Use this instead of guessing the " +
+                "current plan.",
+            inputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": false
+                }
+            """.trimIndent(),
+            domain = AiToolDomain.WORKOUT_DATA,
+            maxResultBytes = 48 * 1024
+        ),
+        AiToolDefinition(
+            name = SEARCH_EXERCISE_HISTORY,
+            description = "Retrieve completed historical performance for one exact exercise. Returns " +
+                "session dates and the completed sets with weight, reps, hold seconds, distance and " +
+                "body weight. Use it for progress comparisons; never combine different exercise names.",
+            inputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "exerciseName": {
+                      "type": "string",
+                      "description": "Exact exercise name, for example 'Push-up' or 'Barbell Bench Press'."
+                    },
+                    "daysBack": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1095,
+                      "default": 180
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 30,
+                      "default": 20
+                    }
+                  },
+                  "required": ["exerciseName"],
+                  "additionalProperties": false
+                }
+            """.trimIndent(),
+            domain = AiToolDomain.WORKOUT_DATA,
+            maxResultBytes = 32 * 1024
+        ),
+        AiToolDefinition(
+            name = PROPOSE_ROUTINE_MODIFICATION,
+            description = "Propose ONE change to the athlete's current weekly routine: replace one " +
+                "exercise on one weekday with an existing catalog exercise, or with a new AI-generated " +
+                "exercise. This tool does not modify anything. The app shows the proposal in chat and " +
+                "applies it only after explicit approval.",
+            inputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "routineId": {
+                      "type": "integer",
+                      "description": "Routine id from get_current_routine."
+                    },
+                    "weekday": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 7,
+                      "description": "1 = Monday ... 7 = Sunday."
+                    },
+                    "removeExerciseName": {
+                      "type": "string",
+                      "description": "Existing exercise name to remove from that day."
+                    },
+                    "replacementExerciseId": {
+                      "type": "integer",
+                      "description": "Existing catalog exercise id to use."
+                    },
+                    "replacementExerciseName": {
+                      "type": "string",
+                      "description": "Name of the existing or generated replacement."
+                    },
+                    "newExercise": {
+                      "type": "object",
+                      "description": "Only when no catalog exercise fits. Do not insert it before approval.",
+                      "properties": {
+                        "name": {"type": "string"},
+                        "category": {"type": "string"},
+                        "bodyPart": {"type": "string"},
+                        "target": {"type": "string"},
+                        "secondaryMuscles": {"type": "array", "items": {"type": "string"}},
+                        "equipment": {"type": "string"},
+                        "exerciseType": {"type": "string"},
+                        "instructions": {"type": "string"},
+                        "description": {"type": "string"}
+                      },
+                      "required": ["name", "category", "equipment", "exerciseType", "instructions"],
+                      "additionalProperties": false
+                    },
+                    "reason": {
+                      "type": "string",
+                      "description": "Short evidence-based reason for the change."
+                    }
+                  },
+                  "required": ["weekday", "removeExerciseName", "replacementExerciseName"],
+                  "additionalProperties": false
+                }
+            """.trimIndent(),
+            domain = AiToolDomain.ROUTINE_WRITE,
+            maxResultBytes = 24 * 1024
         )
     )
 
@@ -334,15 +620,34 @@ object AiToolCatalog {
 /** Maps the canonical names to handlers. No handler exists outside this registry. */
 class AiToolRegistry(private val dataAccess: AiDataAccess) {
 
-    fun definitions(): List<AiToolDefinition> = AiToolCatalog.definitions
+    fun definitions(access: AiAccessPolicy = AiAccessPolicy.disabled): List<AiToolDefinition> =
+        AiToolCatalog.available(access)
 
-    internal suspend fun execute(name: String, arguments: JSONObject): JSONObject = when (name) {
-        AiToolCatalog.SEARCH_EXERCISES -> searchExercises(arguments)
-        AiToolCatalog.GET_EXERCISE_DETAILS -> getExerciseDetails(arguments)
-        AiToolCatalog.LIST_EXERCISES -> listExercises(arguments)
-        AiToolCatalog.GET_ROUTINE -> getRoutine(arguments)
-        AiToolCatalog.LIST_ROUTINES -> listRoutines(arguments)
-        else -> toolError("unknown_tool", "The tool \"$name\" is not available.")
+    internal suspend fun execute(
+        name: String,
+        arguments: JSONObject,
+        access: AiAccessPolicy
+    ): JSONObject {
+        val definition = AiToolCatalog.definition(name)
+            ?: return toolError("unknown_tool", "The tool \"$name\" is not available.")
+        if (!access.permits(definition.domain)) {
+            return toolError(
+                "permission_denied",
+                "That tool is not available under the current AI data access permission."
+            )
+        }
+        return when (name) {
+            AiToolCatalog.SEARCH_EXERCISES -> searchExercises(arguments)
+            AiToolCatalog.GET_EXERCISE_DETAILS -> getExerciseDetails(arguments)
+            AiToolCatalog.LIST_EXERCISES -> listExercises(arguments)
+            AiToolCatalog.GET_ROUTINE -> getRoutine(arguments)
+            AiToolCatalog.LIST_ROUTINES -> listRoutines(arguments)
+            AiToolCatalog.SEARCH_RECENT_WORKOUTS -> searchRecentWorkouts(arguments)
+            AiToolCatalog.GET_CURRENT_ROUTINE -> getCurrentRoutine(arguments)
+            AiToolCatalog.SEARCH_EXERCISE_HISTORY -> searchExerciseHistory(arguments)
+            AiToolCatalog.PROPOSE_ROUTINE_MODIFICATION -> proposeRoutineModification(arguments)
+            else -> toolError("unknown_tool", "The tool \"$name\" is not available.")
+        }
     }
 
     private suspend fun searchExercises(args: JSONObject): JSONObject {
@@ -448,6 +753,203 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
         }
     }
 
+    private suspend fun searchRecentWorkouts(args: JSONObject): JSONObject {
+        val daysBack = AiToolArgs.optionalInt(args, "daysBack", default = 30, min = 1, max = 365)
+        val exerciseName = AiToolArgs.optionalText(args, "exerciseName", maxLength = 160)
+        val limit = AiToolArgs.optionalInt(args, "limit", default = 10, min = 1, max = 20)
+        val offset = AiToolArgs.optionalInt(args, "offset", default = 0, min = 0, max = 200)
+        val to = System.currentTimeMillis()
+        val from = to - daysBack * DAY_MILLIS
+        val page = dataAccess.recentWorkouts(from, to, exerciseName, limit, offset)
+        return JSONObject().apply {
+            put("ok", true)
+            put("fromDate", isoDate(from))
+            put("toDate", isoDate(to))
+            put("total", page.total)
+            put("offset", offset)
+            put("hasMore", offset + page.sessions.size < page.total)
+            put("sessions", JSONArray().apply { page.sessions.forEach { put(it.toWorkoutJson()) } })
+        }
+    }
+
+    private suspend fun getCurrentRoutine(args: JSONObject): JSONObject {
+        val schedule = dataAccess.currentRoutineSchedule()
+            ?: return toolError(
+                "no_active_routine",
+                "The athlete has no active weekly routine. No weekly schedule is configured."
+            )
+        if (schedule.days.isEmpty()) {
+            return toolError(
+                "no_active_routine",
+                "The active routine has no configured weekly days."
+            )
+        }
+        val catalog = dataAccess.allExercises()
+        val byId = catalog.associateBy { it.id }
+        val byName = catalog.associateBy { it.name.trim().lowercase() }
+        return JSONObject().apply {
+            put("ok", true)
+            put("routineId", schedule.routineId)
+            put("routineName", schedule.routineName)
+            put("days", JSONArray().apply {
+                schedule.days.forEach { day ->
+                    put(JSONObject().apply {
+                        put("weekday", day.weekday)
+                        put("day", day.dayName)
+                        put("title", day.dayTitle)
+                        put("restDay", day.isRestDay)
+                        put("note", day.note)
+                        put("exercises", JSONArray().apply {
+                            day.exercises.forEach { item ->
+                                put(JSONObject().apply {
+                                    put("exerciseId", item.exerciseId)
+                                    put("name", item.exerciseName)
+                                    put("exerciseType", item.exerciseType)
+                                    put("category", item.category)
+                                    put("equipment", item.equipment)
+                                    put("sets", item.targetSets)
+                                    put("reps", item.targetReps)
+                                    put("weightKg", item.targetWeight)
+                                    put("addedWeightKg", item.targetAddedWeightKg)
+                                    put("holdSeconds", item.targetHoldSeconds)
+                                    put("restSeconds", item.restSeconds)
+                                    put("prescription", item.prescription)
+                                    val catalogExercise = byId[item.exerciseId]
+                                        ?: byName[item.exerciseName.trim().lowercase()]
+                                    put(
+                                        "instructions",
+                                        catalogExercise?.instructions.orEmpty().take(500)
+                                    )
+                                    put(
+                                        "instructionsTruncated",
+                                        (catalogExercise?.instructions?.length ?: 0) > 500
+                                    )
+                                })
+                            }
+                        })
+                    })
+                }
+            })
+        }
+    }
+
+    private suspend fun searchExerciseHistory(args: JSONObject): JSONObject {
+        val exerciseName = AiToolArgs.requireText(args, "exerciseName", maxLength = 160)
+        val daysBack = AiToolArgs.optionalInt(args, "daysBack", default = 180, min = 1, max = 1095)
+        val limit = AiToolArgs.optionalInt(args, "limit", default = 20, min = 1, max = 30)
+        val to = System.currentTimeMillis()
+        val from = to - daysBack * DAY_MILLIS
+        val sessions = dataAccess.exerciseHistory(exerciseName, from, to, limit)
+        return JSONObject().apply {
+            put("ok", true)
+            put("exerciseName", exerciseName)
+            put("fromDate", isoDate(from))
+            put("toDate", isoDate(to))
+            put("count", sessions.size)
+            if (sessions.isEmpty()) {
+                put("note", "No completed sets matched that exact exercise name in this period.")
+            }
+            put("sessions", JSONArray().apply { sessions.forEach { put(it.toWorkoutJson()) } })
+        }
+    }
+
+    private suspend fun proposeRoutineModification(args: JSONObject): JSONObject {
+        val weekday = AiToolArgs.optionalInt(args, "weekday", default = 0, min = 1, max = 7)
+        val removeName = AiToolArgs.requireText(args, "removeExerciseName", maxLength = 160)
+        val requestedRoutineId = AiToolArgs.optionalLong(args, "routineId")
+        val activeSchedule = dataAccess.currentRoutineSchedule()
+            ?: return toolError("no_active_routine", "There is no active weekly routine to change.")
+        if (requestedRoutineId != null && requestedRoutineId != activeSchedule.routineId) {
+            return toolError(
+                "not_active_routine",
+                "Only the athlete's current active weekly routine can be changed."
+            )
+        }
+        val routine = dataAccess.getRoutineById(activeSchedule.routineId)
+            ?: return toolError("not_found", "The routine no longer exists.")
+        val days = activeSchedule.days.filter { !it.isRestDay }
+        val day = days.firstOrNull { it.weekday == weekday }
+            ?: return toolError("invalid_day", "The routine has no day for weekday $weekday.")
+        val removed = day.exercises.firstOrNull {
+            it.exerciseName.trim().equals(removeName, ignoreCase = true)
+        } ?: return toolError(
+            "exercise_not_in_day",
+            "\"$removeName\" is not in ${day.dayName}. Read the current routine again before proposing."
+        )
+
+        val replacementId = AiToolArgs.optionalLong(args, "replacementExerciseId")
+        val replacementName = AiToolArgs.optionalText(args, "replacementExerciseName", maxLength = 160)
+        val newExerciseObj = args.optJSONObject("newExercise")
+        val newExercise = newExerciseObj?.let(ProposedExercise::fromJson)
+        if (newExerciseObj != null && newExercise == null) {
+            return toolError("invalid_exercise", "The new exercise record is incomplete or invalid.")
+        }
+
+        val existing = when {
+            replacementId != null -> dataAccess.getExerciseById(replacementId)
+                ?: return toolError("not_found", "No catalog exercise has id $replacementId.")
+            !replacementName.isNullOrBlank() -> dataAccess.getExerciseByName(replacementName)
+            else -> null
+        }
+        if (existing != null && newExercise != null) {
+            return toolError(
+                "ambiguous_replacement",
+                "A proposal can use an existing exercise or create one, not both."
+            )
+        }
+        val finalName = existing?.name ?: newExercise?.name ?: replacementName
+        if (finalName.isNullOrBlank()) {
+            return toolError(
+                "missing_replacement",
+                "Provide replacementExerciseId, a matching replacementExerciseName, or newExercise."
+            )
+        }
+        if (newExercise != null) {
+            val collision = dataAccess.getExerciseByName(newExercise.name)
+            if (collision != null) {
+                return toolError(
+                    "exercise_exists",
+                    "That exercise already exists with id ${collision.id}. Use replacementExerciseId."
+                )
+            }
+        }
+        if (existing == null && newExercise == null && replacementName != null) {
+            return toolError(
+                "exercise_not_found",
+                "No catalog exercise matched \"$replacementName\". Search first, or provide newExercise."
+            )
+        }
+        if (removed.exerciseName.equals(finalName, ignoreCase = true)) {
+            return toolError("same_exercise", "The replacement is the same exercise that would be removed.")
+        }
+
+        val reason = AiToolArgs.optionalText(args, "reason", maxLength = 600)
+            ?: "Requested by the athlete."
+        val proposal = RoutineModificationProposal(
+            routineId = routine.id,
+            routineName = routine.name,
+            routineSignature = RoutineModificationProposal.signatureOf(routine),
+            weekday = weekday,
+            dayTitle = day.dayTitle,
+            removeExerciseName = removed.exerciseName,
+            removeExerciseId = removed.exerciseId,
+            replacementExerciseId = existing?.id,
+            replacementExerciseName = finalName,
+            generatedExercise = newExercise,
+            reason = reason,
+            summary = "Replace ${removed.exerciseName} with $finalName on ${day.dayName}" +
+                if (day.dayTitle.isNotBlank()) " (${day.dayTitle})" else ""
+        )
+        return JSONObject().apply {
+            put("ok", true)
+            put("proposal", proposal.toJson())
+            put(
+                "note",
+                "Nothing has been changed. The app will ask the athlete to approve this exact proposal."
+            )
+        }
+    }
+
     private fun toolError(code: String, message: String): JSONObject = JSONObject().apply {
         put("ok", false)
         put("error", code)
@@ -464,16 +966,30 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
  */
 class AiToolDispatcher(private val registry: AiToolRegistry) {
 
-    fun definitions(): List<AiToolDefinition> = registry.definitions()
+    fun definitions(access: AiAccessPolicy = AiAccessPolicy.disabled): List<AiToolDefinition> =
+        registry.definitions(access)
 
-    suspend fun dispatch(call: AiToolCall): AiToolResult {
+    suspend fun dispatch(
+        call: AiToolCall,
+        access: AiAccessPolicy = AiAccessPolicy.disabled
+    ): AiToolResult {
         val definition = AiToolCatalog.definition(call.name)
-            ?: return errorResult(
+        if (definition == null) {
+            return errorResult(
                 call,
                 "unknown_tool",
                 "The tool \"${call.name}\" does not exist. Available tools: " +
-                    AiToolCatalog.definitions.joinToString { it.name } + "."
+                    registry.definitions(access).joinToString { it.name } + "."
             )
+        }
+        if (!access.permits(definition.domain)) {
+            return errorResult(
+                call,
+                "permission_denied",
+                "That tool is not available under the current AI data access permission. " +
+                    "Available tools: " + registry.definitions(access).joinToString { it.name } + "."
+            )
+        }
 
         val arguments = try {
             parseArguments(call.argumentsJson)
@@ -482,7 +998,7 @@ class AiToolDispatcher(private val registry: AiToolRegistry) {
         }
 
         val result = try {
-            registry.execute(call.name, arguments)
+            registry.execute(call.name, arguments, access)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: AiToolArgumentException) {
@@ -604,6 +1120,59 @@ private fun SavedRoutine.toRoutineJson(days: List<com.example.data.model.Routine
             }
         )
     }
+
+private const val DAY_MILLIS = 24L * 60L * 60L * 1000L
+
+private fun isoDate(epochMillis: Long): String =
+    SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date(epochMillis))
+
+private const val MAX_SETS_IN_TOOL_RESULT = 120
+
+private fun SessionWithSets.toWorkoutJson(): JSONObject = JSONObject().apply {
+    put("sessionId", session.id)
+    put("title", session.title)
+    put("date", isoDate(session.startTime))
+    put("startMillis", session.startTime)
+    put("endMillis", session.endTime)
+    put("durationMinutes", ((session.endTime - session.startTime).coerceAtLeast(0L) / 60_000L))
+    put("notes", session.notes.take(500))
+    put("routineId", session.routineId)
+    put("routineWeekday", session.routineWeekday)
+    put("plannedDate", session.plannedDate)
+    val completed = sets.filter { it.isCompleted }
+        .sortedWith(compareBy({ it.setNumber }, { it.timestamp }))
+    put("completedSetCount", completed.size)
+    put("setsTruncated", completed.size > MAX_SETS_IN_TOOL_RESULT)
+    put(
+        "sets",
+        JSONArray().apply {
+            completed.take(MAX_SETS_IN_TOOL_RESULT).forEach { set ->
+                put(
+                    JSONObject().apply {
+                        put("setNumber", set.setNumber)
+                        put("exerciseId", set.exerciseId)
+                        put("exerciseName", set.exerciseName)
+                        put("exerciseType", set.exerciseType)
+                        put("weightKg", set.weight)
+                        put("addedWeightKg", set.addedWeight)
+                        put("reps", set.reps)
+                        put("holdSeconds", set.holdDurationSeconds)
+                        put(
+                            "cardioMinutes",
+                            if (set.exerciseType == com.example.data.model.ExerciseType.CARDIO) {
+                                set.holdDurationSeconds / 60.0
+                            } else {
+                                0.0
+                            }
+                        )
+                        put("distanceKm", set.distanceKm)
+                        put("bodyWeightKg", set.bodyWeightKg)
+                    }
+                )
+            }
+        }
+    )
+}
 
 private fun parseStringArray(raw: String): JSONArray {
     if (raw.isBlank()) return JSONArray()

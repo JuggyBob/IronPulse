@@ -110,6 +110,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
 import com.example.data.model.BodyWeightLog
+import com.example.data.model.ProfileMetrics
 import com.example.data.model.WeightUnit
 import com.example.data.model.WeightConversion
 import com.example.data.model.UserProfile
@@ -202,7 +203,6 @@ fun ProfileScreen(
     }
 
     var showEditProfileDialog by remember { mutableStateOf(false) }
-    var showAiDataInfoDialog by remember { mutableStateOf(false) }
     var showLogWeightDialog by remember { mutableStateOf(false) }
 
     // The weigh-in history starts collapsed: a year of logs is a wall of cards.
@@ -376,10 +376,12 @@ fun ProfileScreen(
                                 .weight(1f)
                                 .fillMaxHeight()
                         )
-                        val bmi = calculateBmi(userProfile.currentWeightKg, userProfile.heightCm)
                         ProfileMetricBox(
                             label = "BMI",
-                            value = "%.1f".format(bmi),
+                            value = ProfileMetrics.bmiText(
+                                userProfile.currentWeightKg,
+                                userProfile.heightCm
+                            ),
                             color = GoldenAmber,
                             modifier = Modifier
                                 .weight(1f)
@@ -420,24 +422,11 @@ fun ProfileScreen(
                                 color = TextWhite
                             )
                             Text(
-                                text = "Best bodyweight reps ever logged • shared with the AI for tailored advice",
+                                text = "Best bodyweight reps ever logged, taken from your saved workouts",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = TextMuted,
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        IconButton(
-                            onClick = { showAiDataInfoDialog = true },
-                            modifier = Modifier
-                                .size(36.dp)
-                                .testTag("benchmark_info_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = "About benchmark records",
-                                tint = ElectricCyan,
-                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }
@@ -650,11 +639,6 @@ fun ProfileScreen(
         item(key = "app_version_footer", contentType = "footer") {
             AppVersionFooter()
         }
-    }
-
-    // Explains the athlete data and the AI privacy warning
-    if (showAiDataInfoDialog) {
-        AthleteAiDataInfoDialog(onDismiss = { showAiDataInfoDialog = false })
     }
 
     // What to do with the picture that is already there.
@@ -1292,84 +1276,6 @@ private fun BenchmarkRecordBox(
             )
         }
     }
-}
-
-/**
- * Explains the athlete data and warns that it is sent to the AI.
- */
-@Composable
-private fun AthleteAiDataInfoDialog(onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = DarkSurface,
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.testTag("athlete_data_info_dialog"),
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Info,
-                    contentDescription = null,
-                    tint = ElectricCyan,
-                    modifier = Modifier.size(22.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = "Your Athlete Data & The AI",
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    color = TextWhite
-                )
-            }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    text = "BENCHMARK RECORDS",
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                    color = ElectricCyan
-                )
-                Text(
-                    text = "The three records above are your best bodyweight reps ever logged, taken " +
-                            "automatically from your saved workouts. They are read-only: you cannot edit " +
-                            "them, and deleting the workout where you set one will NOT remove the record.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextMuted
-                )
-                Text(
-                    text = "DATA SENT TO THE AI",
-                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                    color = GoldenAmber
-                )
-                Text(
-                    text = "Your athlete profile (name, age, height, weight, target weight, skill level) " +
-                            "and these three records are sent silently to your selected AI provider with the AI coach chat, " +
-                            "the routine generator and the routine prompter, so the advice and the programs " +
-                            "are tailored to you. Nothing is shown on screen when this happens.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextMuted
-                )
-                Text(
-                    text = "They are never sent with the AI monthly summary, which only analyses one " +
-                            "exercise at a time.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = TextDim
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = onDismiss,
-                modifier = Modifier.testTag("close_athlete_data_info_button")
-            ) {
-                Text("Got it", color = ElectricCyan, fontWeight = FontWeight.Bold)
-            }
-        }
-    )
-}
-
-private fun calculateBmi(weightKg: Double, heightCm: Double): Double {
-    if (heightCm <= 0) return 0.0
-    val heightM = heightCm / 100.0
-    return weightKg / (heightM * heightM)
 }
 
 @Composable

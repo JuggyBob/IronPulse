@@ -74,26 +74,29 @@ the whole export rather than creating a partial archive.
    subsequent dataset reseed respects the restored edits.
 5. One Room transaction:
    - deletes all logged sets, sessions, routines, schedule days, weigh-ins, chat messages, chat
-     sessions, Gemini summaries and the profile row;
+     sessions, Gemini summaries, immutable post-workout summaries and the profile row;
    - deletes all destination custom/AI exercises and destination library rows whose names collide
      with restored custom exercises;
    - inserts the imported profile (with the destination's `customApiKey`), routines, exercises,
-     sessions, sets, schedule days, weigh-ins, conversations, messages and summaries with their
-     original ids.
+     sessions, sets, schedule days, weigh-ins, conversations, messages (including proposal
+     kind/payload/status), Gemini summaries and post-workout summaries with their original ids.
 6. `DatasetSeeder.seedFresh()` restores the shipped catalog and reverts destination library edits
    that are absent from the backup. Imported edited rows are skipped because their ids are in the
    tracker.
 7. The imported Home photo is written through a staging name and renamed. The destination's old file
    is not deleted yet.
 8. One DataStore edit removes every allowlisted exportable key and writes the imported profile,
-   preferences, dashboard configuration and new widget-photo path. API keys, the avatar path, the
-   cached release and update-prompt suppression are not in the removal list and are not written.
+   preferences, dashboard configuration, AI-access/summary switches, the three Android widget
+   themes and the new widget-photo path. API keys, the avatar path, the cached release and
+   update-prompt suppression are not in the removal list and are not written.
 9. The rest-alert SharedPreferences mirror is rebuilt from the imported switches.
 10. Verification reads Room, DataStore and the widget file again and compares them with the imported
     snapshot. Any mismatch throws.
 11. Only after verification: unreferenced widget photos are deleted, and media files attached to the
     replaced destination custom/AI exercises are removed.
-12. The UI success message appears. Room/DataStore flows have already emitted; transient state was
+12. Installed Android launcher widgets are refreshed so restored themes and profile/workout data
+    appear immediately.
+13. The UI success message appears. Room/DataStore flows have already emitted; transient state was
     reset and the imported draft is loaded if one exists.
 
 ## Full replacement semantics

@@ -3,13 +3,15 @@
 [![License](https://img.shields.io/badge/license-source--available-lightgrey.svg)](LICENSE)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.2-7F52FF.svg)](https://kotlinlang.org)
 [![Android](https://img.shields.io/badge/Android-7.1%2B-3DDC84.svg)](https://developer.android.com)
-[![Release](https://img.shields.io/badge/release-v4.0.0-blue.svg)](https://github.com/JuggyBob/IronPulse/releases/tag/v4.0.0)
+[![Release](https://img.shields.io/badge/release-v4.1.0-blue.svg)](https://github.com/JuggyBob/IronPulse/releases/tag/v4.1.0)
 
 A dark-themed workout logger for strength training and calisthenics, built for the gym:
 offline by default, no account, no tracking, and a 1,300+ movement catalog that streams its
-animations on demand instead of shipping them in the APK. IronPulse 4.0.0 adds a complete
-`.ironpulse` backup/restore format, four themes, Liquid Glass navigation, fullscreen mode, and a
-schedule-adherence workout streak.
+animations on demand instead of shipping them in the APK. IronPulse 4.1.0 adds a database-aware AI
+coach with four read-only retrieval tools and controlled routine changes, immutable post-workout AI
+summaries, and three native Android home screen widgets with independent themes. It builds on the
+4.0.0 `.ironpulse` backup/restore format, four app themes, Liquid Glass navigation, fullscreen mode,
+and the schedule-adherence workout streak.
 
 <p align="center">
   <img src="docs/screenshots/01-home-dashboard.png" width="30%" alt="The Home dashboard" />
@@ -26,7 +28,9 @@ schedule-adherence workout streak.
 | Start somewhere | Three pre-built routines with a full preview before you adopt one |
 | See progress | Volume, estimated one-rep max, training days, weigh-ins plotted over time |
 | Check a movement | An animation for nearly every exercise, and full instructions |
-| Ask a coach | Optional AI chat, routine generator and monthly summary with Google, OpenAI, Anthropic, OpenRouter, xAI or your own endpoint |
+| Ask a coach | Optional AI chat with permission-gated workout retrieval, controlled routine proposals, routine generation and monthly summaries across Google, OpenAI, Anthropic, OpenRouter, xAI or your own endpoint |
+| See progress after a workout | Optional immutable AI comparison against the previous same-routine/weekday session |
+| Use it from the launcher | Native Workout Streak, Weekly Workout Overview and Workout Profile widgets with independent themes |
 | Fix something the app got wrong | A low-level editor for any exercise, plus a revert to the shipped catalog |
 
 ---
@@ -85,6 +89,24 @@ schedule-adherence workout streak.
 <p align="center">
   <img src="docs/screenshots/01-home-dashboard.png" width="45%" alt="The Home dashboard: today's workout, the week, the last seven days and the numbers" />
 </p>
+
+### Android home screen widgets
+Three real launcher widgets are registered separately from the in-app Home cards and work even when
+the matching Home card is hidden:
+- **Workout Streak (2x2)** shows the current and best schedule-adherence streak with a live flame or
+  a burnt-out flame. Tapping it opens Home and scrolls to the streak card when that card is visible.
+- **Weekly Workout Overview (4x2)** shows seven binary training days, today's scheduled workout (or
+  rest day), and a **Start workout** / **Start another workout** action. The action uses the same
+  routine start and Saved Routines navigation as the in-app Today's Workout card.
+- **Workout Profile (4x2)** shows name, weight, height and BMI from the same merged profile and BMI
+  calculation as the Profile tab. Tapping it opens Profile.
+
+Each widget has its own **Light**, **Dark**, **AMOLED Dark** or **IronPulse** appearance under
+**Settings -> Android Home Screen Widgets -> Widget appearance**. The choice is independent per
+widget, previews use the same palette tokens as the app, AMOLED uses true black, and installed
+widgets refresh immediately. Widgets update after workout completion, routine/profile/theme edits,
+imports, app start, boot and timezone changes, with one lightweight midnight alarm for the rolling
+week.
 
 ### Routines
 - A routine is a **week of seven days**, one slot per weekday. A day with no exercise in it is a
@@ -192,19 +214,33 @@ OpenAI-compatible endpoint, add a key where the service needs one, and you get:
 - **The AI plans a week.** The generated routine is scheduled onto the days of the week: a weekday
   the answer named is kept, and a workout with no weekday named is laid out from the start of your
   week. The app applies those rules itself, so the schedule is the same whatever the model returns.
-- A coach chat that answers questions about the session you just logged.
+- A database-aware coach chat. After you enable **Allow AI Coach to access workout data** in
+  Settings, it can retrieve recent completed workouts, your current weekly schedule, the exercise
+  catalog and one exercise's completed history through four bounded, read-only tools. It answers
+  progress and frequency questions from those records instead of guessing.
+- **Controlled routine changes.** The coach may prepare one routine substitution, including an
+  AI-generated exercise when no catalog movement fits. The change appears as an approval card in
+  the conversation and is applied only after you press **Grant permission**; rejection changes
+  nothing. The approval is one-time, scoped to the displayed change, and expires if the routine or
+  the permission changes.
 - Automatic creation of missing movements, including target muscles, secondary muscles and
   short coaching-cue instructions.
+- **Post-workout AI summaries.** When enabled independently in Settings, finishing a quick or
+  routine workout compares it with the previous comparable session, using the stable routine id and
+  weekday where available and clearly disclosing partial matching for quick workouts. The exact
+  Markdown result is saved against that workout and shown in a popup. Saved summaries are immutable
+  and reopen from Workout History without another AI request.
 - **One AI layer for every provider.** The coach, routine generator, parser and monthly summary use
-  the same prompts and the same read-only tools, so changing provider does not change what the app
-  can do.
+  the same prompts and the same tools, so changing provider does not change what the app can do.
 - **A model selector with live discovery.** Load the provider's catalog, refresh it, or type a model
   id yourself; the choice is stored per provider. Capability badges say whether a model reports
   native tool calling, and **Auto**, **Native only** and **Text fallback** control how tools are
   offered.
-- **The AI can read your library and routines** through read-only tools: exercise search and
-  details, exercise lists, saved routines and routine details. It cannot run SQL, touch files, make
-  network calls or execute code.
+- **AI data access is off by default.** Until you enable it in Settings, the coach is not registered
+  any personal-data tool and receives no hidden workout context. The setting is enforced when a tool
+  is dispatched, not merely described in the prompt. It cannot run SQL, touch files, make network
+  calls or execute code, and it cannot modify workouts, your profile, measurements, settings, the
+  catalog or history. A settings popup lists exactly what is retrievable and what is prohibited.
 - **A custom endpoint is opt-in.** Its URL is validated, plain HTTP is limited to loopback or a
   private-network host, and the first use shows a privacy/security warning naming the exact
   endpoint. The key goes only to that endpoint, redirects are not followed and TLS checks are never
@@ -255,7 +291,9 @@ storage, so it keeps working even after you delete the original from your galler
 - AI features are optional. Hosted providers require your own API key; a local OpenAI-compatible
   endpoint may not. Keys stay in app-private DataStore and are sent only to the provider that owns
   them.
-- Athlete data sharing is **off** until you explicitly enable it.
+- Athlete data sharing is **off** until you explicitly enable it. AI Coach workout-data access is a
+  separate switch, also off by default; disabling it removes the personal-data tools and invalidates
+  pending routine approvals.
 - **Widget photos stay on the device.** A picture chosen for the Motivation Photo widget is copied
   into app-private storage and the gallery original is never modified. The copy is deleted when the
   widget is removed or its photo replaced, when the Home widgets are restored to defaults, and by
@@ -268,8 +306,9 @@ storage, so it keeps working even after you delete the original from your galler
 - **Export a portable `.ironpulse` file** from Settings -> Data Management. It contains the complete
   user-data state: profile and onboarding, workouts and every set, exercise history, custom and
   AI-generated exercises, edited library exercises, routines and materialized schedules, weigh-ins,
-  all AI conversations and messages, saved Gemini summaries, Home widget configuration and the
-  Motivation Photo, and the exportable preferences.
+  all AI conversations and messages (including routine-approval metadata), saved Gemini summaries,
+  post-workout AI summaries, Home widget configuration and the Motivation Photo, the three
+  independent Android widget themes, the exportable preferences, and the AI-access/summary toggles.
 - **The archive is versioned and checksummed.** `manifest.json` carries a container format version, a
   separate data-schema version, the source app version, export time, section paths and record counts.
   `checksums.json` carries SHA-256 for every payload entry. Import verifies the whole archive before
@@ -349,7 +388,7 @@ can still be supplied through `.env`; copy `.env.example`, fill it in, and keep 
 
 ### Running the tests
 ```bash
-./gradlew testDebugUnitTest      # 672 JVM unit tests across 78 classes
+./gradlew testDebugUnitTest      # 705 JVM unit tests across 85 classes
 ./gradlew recordRoborazziDebug   # regenerate reference screenshots
 ```
 
@@ -362,7 +401,8 @@ Prebuilt APKs are attached to the
 
 | Version | File |
 |---|---|
-| **v4.0.0** | [`IronPulse4.0.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.0.0/IronPulse4.0.0-release.apk) |
+| **v4.1.0** | [`IronPulse4.1.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.1.0/IronPulse4.1.0-release.apk) |
+| v4.0.0 | [`IronPulse4.0.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.0.0/IronPulse4.0.0-release.apk) |
 | v3.0.0 | [`IronPulse3.0.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v3.0.0/IronPulse3.0.0-release.apk) |
 | v2.0.1 | [`IronPulse2.0.1-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v2.0.1/IronPulse2.0.1-release.apk) |
 | v2.0.0 | [`IronPulse2.0.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v2.0.0/IronPulse2.0.0-release.apk) |
@@ -395,7 +435,7 @@ IronPulse/
 │   │   │   │   └── viewmodel/        # MainViewModel — the single source of truth
 │   │   │   └── util/                 # Coil loaders, media store, timers
 │   │   └── res/                      # Icons, strings, themes, backup rules
-│   └── src/test/                     # 672 JVM tests (Robolectric + JUnit)
+│   └── src/test/                     # 705 JVM tests (Robolectric + JUnit)
 ├── docs/screenshots/                 # Images used by this README
 ├── gradle/wrapper/                   # Pinned Gradle distribution
 ├── .github/                          # Issue & PR templates, CI workflows

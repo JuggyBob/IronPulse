@@ -8,7 +8,19 @@
 The Room schema version and the app `versionName` are deliberately **not** used to parse an archive.
 Changing Room tables does not invalidate old backups.
 
-The current values are both `1`, defined in `BackupFormat`.
+The current values are `formatVersion = 1` and `dataSchemaVersion = 2`, defined in `BackupFormat`.
+
+## Data schema v2
+
+v2 is additive. `MigrateV1ToV2` gives an old archive:
+
+- an empty `ai.workoutSummaries` list;
+- three `preferences.widgetThemes` entries defaulted to `ironpulse`;
+- `aiWorkoutDataAccess = false` and `postWorkoutAiSummaries = false`.
+
+The same DTO shapes are read for both versions: absent optional fields fall back to their Kotlin
+default. Exported v2 archives carry the immutable post-workout summaries, the per-message proposal
+metadata and the three independent widget themes. The v1 fixture remains the compatibility contract.
 
 ## Why the DTOs are frozen
 

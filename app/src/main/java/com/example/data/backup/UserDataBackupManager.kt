@@ -179,6 +179,9 @@ class UserDataBackupManager(
         onProgress(BackupProgress(BackupPhase.VALIDATING, 4, 5))
 
         for ((name, section) in migrated.manifest.sections) {
+            // The preferences count is advisory: schema v2 adds allowlisted fields, and an older
+            // archive must still import with its original, smaller count.
+            if (name == BackupFormat.SECTION_PREFERENCES) continue
             val expected = snapshot.sectionCounts[name] ?: 0
             if (section.recordCount != expected) {
                 throw BackupException(
@@ -326,7 +329,8 @@ class UserDataBackupManager(
                 bodyWeightLogs = db.bodyWeightDao().getAllWeightLogsOnce(),
                 chatSessions = db.chatDao().getAllSessionsOnce(),
                 chatMessages = db.chatDao().getAllMessagesOnce(),
-                geminiSummaries = db.geminiSummaryDao().getAllSummariesOnce()
+                geminiSummaries = db.geminiSummaryDao().getAllSummariesOnce(),
+                workoutSummaries = db.workoutAiSummaryDao().getAllSummariesOnce()
             )
         }
         val prefs = preferences.readSnapshot()
@@ -368,6 +372,7 @@ class UserDataBackupManager(
             chatSessions = room.chatSessions.map(BackupMapper::chatSessionToDto),
             chatMessages = room.chatMessages.map(BackupMapper::chatMessageToDto),
             geminiSummaries = room.geminiSummaries.map(BackupMapper::geminiSummaryToDto),
+            workoutSummaries = room.workoutSummaries.map(BackupMapper::workoutSummaryToDto),
             widgetPhoto = photo,
             widgetPhotoPath = prefs.widgetPhotoPath.takeIf { it.isNotBlank() }
         )
@@ -423,6 +428,7 @@ class UserDataBackupManager(
         val chats = snapshot.chatSessions.map(BackupMapper::chatSessionFromDto)
         val messages = snapshot.chatMessages.map(BackupMapper::chatMessageFromDto)
         val summaries = snapshot.geminiSummaries.map(BackupMapper::geminiSummaryFromDto)
+        val workoutSummaries = snapshot.workoutSummaries.map(BackupMapper::workoutSummaryFromDto)
         val profile = snapshot.roomProfile?.let {
             UserProfile(
                 id = 1,
@@ -447,6 +453,7 @@ class UserDataBackupManager(
             db.chatDao().deleteAllMessages()
             db.chatDao().deleteAllSessions()
             db.geminiSummaryDao().deleteAllSummaries()
+            db.workoutAiSummaryDao().deleteAll()
             db.userProfileDao().deleteAllProfiles()
             db.exerciseDao().deleteAllUserExercises()
             if (conflictIds.isNotEmpty()) db.exerciseDao().deleteByIds(conflictIds)
@@ -461,6 +468,7 @@ class UserDataBackupManager(
             if (chats.isNotEmpty()) db.chatDao().insertSessions(chats)
             if (messages.isNotEmpty()) db.chatDao().insertMessages(messages)
             if (summaries.isNotEmpty()) db.geminiSummaryDao().insertSummaries(summaries)
+            if (workoutSummaries.isNotEmpty()) db.workoutAiSummaryDao().insertAll(workoutSummaries)
         }
     }
 
@@ -480,7 +488,8 @@ class UserDataBackupManager(
                 bodyWeightLogs = db.bodyWeightDao().getAllWeightLogsOnce(),
                 chatSessions = db.chatDao().getAllSessionsOnce(),
                 chatMessages = db.chatDao().getAllMessagesOnce(),
-                geminiSummaries = db.geminiSummaryDao().getAllSummariesOnce()
+                geminiSummaries = db.geminiSummaryDao().getAllSummariesOnce(),
+                workoutSummaries = db.workoutAiSummaryDao().getAllSummariesOnce()
             )
         }
 
@@ -507,6 +516,12 @@ class UserDataBackupManager(
         if (room.chatMessages != expectedMessages) mismatch("AI messages")
         val expectedSummaries = imported.geminiSummaries.map(BackupMapper::geminiSummaryFromDto).sortedBy { it.id }
         if (room.geminiSummaries.sortedBy { it.id } != expectedSummaries) mismatch("saved AI summaries")
+        val expectedWorkoutSummaries = imported.workoutSummaries
+            .map(BackupMapper::workoutSummaryFromDto)
+            .sortedBy { it.id }
+        if (room.workoutSummaries.sortedBy { it.id } != expectedWorkoutSummaries) {
+            mismatch("post-workout summaries")
+        }
 
         val expectedProfile = imported.roomProfile?.let {
             UserProfile(
@@ -535,8 +550,9 @@ class UserDataBackupManager(
         if (prefs.dataStoreProfile != imported.dataStoreProfile) mismatch("profile preferences")
         if (prefs.preferences != imported.preferences) mismatch("preferences")
         val expectedPhotoPresent = imported.widgetPhoto != null
+        // Hidden widget ids are a set; an older archive may store a different iteration order.
         if (prefs.dashboard.widgetOrder != imported.dashboard.widgetOrder ||
-            prefs.dashboard.hiddenWidgetIds != imported.dashboard.hiddenWidgetIds ||
+            prefs.dashboard.hiddenWidgetIds?.sorted() != imported.dashboard.hiddenWidgetIds?.sorted() ||
             prefs.dashboard.weeklyGoal != imported.dashboard.weeklyGoal ||
             prefs.dashboard.photoPresent != expectedPhotoPresent
         ) {
@@ -608,7 +624,8 @@ class UserDataBackupManager(
         val bodyWeightLogs: List<BodyWeightLog>,
         val chatSessions: List<ChatSession>,
         val chatMessages: List<ChatMessageEntity>,
-        val geminiSummaries: List<GeminiSummary>
+        val geminiSummaries: List<GeminiSummary>,
+        val workoutSummaries: List<com.example.data.model.WorkoutAiSummary> = emptyList()
     )
 
     companion object {
