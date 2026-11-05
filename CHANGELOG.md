@@ -7,37 +7,85 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased]
+## [4.2.0] - 2026-11-05
 
-Bug-fix and polish round on top of 4.1.0. No version change and no public release is implied.
+IronPulse 4.2.0 is a reliability and polish release focused on the AI Coach, scheduled streak and
+heatmap correctness, native launcher widgets, and navigation appearance. The 4.1.0 data format and
+provider configuration remain compatible.
+
+### Added
+
+- **Routine creation from AI Coach chat.** The Coach can propose a complete new weekly routine,
+  show every training day and prescription in an approval card, and save it only after the athlete
+  approves. Rejecting a proposal writes nothing.
+- **Bounded AI tool correction.** A malformed text-protocol tool request now receives a correction
+  turn containing the exact envelope, available tool names and argument schemas. Repeated failure
+  ends with a clear user-facing error instead of an unreadable answer.
+- **Structured exercise suggestions.** Empty history results now say whether the exercise exists in
+  the catalog and return clearly labelled closest matches rather than inventing data.
+- **Human-readable session dates.** Retrieved workouts include both `yyyy-MM-dd` and a `dateLabel`
+  so small models do not shift a session to the wrong day.
+
+### Improved
+
+- **AI Coach reliability.** Gemini tool schemas are reduced to the provider-supported subset, and
+  compatibility-mode tool calls/results stay in the text protocol instead of being sent as native
+  Gemini function parts. This fixes the `thought_signature` rejection and the “answer the app could
+  not read” failure on natural-language history questions.
+- **Exercise-name matching.** History and catalog lookups now normalize case, punctuation, spacing,
+  compound spellings and simple plurals, so “push ups” matches “Push-Up” without merging unrelated
+  movements such as “Pike Push Up”.
+- **Post-workout summaries.** An empty stored model now resolves to the provider’s visible default
+  (Gemini 3.5 Flash Lite), so a configured Google key works without a separate model selection.
+- **Scheduled streak and Home week.** The week card marks only completed scheduled workouts, quick
+  workouts never tick a scheduled day, and scheduled completions update the streak immediately.
+  Calendar arithmetic is daylight-saving safe.
+- **Home activity heatmap.** A workout completed today appears immediately, including after a save
+  without leaving the Home tab. Activity and scheduled adherence remain separate calculations.
+- **Native widgets.** Weekly and Profile widgets now target 3×1. The weekly widget uses a full-width
+  heatmap row with larger rounded day cells, today’s workout text and a clear Start/Open button.
+  The profile widget uses four centered metric cards. The streak widget adds a lightweight value
+  transition, and the in-app previews mirror the native structure and current theme.
+- **Liquid Glass.** The floating navigation dock keeps real backdrop blur and transparency while a
+  uniform tint and stronger blur remove the pale top band. Scrollable pages and fixed action bars
+  reserve room for the dock.
+- **AI data access settings.** Athlete-data sharing and AI Coach workout-data access are now two
+  clearly separated permissions in the same card, with an Info dialog explaining both and the
+  removed benchmark information.
 
 ### Fixed
-- **AI Coach tool protocol.** Gemini tool schemas are sanitized to the provider's supported subset,
-  compatibility-mode tool calls and results stay in the text protocol instead of being sent as
-  native function parts, and malformed tool envelopes receive a bounded correction turn instead of
-  ending as an unreadable answer.
-- **AI Coach data queries.** Exercise names are normalized for case, punctuation, spacing and simple
-  plural differences before catalog and history lookups; empty results now distinguish "no history"
-  from "no such exercise" and include clearly labelled closest suggestions.
-- **Post-workout summaries.** An empty stored model now resolves to the provider's visible default
-  (Gemini 3.5 Flash Lite), so a configured key no longer fails with "No AI model is selected".
-- **Scheduled streak and Home week.** The week card marks only completed scheduled workouts, quick
-  workouts never tick a scheduled day, and scheduled completions update the streak and heatmap
-  immediately. Calendar-day arithmetic is daylight-saving safe.
-- **AI Coach routine creation.** The chat can propose a complete new routine, show every day and
-  prescription in an approval card, and save it only after explicit approval. The original Routine
-  Generator keeps its separate prompt and missing-exercise creation path.
-- **Profile and AI permissions.** Benchmark Records is removed from Profile, athlete-data sharing
-  moves into AI Data Access, the info dialog explains both independent permissions, and the AI Coach
-  toggle uses the same green switch styling as the rest of Settings.
-- **Liquid Glass and bottom navigation.** Scrollable screens reserve room for the floating dock,
-  the workout action bar and routine sheets sit above it, and the dock's glass body is one uniform
-  color with no pale top strip.
-- **AI chat input.** Sentence capitalization is enabled through the platform keyboard options.
-- **Native widgets.** The weekly and profile widgets target 3x1, the weekly heatmap fills the first
-  row with larger rounded day cells and a clear Start/Open action, the profile widget uses four
-  centered metric cards, the streak widget animates only when its value changes, and the in-app
-  previews mirror the native structure.
+
+- Gemini function declarations containing `additionalProperties` or `default` are no longer rejected.
+- Compatibility-mode tool results no longer trigger Gemini’s missing-`thought_signature` HTTP 400.
+- “How much have I improved in push ups?” now finds `Push-Up` history instead of reporting no data.
+- Post-workout summaries no longer fail with “No AI model is selected” when the visible default model
+  is being used.
+- Quick workouts no longer mark a scheduled Home day as done or increase the scheduled streak.
+- The Home heatmap no longer misses a workout completed today, including near a DST transition.
+- Benchmark Records is removed from the Profile tab; its explanatory content remains available from
+  AI Data Access.
+- The AI Coach workout-data toggle now uses the app’s green switch styling.
+- AI Coach input now enables Android sentence capitalization.
+- Routine Workout Finish/Exit, AI Coach input, routine results and starter-routine actions are no
+  longer covered by the floating navigation dock.
+- The Liquid Glass dock no longer shows a separate whitish top strip.
+
+### Changed
+
+- Weekly Workout Overview and Workout Profile launcher widgets changed from 4×2 to 3×1.
+- The weekly widget now puts the complete seven-day heatmap on the first row, with today’s workout
+  and its action below.
+- Profile widget metrics are presented as separate centered cards.
+- Widget previews use the same rolling days and visual hierarchy as the installed widgets.
+
+### Technical
+
+- Added protocol, schema-sanitization, correction-loop, exercise-normalization, routine-proposal,
+  DST heatmap and streak regression tests.
+- Updated `docs/AI_TOOLS.md` with the new routine tool, correction behavior, normalization rules,
+  permission boundaries and provider compatibility notes.
+- Updated `docs/USER_DATA_INVENTORY.md` for `NEW_ROUTINE_PROPOSAL` chat payloads.
+- Current test suite: 714 JVM tests across 86 test classes.
 ---
 
 ## [4.1.0] - 2026-11-04
@@ -764,7 +812,8 @@ Entries are grouped under **Added**, **Changed**, **Deprecated**, **Removed**, *
 **Security**, each newest first. Versions follow [SemVer](https://semver.org/): bump the patch for a
 fix, the minor for a feature, the major for a breaking change.
 
-[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v4.1.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v4.2.0...HEAD
+[4.2.0]: https://github.com/JuggyBob/IronPulse/compare/v4.1.0...v4.2.0
 [4.1.0]: https://github.com/JuggyBob/IronPulse/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/JuggyBob/IronPulse/compare/v3.0.0...v4.0.0
 [3.0.0]: https://github.com/JuggyBob/IronPulse/compare/v2.0.1...v3.0.0

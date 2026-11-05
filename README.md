@@ -3,15 +3,15 @@
 [![License](https://img.shields.io/badge/license-source--available-lightgrey.svg)](LICENSE)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.2-7F52FF.svg)](https://kotlinlang.org)
 [![Android](https://img.shields.io/badge/Android-7.1%2B-3DDC84.svg)](https://developer.android.com)
-[![Release](https://img.shields.io/badge/release-v4.1.0-blue.svg)](https://github.com/JuggyBob/IronPulse/releases/tag/v4.1.0)
+[![Release](https://img.shields.io/badge/release-v4.2.0-blue.svg)](https://github.com/JuggyBob/IronPulse/releases/tag/v4.2.0)
 
 A dark-themed workout logger for strength training and calisthenics, built for the gym:
 offline by default, no account, no tracking, and a 1,300+ movement catalog that streams its
-animations on demand instead of shipping them in the APK. IronPulse 4.1.0 adds a database-aware AI
-coach with four read-only retrieval tools and controlled routine changes, immutable post-workout AI
-summaries, and three native Android home screen widgets with independent themes. It builds on the
-4.0.0 `.ironpulse` backup/restore format, four app themes, Liquid Glass navigation, fullscreen mode,
-and the schedule-adherence workout streak.
+animations on demand instead of shipping them in the APK. IronPulse 4.2.0 focuses on the AI Coach’s
+tool reliability and natural-language answers, complete routine creation from chat, scheduled streak
+and heatmap correctness, 3×1 native launcher widgets, and navigation polish. It keeps the 4.1.0
+permission-gated workout-data tools, post-workout summaries, `.ironpulse` backups, four app themes,
+Liquid Glass navigation, fullscreen mode, and schedule-adherence streak.
 
 <p align="center">
   <img src="docs/screenshots/01-home-dashboard.png" width="30%" alt="The Home dashboard" />
@@ -28,7 +28,7 @@ and the schedule-adherence workout streak.
 | Start somewhere | Three pre-built routines with a full preview before you adopt one |
 | See progress | Volume, estimated one-rep max, training days, weigh-ins plotted over time |
 | Check a movement | An animation for nearly every exercise, and full instructions |
-| Ask a coach | Optional AI chat with permission-gated workout retrieval, controlled routine proposals, routine generation and monthly summaries across Google, OpenAI, Anthropic, OpenRouter, xAI or your own endpoint |
+| Ask a coach | Optional AI chat with permission-gated workout retrieval, routine creation and controlled routine proposals, routine generation and monthly summaries across Google, OpenAI, Anthropic, OpenRouter, xAI or your own endpoint |
 | See progress after a workout | Optional immutable AI comparison against the previous same-routine/weekday session |
 | Use it from the launcher | Native Workout Streak, Weekly Workout Overview and Workout Profile widgets with independent themes |
 | Fix something the app got wrong | A low-level editor for any exercise, plus a revert to the shipped catalog |
@@ -343,7 +343,7 @@ storage, so it keeps working even after you delete the original from your galler
 | **Language** | Kotlin (100%) |
 | **UI** | Jetpack Compose + Material 3, portrait-only (locked in the manifest) |
 | **Architecture** | MVVM — Compose screens → `MainViewModel` → `FitnessRepository` → Room DAOs |
-| **Database** | Room (SQLite), schema v14, versioned migrations |
+| **Database** | Room (SQLite), schema v15, versioned migrations |
 | **Preferences** | DataStore |
 | **Backup format** | `.ironpulse` ZIP with manifest, independent format/data-schema versions, SHA-256 checksums and forward migrations |
 | **Async** | Coroutines + Flow |
@@ -388,7 +388,7 @@ can still be supplied through `.env`; copy `.env.example`, fill it in, and keep 
 
 ### Running the tests
 ```bash
-./gradlew testDebugUnitTest      # 705 JVM unit tests across 85 classes
+./gradlew testDebugUnitTest      # 714 JVM unit tests across 86 classes
 ./gradlew recordRoborazziDebug   # regenerate reference screenshots
 ```
 
@@ -401,7 +401,8 @@ Prebuilt APKs are attached to the
 
 | Version | File |
 |---|---|
-| **v4.1.0** | [`IronPulse4.1.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.1.0/IronPulse4.1.0-release.apk) |
+| **v4.2.0** | [`IronPulse4.2.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.2.0/IronPulse4.2.0-release.apk) |
+| v4.1.0 | [`IronPulse4.1.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.1.0/IronPulse4.1.0-release.apk) |
 | v4.0.0 | [`IronPulse4.0.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.0.0/IronPulse4.0.0-release.apk) |
 | v3.0.0 | [`IronPulse3.0.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v3.0.0/IronPulse3.0.0-release.apk) |
 | v2.0.1 | [`IronPulse2.0.1-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v2.0.1/IronPulse2.0.1-release.apk) |
@@ -435,7 +436,7 @@ IronPulse/
 │   │   │   │   └── viewmodel/        # MainViewModel — the single source of truth
 │   │   │   └── util/                 # Coil loaders, media store, timers
 │   │   └── res/                      # Icons, strings, themes, backup rules
-│   └── src/test/                     # 705 JVM tests (Robolectric + JUnit)
+│   └── src/test/                     # 714 JVM tests (Robolectric + JUnit)
 ├── docs/screenshots/                 # Images used by this README
 ├── gradle/wrapper/                   # Pinned Gradle distribution
 ├── .github/                          # Issue & PR templates, CI workflows
