@@ -52,6 +52,18 @@ data class ProposedExercise(
     }
 
     companion object {
+        fun fromExercise(exercise: Exercise): ProposedExercise = ProposedExercise(
+            name = exercise.name,
+            category = exercise.category,
+            bodyPart = exercise.bodyPart,
+            target = exercise.target,
+            secondaryMuscles = exercise.secondaryMuscleList,
+            equipment = exercise.equipment,
+            exerciseType = exercise.exerciseType,
+            instructions = exercise.instructions,
+            description = exercise.description
+        )
+
         fun fromJson(obj: JSONObject): ProposedExercise? {
             val parsed = AiExerciseFactory.fromJsonObject(
                 obj,

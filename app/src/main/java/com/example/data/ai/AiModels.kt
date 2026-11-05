@@ -209,5 +209,7 @@ data class AiConversationResult(
     val toolCallsExecuted: Int,
     val usedCompatibilityFallback: Boolean,
     /** Present when the model asked for a routine change that needs explicit approval. */
-    val routineProposal: RoutineModificationProposal? = null
+    val routineProposal: RoutineModificationProposal? = null,
+    /** Present when the model proposed a complete new routine in chat. */
+    val newRoutineProposal: NewRoutineProposal? = null
 )

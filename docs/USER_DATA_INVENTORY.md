@@ -127,13 +127,13 @@ so the importer validates them explicitly.
 
 | Field | Detail |
 |---|---|
-| Data category | Full user/AI message text, sender, ordering timestamp, id, message kind, routine-proposal payload and one-time approval status |
+| Data category | Full user/AI message text, sender, ordering timestamp, id, message kind, proposal payload and one-time approval status |
 | Model | `ChatMessageEntity` |
-| Relationships | Belongs to one `ChatSession`; a routine proposal also references a routine and two exercise names through its payload. |
+| Relationships | Belongs to one `ChatSession`. `ROUTINE_PROPOSAL` references a routine and two exercise names; `NEW_ROUTINE_PROPOSAL` carries a complete proposed week. |
 | Export strategy | Every message, including `kind`, `payloadJson` and `status`, ordered by session, timestamp and id. |
 | Import strategy | Delete all destination messages and insert with the same ids and proposal metadata. |
 | Exclusions | None. |
-| Verification | Sender is `USER` or `AI`; kind and approval state are known values; every message has its session; exact list equality. |
+| Verification | Sender is `USER` or `AI`; kind is `TEXT`, `ROUTINE_PROPOSAL` or `NEW_ROUTINE_PROPOSAL`; approval state is a known value; every message has its session; exact list equality. |
 
 ### 2.10 `gemini_summaries`
 

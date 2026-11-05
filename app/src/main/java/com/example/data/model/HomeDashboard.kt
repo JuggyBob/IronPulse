@@ -61,7 +61,9 @@ object HomeDashboard {
      */
     fun rollingWindow(today: Long): List<Long> {
         val todayStart = ActivityHeatmap.startOfDay(today)
-        return (6 downTo 0).map { todayStart - it * DAY_MS }
+        // Calendar-day arithmetic, not fixed 24-hour arithmetic: a DST transition inside the
+        // window would otherwise shift a date by an hour and stop a workout from matching its cell.
+        return (6 downTo 0).map { offset -> ActivityHeatmap.addDays(todayStart, -offset) }
     }
 
     /**
@@ -165,7 +167,7 @@ object HomeDashboard {
         val weekday = ActivityHeatmap.isoDayOfWeek(timestamp)
         val firstWeekday = if (weekStartsOnMonday) Weekday.MONDAY else Weekday.SUNDAY
         val offset = (weekday - firstWeekday + Weekday.COUNT) % Weekday.COUNT
-        return dayStart - offset * DAY_MS
+        return ActivityHeatmap.addDays(dayStart, -offset)
     }
 
     /**
@@ -183,7 +185,7 @@ object HomeDashboard {
      */
     fun weekDates(timestamp: Long, weekStartsOnMonday: Boolean): List<Long> {
         val first = startOfWeek(timestamp, weekStartsOnMonday)
-        return (0 until Weekday.COUNT).map { first + it * DAY_MS }
+        return (0 until Weekday.COUNT).map { offset -> ActivityHeatmap.addDays(first, offset) }
     }
 
     /**

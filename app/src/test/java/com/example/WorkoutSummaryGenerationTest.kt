@@ -19,6 +19,7 @@ import com.example.data.ai.AiResponse
 import com.example.data.ai.AiService
 import com.example.data.ai.AiToolDispatcher
 import com.example.data.ai.AiToolRegistry
+import com.example.data.ai.GeminiProtocol
 import com.example.data.ai.RepositoryAiDataAccess
 import com.example.data.ai.WorkoutSummaryGenerator
 import com.example.data.db.AppDatabase
@@ -172,6 +173,28 @@ class WorkoutSummaryGenerationTest {
             assertEquals(1, provider.requests.size)
             assertEquals("# Summary\n\nSteady session.", second.summaryMarkdown)
         }
+
+    @Test
+    fun `structured text generation never receives the AI Coach toolset`() = runBlocking {
+        val service = aiService()
+        service.completeText("Generate a routine as JSON.", provider = AiProviderId.GOOGLE)
+
+        val request = provider.requests.single()
+        assertTrue(request.tools.isEmpty())
+        assertTrue(request.messages.none { it.role == com.example.data.ai.AiRole.TOOL })
+    }
+
+    @Test
+    fun `an empty stored model uses the displayed provider default`() = runBlocking {
+        configuration.saveModel(AiProviderId.GOOGLE, "")
+        val currentId = insertSession("Push Day", 9_000_000L, reps = 12)
+        val generator = WorkoutSummaryGenerator(repository, aiService())
+
+        val summary = generator.generate(currentId).getOrThrow()
+
+        assertEquals(GeminiProtocol.DEFAULT_MODEL, summary.model)
+        assertEquals(GeminiProtocol.DEFAULT_MODEL, provider.requests.single().model)
+    }
 
     @Test
     fun `no previous comparable workout is disclosed rather than invented`() = runBlocking {

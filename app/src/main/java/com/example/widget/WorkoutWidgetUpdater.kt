@@ -27,6 +27,10 @@ import java.util.Calendar
 /** Re-renders every installed widget from the latest persisted IronPulse state. */
 object WorkoutWidgetUpdater {
 
+    private const val WIDGET_STATE = "ironpulse_widget_state"
+    private const val KEY_STREAK_VALUE = "streak_last_value"
+    private const val KEY_STREAK_INDEX = "streak_flipper_index"
+
     suspend fun updateAll(context: Context) = withContext(Dispatchers.IO) {
         val manager = AppWidgetManager.getInstance(context)
         // Do not read the database for a refresh when none of the three widgets is installed.
@@ -53,10 +57,34 @@ object WorkoutWidgetUpdater {
         val palette = WidgetTheme.palette(data.themes.streak)
         val views = RemoteViews(context.packageName, R.layout.widget_streak)
         views.setInt(R.id.widget_streak_root, "setBackgroundResource", palette.backgroundRes)
-        views.setTextColor(R.id.widget_streak_current, palette.textPrimary)
+        views.setTextColor(R.id.widget_streak_title, palette.textSecondary)
+        views.setTextColor(R.id.widget_streak_current_a, palette.textPrimary)
+        views.setTextColor(R.id.widget_streak_current_b, palette.textPrimary)
         views.setTextColor(R.id.widget_streak_label, palette.textSecondary)
         views.setTextColor(R.id.widget_streak_best, palette.textSecondary)
-        views.setTextViewText(R.id.widget_streak_current, data.streak.current.toString())
+
+        // A RemoteViews widget cannot run a continuous animation, and re-applying the layout on
+        // every refresh must not animate when nothing changed. A two-child ViewFlipper gives the
+        // count a short fade/slide only when the stored streak value actually differs.
+        val state = context.getSharedPreferences(WIDGET_STATE, Context.MODE_PRIVATE)
+        val current = data.streak.current
+        val lastValue = state.getInt(KEY_STREAK_VALUE, Int.MIN_VALUE)
+        val storedIndex = state.getInt(KEY_STREAK_INDEX, 0)
+        val index = if (lastValue == Int.MIN_VALUE || lastValue == current) {
+            storedIndex
+        } else {
+            1 - storedIndex
+        }
+        views.setTextViewText(R.id.widget_streak_current_a, current.toString())
+        views.setTextViewText(R.id.widget_streak_current_b, current.toString())
+        views.setDisplayedChild(R.id.widget_streak_flipper, index)
+        if (lastValue != current) {
+            state.edit()
+                .putInt(KEY_STREAK_VALUE, current)
+                .putInt(KEY_STREAK_INDEX, index)
+                .apply()
+        }
+
         views.setTextViewText(
             R.id.widget_streak_label,
             if (data.streak.alive) "workout days" else "streak broken"
@@ -79,7 +107,6 @@ object WorkoutWidgetUpdater {
         val palette = WidgetTheme.palette(data.themes.weekly)
         val views = RemoteViews(context.packageName, R.layout.widget_weekly)
         views.setInt(R.id.widget_weekly_root, "setBackgroundResource", palette.backgroundRes)
-        views.setTextColor(R.id.widget_weekly_title, palette.textSecondary)
         views.setTextColor(R.id.widget_weekly_today, palette.textPrimary)
         views.setTextColor(R.id.widget_weekly_action, palette.onAccent)
         views.setInt(R.id.widget_weekly_action, "setBackgroundResource", palette.buttonRes)
@@ -87,18 +114,16 @@ object WorkoutWidgetUpdater {
             R.id.widget_day_0, R.id.widget_day_1, R.id.widget_day_2, R.id.widget_day_3,
             R.id.widget_day_4, R.id.widget_day_5, R.id.widget_day_6
         )
-        val labelIds = intArrayOf(
-            R.id.widget_day_label_0, R.id.widget_day_label_1, R.id.widget_day_label_2,
-            R.id.widget_day_label_3, R.id.widget_day_label_4, R.id.widget_day_label_5,
-            R.id.widget_day_label_6
-        )
         data.weekly.days.take(7).forEachIndexed { index, day ->
-            views.setTextViewText(labelIds[index], day.label)
-            views.setTextColor(labelIds[index], palette.textSecondary)
+            views.setTextViewText(dayIds[index], day.label.take(1))
             views.setInt(
                 dayIds[index],
-                "setBackgroundColor",
-                if (day.completed) palette.dayOn else palette.dayOff
+                "setBackgroundResource",
+                if (day.completed) palette.dayOnRes else palette.dayOffRes
+            )
+            views.setTextColor(
+                dayIds[index],
+                if (day.completed) palette.onAccent else palette.textSecondary
             )
         }
         views.setTextViewText(
@@ -141,22 +166,28 @@ object WorkoutWidgetUpdater {
         views.setInt(R.id.widget_profile_root, "setBackgroundResource", palette.backgroundRes)
         views.setTextColor(R.id.widget_profile_name, palette.textPrimary)
         views.setTextColor(R.id.widget_profile_subtitle, palette.textSecondary)
+        views.setTextColor(R.id.widget_profile_weight_label, palette.textSecondary)
+        views.setTextColor(R.id.widget_profile_height_label, palette.textSecondary)
+        views.setTextColor(R.id.widget_profile_bmi_label, palette.textSecondary)
         views.setTextColor(R.id.widget_profile_weight_value, palette.textPrimary)
         views.setTextColor(R.id.widget_profile_height_value, palette.textPrimary)
         views.setTextColor(R.id.widget_profile_bmi_value, palette.textPrimary)
         views.setTextColor(R.id.widget_profile_initial, palette.onAccent)
         views.setInt(R.id.widget_profile_initial, "setBackgroundResource", palette.buttonRes)
+        val profileCards = intArrayOf(
+            R.id.widget_profile_identity_card,
+            R.id.widget_profile_weight_card,
+            R.id.widget_profile_height_card,
+            R.id.widget_profile_bmi_card
+        )
+        profileCards.forEach {
+            views.setInt(it, "setBackgroundResource", palette.cardRes)
+        }
         views.setTextViewText(R.id.widget_profile_name, data.profile.name)
         views.setTextViewText(R.id.widget_profile_initial, data.profile.name.take(1).uppercase())
         views.setTextViewText(R.id.widget_profile_weight_value, data.profile.weight)
         views.setTextViewText(R.id.widget_profile_height_value, data.profile.height)
         views.setTextViewText(R.id.widget_profile_bmi_value, data.profile.bmi)
-        val profileLabels = intArrayOf(
-            R.id.widget_profile_weight_value,
-            R.id.widget_profile_height_value,
-            R.id.widget_profile_bmi_value
-        )
-        profileLabels.forEach { views.setTextColor(it, palette.textPrimary) }
         views.setOnClickPendingIntent(
             R.id.widget_profile_root,
             activityPending(context, WidgetNavigation.ACTION_OPEN_PROFILE, 3104)

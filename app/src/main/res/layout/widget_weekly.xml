@@ -4,85 +4,162 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@drawable/widget_bg_ironpulse"
+    android:gravity="center_vertical"
     android:orientation="vertical"
-    android:padding="12dp">
-
-    <TextView
-        android:id="@+id/widget_weekly_title"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="@string/widget_weekly_title"
-        android:textColor="#8B949E"
-
-        android:textSize="10sp"
-        android:textStyle="bold" />
+    android:paddingStart="10dp"
+    android:paddingTop="7dp"
+    android:paddingEnd="10dp"
+    android:paddingBottom="7dp">
 
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_marginTop="6dp"
-        android:layout_weight="1"
+        android:layout_height="30dp"
         android:gravity="center_vertical"
         android:orientation="horizontal">
 
-        <LinearLayout
+        <TextView
+            android:id="@+id/widget_day_0"
+            android:layout_width="0dp"
+            android:layout_height="28dp"
+            android:layout_weight="1"
+            android:background="@drawable/widget_day_off_ironpulse"
+            android:fontFamily="sans-serif-medium"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:textColor="#8B949E"
+            android:textSize="9sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_day_1"
+            android:layout_width="0dp"
+            android:layout_height="28dp"
+            android:layout_marginStart="3dp"
+            android:layout_weight="1"
+            android:background="@drawable/widget_day_off_ironpulse"
+            android:fontFamily="sans-serif-medium"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:textColor="#8B949E"
+            android:textSize="9sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_day_2"
+            android:layout_width="0dp"
+            android:layout_height="28dp"
+            android:layout_marginStart="3dp"
+            android:layout_weight="1"
+            android:background="@drawable/widget_day_off_ironpulse"
+            android:fontFamily="sans-serif-medium"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:textColor="#8B949E"
+            android:textSize="9sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_day_3"
+            android:layout_width="0dp"
+            android:layout_height="28dp"
+            android:layout_marginStart="3dp"
+            android:layout_weight="1"
+            android:background="@drawable/widget_day_off_ironpulse"
+            android:fontFamily="sans-serif-medium"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:textColor="#8B949E"
+            android:textSize="9sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_day_4"
+            android:layout_width="0dp"
+            android:layout_height="28dp"
+            android:layout_marginStart="3dp"
+            android:layout_weight="1"
+            android:background="@drawable/widget_day_off_ironpulse"
+            android:fontFamily="sans-serif-medium"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:textColor="#8B949E"
+            android:textSize="9sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_day_5"
+            android:layout_width="0dp"
+            android:layout_height="28dp"
+            android:layout_marginStart="3dp"
+            android:layout_weight="1"
+            android:background="@drawable/widget_day_off_ironpulse"
+            android:fontFamily="sans-serif-medium"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:textColor="#8B949E"
+            android:textSize="9sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_day_6"
+            android:layout_width="0dp"
+            android:layout_height="28dp"
+            android:layout_marginStart="3dp"
+            android:layout_weight="1"
+            android:background="@drawable/widget_day_off_ironpulse"
+            android:fontFamily="sans-serif-medium"
+            android:gravity="center"
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:textColor="#8B949E"
+            android:textSize="9sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="5dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/widget_weekly_today"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:ellipsize="end"
+            android:fontFamily="sans-serif-medium"
+            android:maxLines="2"
+            android:text="@string/widget_weekly_today_rest"
+            android:textColor="#F0F6FC"
+            android:textSize="9sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/widget_weekly_action"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/widget_button_ironpulse"
+            android:fontFamily="sans-serif-medium"
             android:gravity="center"
-            android:orientation="vertical">
-            <TextView android:id="@+id/widget_day_label_0" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#8B949E" android:textSize="9sp" />
-            <TextView android:id="@+id/widget_day_0" android:layout_width="24dp" android:layout_height="24dp" android:layout_marginTop="3dp" />
-        </LinearLayout>
-        <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:orientation="vertical">
-            <TextView android:id="@+id/widget_day_label_1" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#8B949E" android:textSize="9sp" />
-            <TextView android:id="@+id/widget_day_1" android:layout_width="24dp" android:layout_height="24dp" android:layout_marginTop="3dp" />
-        </LinearLayout>
-        <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:orientation="vertical">
-            <TextView android:id="@+id/widget_day_label_2" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#8B949E" android:textSize="9sp" />
-            <TextView android:id="@+id/widget_day_2" android:layout_width="24dp" android:layout_height="24dp" android:layout_marginTop="3dp" />
-        </LinearLayout>
-        <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:orientation="vertical">
-            <TextView android:id="@+id/widget_day_label_3" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#8B949E" android:textSize="9sp" />
-            <TextView android:id="@+id/widget_day_3" android:layout_width="24dp" android:layout_height="24dp" android:layout_marginTop="3dp" />
-        </LinearLayout>
-        <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:orientation="vertical">
-            <TextView android:id="@+id/widget_day_label_4" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#8B949E" android:textSize="9sp" />
-            <TextView android:id="@+id/widget_day_4" android:layout_width="24dp" android:layout_height="24dp" android:layout_marginTop="3dp" />
-        </LinearLayout>
-        <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:orientation="vertical">
-            <TextView android:id="@+id/widget_day_label_5" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#8B949E" android:textSize="9sp" />
-            <TextView android:id="@+id/widget_day_5" android:layout_width="24dp" android:layout_height="24dp" android:layout_marginTop="3dp" />
-        </LinearLayout>
-        <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:gravity="center" android:orientation="vertical">
-            <TextView android:id="@+id/widget_day_label_6" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#8B949E" android:textSize="9sp" />
-            <TextView android:id="@+id/widget_day_6" android:layout_width="24dp" android:layout_height="24dp" android:layout_marginTop="3dp" />
-        </LinearLayout>
+            android:includeFontPadding="false"
+            android:maxLines="1"
+            android:paddingStart="10dp"
+            android:paddingTop="4dp"
+            android:paddingEnd="10dp"
+            android:paddingBottom="4dp"
+            android:text="@string/widget_weekly_start"
+            android:textColor="#0D1117"
+            android:textSize="9sp"
+            android:textStyle="bold" />
     </LinearLayout>
 
-    <TextView
-        android:id="@+id/widget_weekly_today"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:maxLines="1"
-        android:ellipsize="end"
-        android:text="@string/widget_weekly_today_rest"
-        android:textColor="#F0F6FC"
-        android:textSize="12sp"
-        android:textStyle="bold" />
-
-    <TextView
-        android:id="@+id/widget_weekly_action"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="5dp"
-        android:background="@drawable/widget_button_ironpulse"
-        android:paddingStart="10dp"
-        android:paddingTop="5dp"
-        android:paddingEnd="10dp"
-        android:paddingBottom="5dp"
-        android:text="@string/widget_weekly_choose"
-        android:textColor="#0D1117"
-        android:textSize="10sp"
-        android:textStyle="bold" />
 </LinearLayout>

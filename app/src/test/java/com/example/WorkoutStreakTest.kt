@@ -112,6 +112,58 @@ class WorkoutStreakTest {
     }
 
     @Test
+    fun `two flawless weeks stay alive on a rest day`() {
+        val schedule = listOf(
+            planned(day(-13)), rest(day(-12)), planned(day(-11)), rest(day(-10)),
+            planned(day(-9)), rest(day(-8)), rest(day(-7)),
+            planned(day(-6)), rest(day(-5)), planned(day(-4)), rest(day(-3)),
+            planned(day(-2)), rest(day(-1)), rest(today)
+        )
+        val completions = listOf(-13, -11, -9, -6, -4, -2).map { completed(day(it)) }
+
+        val summary = WorkoutStreak.calculate(schedule, completions, today)
+
+        assertEquals(6, summary.currentStreak)
+        assertEquals(6, summary.bestStreak)
+        assertEquals(6, summary.completedDays)
+        assertTrue(summary.isAlive)
+        assertFalse(summary.isBroken)
+        assertFalse(summary.todayPlanned)
+        assertEquals(StreakDayStatus.REST, summary.days.first { it.dayStart == today }.status)
+    }
+
+    @Test
+    fun `quick workouts on rest days do not inflate the scheduled streak`() {
+        val schedule = listOf(
+            planned(day(-6)), rest(day(-5)), planned(day(-4)), rest(day(-3)),
+            planned(day(-2)), rest(day(-1)), rest(today)
+        )
+        val completions = listOf(
+            completed(day(-6)), completed(day(-4)), completed(day(-2)),
+            unscheduled(day(-5)), unscheduled(day(-1)), unscheduled(today)
+        )
+
+        val summary = WorkoutStreak.calculate(schedule, completions, today)
+
+        assertEquals(3, summary.currentStreak)
+        assertEquals(3, summary.completedDays)
+        assertEquals(StreakDayStatus.REST, summary.days.first { it.dayStart == today }.status)
+    }
+
+    @Test
+    fun `a linked session on a rest day is not a completed scheduled day`() {
+        val summary = WorkoutStreak.calculate(
+            schedule = listOf(rest(day(-1)), rest(today)),
+            sessions = listOf(completed(day(-1))),
+            today = today
+        )
+
+        assertEquals(0, summary.currentStreak)
+        assertEquals(0, summary.completedDays)
+        assertEquals(StreakDayStatus.REST, summary.days.first { it.dayStart == day(-1) }.status)
+    }
+
+    @Test
     fun `a rest day does not break the streak`() {
         val summary = WorkoutStreak.calculate(
             schedule = listOf(planned(day(-2)), rest(day(-1)), planned(today)),

@@ -90,7 +90,9 @@ import com.example.data.model.ExerciseType
 import com.example.data.model.HomeDashboard
 import com.example.data.model.LoggedSet
 import com.example.data.model.RoutineDay
+import com.example.data.model.StreakDayStatus
 import com.example.data.model.Weekday
+import com.example.data.model.WorkoutStreak
 import com.example.data.model.WeightConversion
 import com.example.data.model.WeightUnit
 import com.example.data.model.WorkoutMetrics
@@ -171,11 +173,12 @@ fun HomeScreen(
     var showTrainingDayInfo by remember { mutableStateOf(false) }
     var showWeightDialog by remember { mutableStateOf(false) }
 
-    // The days on which a workout was recorded, so the schedule can tell a finished day from an
-    // upcoming one.
-    val trainedDays = remember(workoutHistory) {
-        workoutHistory
-            .map { HomeDashboard.startOfDay(it.session.startTime) }
+    // The scheduled days that were actually completed, taken from the same streak summary the
+    // streak card uses. A quick workout is activity, not adherence, so it can never tick a day.
+    val completedScheduledDays = remember(streak.days) {
+        streak.days
+            .filter { it.status == StreakDayStatus.COMPLETED }
+            .map { it.dayStart }
             .toSet()
     }
 
@@ -460,7 +463,7 @@ fun HomeScreen(
                         today = today,
                         now = now,
                         weekStartsOnMonday = weekStartsOnMonday,
-                        trainedDays = trainedDays,
+                        completedScheduledDays = completedScheduledDays,
                         shortDateFormat = shortDateFormat,
                         onStartDay = { day ->
                             viewModel.startRoutineWorkout(
@@ -1056,7 +1059,7 @@ private fun WeekScheduleCard(
     today: Int,
     now: Long,
     weekStartsOnMonday: Boolean,
-    trainedDays: Set<Long>,
+    completedScheduledDays: Set<Long>,
     shortDateFormat: SimpleDateFormat,
     onStartDay: (RoutineDay) -> Unit
 ) {
@@ -1079,11 +1082,12 @@ private fun WeekScheduleCard(
                 // The date of this weekday in the calendar week the athlete is in. It is worked
                 // out from the start of that week, so the dates under the days are the real dates
                 // of this week and not the weekday number counted from today.
-                val firstWeekday = if (weekStartsOnMonday) Weekday.MONDAY else Weekday.SUNDAY
-                val weekStart = HomeDashboard.startOfWeek(now, weekStartsOnMonday)
-                val position = (day.weekday - firstWeekday + Weekday.COUNT) % Weekday.COUNT
-                val dateOfDay = weekStart + position * com.example.data.model.DAY_MS
-                val wasTrained = trainedDays.contains(dateOfDay)
+                val dateOfDay = WorkoutStreak.dateForWeekdayInWeek(
+                    weekday = day.weekday,
+                    reference = now,
+                    weekStartsOnMonday = weekStartsOnMonday
+                )
+                val wasTrained = completedScheduledDays.contains(dateOfDay)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

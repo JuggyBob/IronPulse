@@ -12,6 +12,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Calendar
+import java.util.TimeZone
 
 /**
  * The numbers behind the Home dashboard.
@@ -177,12 +179,41 @@ class HomeDashboardTest {
         val window = HomeDashboard.rollingWindow(reference)
         assertEquals(7, window.size)
         assertEquals(reference, window.last())
-        assertEquals(reference - 6 * DAY_MS, window.first())
-        // The dates are consecutive.
-        assertEquals(
-            (1..6).map { window[it] - window[it - 1] }.distinct(),
-            listOf(DAY_MS)
-        )
+        assertEquals(ActivityHeatmap.addDays(reference, -6), window.first())
+        // The dates are consecutive calendar days.
+        for (index in 1 until window.size) {
+            assertEquals(ActivityHeatmap.addDays(window[index - 1], 1), window[index])
+        }
+    }
+
+    @Test
+    fun `a workout today still lands on the map across a daylight saving change`() {
+        val original = TimeZone.getDefault()
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("America/New_York"))
+            val dstEnd = Calendar.getInstance().apply {
+                set(2026, Calendar.NOVEMBER, 1, 12, 0, 0)
+                set(Calendar.MILLISECOND, 0)
+            }.timeInMillis
+            val today = ActivityHeatmap.startOfDay(dstEnd)
+
+            val window = HomeDashboard.rollingWindow(today)
+            assertEquals(7, window.size)
+            assertEquals(today, window.last())
+            for (index in 1 until window.size) {
+                assertEquals(ActivityHeatmap.addDays(window[index - 1], 1), window[index])
+            }
+
+            val cells = HomeDashboard.rollingHeatmap(
+                sessions = listOf(wrapper(dstEnd, sets = listOf(set(1L)))),
+                today = dstEnd,
+                bodyWeightForSet = noBodyWeight
+            )
+            assertTrue(cells.last().hasSession)
+            assertEquals(1, cells.last().setCount)
+        } finally {
+            TimeZone.setDefault(original)
+        }
     }
 
     @Test

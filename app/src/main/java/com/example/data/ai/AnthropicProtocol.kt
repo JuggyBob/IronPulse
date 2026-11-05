@@ -21,13 +21,22 @@ object AnthropicProtocol {
         put("temperature", request.generation.temperature)
         put("top_p", request.generation.topP)
         if (request.systemInstruction.isNotBlank()) put("system", request.systemInstruction)
-        put("messages", serializeMessages(request.messages))
+        put(
+            "messages",
+            serializeMessages(
+                request.messages,
+                compatibility = request.toolMode == AiToolMode.COMPATIBILITY
+            )
+        )
         if (includeTools && request.tools.isNotEmpty()) {
             put("tools", serializeTools(request.tools))
         }
     }
 
-    fun serializeMessages(messages: List<AiMessage>): JSONArray {
+    fun serializeMessages(
+        messages: List<AiMessage>,
+        compatibility: Boolean = false
+    ): JSONArray {
         data class Pending(val role: String, val blocks: MutableList<JSONObject>)
 
         val pending = mutableListOf<Pending>()
@@ -45,35 +54,85 @@ object AnthropicProtocol {
                 AiRole.SYSTEM -> Unit
                 AiRole.USER -> append("user", textBlock(message.text))
                 AiRole.ASSISTANT -> {
-                    if (message.text.isNotBlank()) append("assistant", textBlock(message.text))
-                    message.toolCalls.forEach { call ->
-                        append(
-                            "assistant",
-                            JSONObject().apply {
-                                put("type", "tool_use")
-                                put("id", call.id)
-                                put("name", call.name)
-                                put("input", runCatching { JSONObject(call.argumentsJson) }
-                                    .getOrElse { JSONObject() })
-                            }
-                        )
-                    }
-                    // An assistant turn that is only a tool call still needs a message entry.
-                    if (message.text.isBlank() && message.toolCalls.isEmpty()) {
-                        append("assistant", textBlock(""))
+                    if (compatibility) {
+                        val text = message.text.ifBlank {
+                            if (message.toolCalls.isEmpty()) "" else
+                                JSONObject().put(
+                                    "tool_calls",
+                                    JSONArray().apply {
+                                        message.toolCalls.forEach { call ->
+                                            put(
+                                                JSONObject().apply {
+                                                    put("name", call.name)
+                                                    put(
+                                                        "arguments",
+                                                        runCatching { JSONObject(call.argumentsJson) }
+                                                            .getOrElse { JSONObject() }
+                                                    )
+                                                }
+                                            )
+                                        }
+                                    }
+                                ).toString()
+                        }
+                        if (text.isNotBlank()) append("assistant", textBlock(text))
+                    } else {
+                        if (message.text.isNotBlank()) append("assistant", textBlock(message.text))
+                        message.toolCalls.forEach { call ->
+                            append(
+                                "assistant",
+                                JSONObject().apply {
+                                    put("type", "tool_use")
+                                    put("id", call.id)
+                                    put("name", call.name)
+                                    put("input", runCatching { JSONObject(call.argumentsJson) }
+                                        .getOrElse { JSONObject() })
+                                }
+                            )
+                        }
+                        // An assistant turn that is only a tool call still needs a message entry.
+                        if (message.text.isBlank() && message.toolCalls.isEmpty()) {
+                            append("assistant", textBlock(""))
+                        }
                     }
                 }
                 AiRole.TOOL -> {
-                    message.toolResults.forEach { result ->
-                        append(
-                            "user",
-                            JSONObject().apply {
-                                put("type", "tool_result")
-                                put("tool_use_id", result.callId)
-                                put("content", result.contentJson)
-                                if (result.isError) put("is_error", true)
-                            }
-                        )
+                    if (compatibility) {
+                        if (message.toolResults.isNotEmpty()) {
+                            append(
+                                "user",
+                                textBlock(
+                                    "TOOL RESULTS (JSON): " + JSONArray().apply {
+                                        message.toolResults.forEach { result ->
+                                            put(
+                                                JSONObject().apply {
+                                                    put("name", result.name)
+                                                    put("call_id", result.callId)
+                                                    put("is_error", result.isError)
+                                                    put(
+                                                        "result",
+                                                        runCatching { JSONObject(result.contentJson) }
+                                                            .getOrElse { result.contentJson }
+                                                    )
+                                                }
+                                            )
+                                        }
+                                    }.toString()
+                                )
+                            )
+                        }
+                    } else {
+                        message.toolResults.forEach { result ->
+                            append(
+                                "user",
+                                JSONObject().apply {
+                                    put("type", "tool_result")
+                                    put("tool_use_id", result.callId)
+                                    put("content", result.contentJson)
+                                    if (result.isError) put("is_error", true)
+                                }
+                            )
+                        }
                     }
                 }
             }

@@ -19,7 +19,7 @@ The implementation lives in
 
 | Property | Behavior |
 |---|---|
-| Access | Retrieval is read-only. The only write-shaped tool creates a proposal; it does not write until the athlete approves the exact displayed change. |
+| Access | Retrieval is read-only. The two write-shaped tools (`propose_routine_modification`, `propose_new_routine`) only create proposals; nothing writes until the athlete approves the exact displayed change. |
 | Data surface | `AiDataAccess`, implemented by `RepositoryAiDataAccess` over narrowly scoped `FitnessRepository` reads. |
 | SQL | None. The model cannot send a query; the repository methods are fixed. |
 | Filesystem | None. |
@@ -27,11 +27,19 @@ The implementation lives in
 | Code execution | None. |
 | Tool set | Fixed at build time by `AiToolCatalog`; a provider cannot add or rename a tool. |
 | Permissions | The dispatcher checks `AiAccessPolicy` and `AiToolDomain` before every call. |
-| Result size | Default **16 KiB**, 32 KiB for workout/history tools and 48 KiB for the routine overview; results also cap sets and text fields. |
+| Result size | Default **16 KiB**, 32 KiB for workout/history and routine-proposal tools, 48 KiB for the routine overview; results also cap sets and text fields. |
 
 A tool call is validated and executed by `AiToolDispatcher`. Failures become a JSON object with
 `"ok": false` that the model can read and recover from; they are not thrown into the chat as raw
-exceptions. Cancellation is the exception: it is always rethrown so closing a screen stops the work.
+exceptions. An argument error also carries the tool's `correctArgumentsSchema` and a
+`howToCorrect` instruction, so a model can repair its own call. Cancellation is the exception: it
+is always rethrown so closing a screen stops the work.
+
+If a text-protocol reply looks like a tool request but contains no usable call, the engine appends
+the model's own attempt plus a bounded `TOOL PROTOCOL CORRECTION` turn (at most two corrections)
+that restates the exact envelope, tool names and argument schemas. Nothing is executed until a
+valid call is produced. If the model still cannot comply, the athlete gets a clear parse error
+instead of a hang or a fabricated answer.
 
 ---
 
@@ -50,7 +58,8 @@ tools, sends the results back, and repeats until the model answers or a limit is
 | Ordering | Sequential; calls in one response run one after another |
 | Exhausted budget | One final request with tools removed, so the athlete still gets an answer from the data already gathered |
 | Permission changes | The dispatcher re-reads the access policy before each tool call, so revoking access stops a pending retrieval inside an active loop |
-| Proposal stop | A successful routine proposal ends the tool loop so the app can render the approval card; the model resumes only after the athlete decides |
+| Proposal stop | A successful routine proposal (modification or complete new routine) ends the tool loop so the app can render the approval card; the model resumes only after the athlete decides |
+| Malformed text-protocol request | Up to two correction turns, then a clear user-facing parse error |
 
 ### Tool modes
 
@@ -95,7 +104,7 @@ All errors use this shape:
 | Error code | Meaning |
 |---|---|
 | `unknown_tool` | The requested name is not in the catalog. The message lists the available tools. |
-| `invalid_arguments` | The JSON could not be parsed, a required argument is missing, a type or range is wrong, or a value is too long. |
+| `invalid_arguments` | The JSON could not be parsed, a required argument is missing, a type or range is wrong, or a value is too long. The result includes `correctArgumentsSchema` and `howToCorrect`. |
 | `not_found` | The requested exercise or routine does not exist. |
 | `no_routines` | The athlete has no saved routines, so a routine lookup cannot return one. |
 | `no_active_routine` | No routine is currently scheduled, or the active routine has no weekly days. |
@@ -120,9 +129,12 @@ equipment before recommending one.
 | `query` | string | yes | 1–120 characters after trimming; must not be blank. |
 | `limit` | integer | no | 1–20, default 8. |
 
-**Matching:** the query is lower-cased and split on whitespace. Every token must appear somewhere in
-the name, category, body part, target or equipment. Ranking is deterministic: exact name, then name
-prefix, then name substring, then all tokens in the name, then exact category, body part, target or
+**Matching:** names and query both pass through `AiExerciseName.canonical`, which lower-cases,
+normalizes punctuation and whitespace, expands compound spellings such as `pushup`, and singularizes
+simple plurals. The key is used for equality, never broad substring equivalence, so `push up` does
+not merge `pike push up` or `push up plus`. Every query token must appear somewhere in the normalized
+name, category, body part, target or equipment. Ranking is deterministic: exact name, compact exact
+name, name prefix, name substring, all tokens in the name, then exact category, body part, target or
 equipment, then a weaker match. Ties are sorted by name.
 
 **Success result:**
@@ -354,12 +366,14 @@ the tool returns `no_active_routine` instead of guessing.
 
 | Argument | Type | Required | Rules |
 |---|---|---|---|
-| `exerciseName` | string | yes | Exact name; variants such as “Push-up (Wide)” are not merged. |
+| `exerciseName` | string | yes | Name to resolve with `AiExerciseName`; simple case, punctuation, spacing and plural variants match, but different movements are not merged. |
 | `daysBack` | integer | no | 1–1095, default 180. |
 | `limit` | integer | no | 1–30, default 20. |
 
 Returns sessions newest first with only the matching completed sets and the same performance fields
-as `search_recent_workouts`. An empty result includes an explicit note rather than invented history.
+as `search_recent_workouts`, including `date` (`yyyy-MM-dd`) and a human-readable `dateLabel`. An
+empty result has `"found": false`, reveals whether the exercise exists in the catalog, and gives
+`closestMatches` only as clearly labelled suggestions. It never invents history.
 
 ---
 
@@ -385,6 +399,28 @@ one-time and cannot authorize a second edit.
 
 ---
 
+### `propose_new_routine`
+
+**Purpose:** prepare a complete new weekly routine for explicit approval. This tool **does not save
+anything**. It is the AI Coach chat's own routine-creation path and is independent of the original
+Routine Generator, which keeps its original prompt, catalog search and missing-exercise mechanism.
+
+| Argument | Type | Required | Rules |
+|---|---|---|---|
+| `routineName` | string | yes | 1–120 characters. |
+| `goal` | string | no | Short goal description, up to 160 characters. |
+| `summary` | string | no | One short plan description, up to 400 characters. |
+| `days` | array | yes | 1–7 entries; each entry needs `weekday` 1–7 and at least one exercise. |
+| `days[].exercises` | array | yes | 1–12 exercises per day. Each needs `name` and `sets`/`reps`; `exerciseId` is used when known. |
+| `newExercise` | object | conditional | Complete validated record for a movement the catalog genuinely lacks. Created only after approval. |
+
+Every catalog name is resolved and filled with its stable id before the proposal is returned.
+Duplicate weekdays are merged. On approval, `RoutineModificationService.applyNewRoutine` revalidates
+every catalog reference, validates each new exercise, creates only the approved new rows and saves
+the routine in one Room transaction. A stale or invalid proposal saves nothing.
+
+---
+
 ## Adding a tool
 
 Tools are intentionally centralized. To add one:
@@ -398,5 +434,13 @@ Tools are intentionally centralized. To add one:
 5. Add dispatcher, permission and engine coverage in the AI tool tests.
 
 A new write capability requires an explicit domain, an application-owned approval path and a
-security review. `propose_routine_modification` is the only write-shaped tool; it has no direct
-database access and cannot apply itself.
+security review. `propose_routine_modification` and `propose_new_routine` are the only write-shaped
+tools; neither has direct database access and neither can apply itself.
+
+## Provider compatibility
+
+Gemini's function-declaration schema is an OpenAPI subset. `GeminiProtocol.sanitizeSchema` removes
+`additionalProperties` and `default` from the provider copy while the app keeps its full validation
+schema for other providers. In compatibility mode, tool calls and tool results are serialized as
+ordinary text turns, never as native `functionCall`/`functionResponse` parts, because Gemini rejects
+a synthetic function call without the model's original `thoughtSignature`.

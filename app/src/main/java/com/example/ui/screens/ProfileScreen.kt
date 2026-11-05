@@ -153,12 +153,7 @@ fun ProfileScreen(
 ) {
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
     val weightLogs by viewModel.weightLogs.collectAsStateWithLifecycle()
-    val benchmarkPushUps by viewModel.benchmarkPushUps.collectAsStateWithLifecycle()
-    val benchmarkPullUps by viewModel.benchmarkPullUps.collectAsStateWithLifecycle()
-    val benchmarkBulgarianSplitSquat by viewModel.benchmarkBulgarianSplitSquat.collectAsStateWithLifecycle()
-    val benchmarkPushUpsAddedWeight by viewModel.benchmarkPushUpsAddedWeight.collectAsStateWithLifecycle()
-    val benchmarkPullUpsAddedWeight by viewModel.benchmarkPullUpsAddedWeight.collectAsStateWithLifecycle()
-    val benchmarkBulgarianSplitSquatAddedWeight by viewModel.benchmarkBulgarianSplitSquatAddedWeight.collectAsStateWithLifecycle()
+
     val sortedWeightLogs = remember(weightLogs) { weightLogs.sortedByDescending { it.timestamp } }
     val bodyWeightChartPoints by viewModel.bodyWeightChartPoints.collectAsStateWithLifecycle()
 
@@ -405,90 +400,6 @@ fun ProfileScreen(
                         text = "Goal Strategy: $deltaText",
                         style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
                         color = if (diff >= 0) MintGreen else GoldenAmber
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // === BODYWEIGHT BENCHMARK RECORDS (READ ONLY) ===
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "BENCHMARK RECORDS",
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                color = TextWhite
-                            )
-                            Text(
-                                text = "Best bodyweight reps ever logged, taken from your saved workouts",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextMuted,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Fixed three, never editable: the values come from the logged workouts
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        BenchmarkRecordBox(
-                            label = "Push Ups",
-                            reps = benchmarkPushUps,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("benchmark_push_ups")
-                        )
-                        BenchmarkRecordBox(
-                            label = "Pull Ups",
-                            reps = benchmarkPullUps,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("benchmark_pull_ups")
-                        )
-                        BenchmarkRecordBox(
-                            label = "Single Leg Squat",
-                            reps = benchmarkBulgarianSplitSquat,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("benchmark_single_leg_split_squat")
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // The load each record was done at, spelled out under the boxes rather than
-                    // squeezed into them. Three numbers across a row is already tight, and
-                    // "12 reps + 10 kg" would not fit at that width without shrinking the digits
-                    // the athlete is actually here to read.
-                    Text(
-                        text = "Load on each record: Push-ups " +
-                                loadedLabel(benchmarkPushUpsAddedWeight, weightUnit) +
-                                ", Pull-ups " + loadedLabel(benchmarkPullUpsAddedWeight, weightUnit) +
-                                ", Single leg squat " +
-                                loadedLabel(benchmarkBulgarianSplitSquatAddedWeight, weightUnit) +
-                                ".",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextMuted,
-                        modifier = Modifier.testTag("benchmark_loads_summary")
-                    )
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    Text(
-                        text = "Single leg squat = the best set of Dumbbell Single Leg Split Squat, " +
-                                "or any single leg split squat variant. Every set counts, loaded or " +
-                                "bodyweight, and a heavier set is the record even with fewer reps. " +
-                                "Records are read-only and never drop: deleting the workout that set " +
-                                "one keeps it here.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextMuted
                     )
                 }
             }
@@ -1212,71 +1123,7 @@ fun ProfileMetricBox(
     }
 }
 
-/**
- * How a benchmark's load reads in the Profile UI.
- *
- * "bodyweight" when the set had nothing on the bar, otherwise the kilograms in the athlete's own
- * unit. Kept next to [BenchmarkRecordBox] because that is the only place it is used.
- */
-private fun loadedLabel(addedKg: Int, unit: WeightUnit): String =
-    if (addedKg <= 0) "bodyweight" else WeightConversion.format(addedKg.toDouble(), unit)
 
-/**
- * One read-only benchmark record box.
- *
- * The user can only ever look at these: they are filled automatically from the logged workouts and
- * sent to the AI for tailored advice, never typed by hand.
- */
-@Composable
-private fun BenchmarkRecordBox(
-    label: String,
-    reps: Int,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier
-            .background(DarkSurface, RoundedCornerShape(12.dp))
-            .border(1.dp, DarkBorder, RoundedCornerShape(12.dp))
-            .padding(horizontal = 10.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-            color = TextMuted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Center
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        if (reps > 0) {
-            Text(
-                text = "$reps",
-                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                color = MintGreen,
-                maxLines = 1
-            )
-            Text(
-                text = "reps",
-                style = MaterialTheme.typography.labelSmall,
-                color = TextMuted
-            )
-        } else {
-            Text(
-                text = "--",
-                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                color = TextDim,
-                maxLines = 1
-            )
-            Text(
-                text = "not logged",
-                style = MaterialTheme.typography.labelSmall,
-                color = TextDim
-            )
-        }
-    }
-}
 
 @Composable
 fun profileFieldColors() = OutlinedTextFieldDefaults.colors(

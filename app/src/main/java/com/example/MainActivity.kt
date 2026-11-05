@@ -704,7 +704,11 @@ private fun IronPulseAppContent(
                     .liquidGlassBackdrop(
                         enabled = glassEnabled && !isKeyboardOpen,
                         bounds = dockBounds,
-                        cornerRadius = 28.dp
+                        cornerRadius = 28.dp,
+                        // A wide blur spreads a bright card behind the dock into an even glow;
+                        // the uniform scrim keeps the top from reading as a separate white bar.
+                        blurRadius = 30.dp,
+                        scrimAlpha = 0.28f
                     )
                     .background(DarkBg)
             ) {

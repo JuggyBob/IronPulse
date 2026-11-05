@@ -414,6 +414,72 @@ class AiProtocolConversionTest {
     }
 
     @Test
+    fun `Gemini tool declarations drop fields its OpenAPI subset rejects`() {
+        val body = GeminiProtocol.buildGenerateContentRequest(
+            request(AiProviderId.GOOGLE, listOf(AiMessage(AiRole.USER, "hi"))),
+            includeTools = true
+        )
+        val declarations = body.getJSONArray("tools").getJSONObject(0)
+            .getJSONArray("functionDeclarations")
+        assertTrue(declarations.length() > 0)
+        for (index in 0 until declarations.length()) {
+            val parameters = declarations.getJSONObject(index).getJSONObject("parameters").toString()
+            assertFalse(parameters.contains("additionalProperties"))
+            assertFalse(parameters.contains("\"default\""))
+            // Fields Gemini does accept must survive the sanitization.
+            assertTrue(parameters.contains("\"type\""))
+        }
+    }
+
+    @Test
+    fun `Gemini compatibility transcript uses text parts, never function parts`() {
+        val compatibilityRequest = request(
+            AiProviderId.GOOGLE,
+            listOf(
+                AiMessage(AiRole.USER, "How much have I improved in push ups?"),
+                AiMessage(
+                    AiRole.ASSISTANT,
+                    """{"tool_calls":[{"name":"search_exercise_history","arguments":{"exerciseName":"Push-up"}}]}""",
+                    toolCalls = listOf(
+                        AiToolCall(
+                            "compat_1",
+                            "search_exercise_history",
+                            """{"exerciseName":"Push-up"}"""
+                        )
+                    )
+                ),
+                AiMessage(
+                    AiRole.TOOL,
+                    toolResults = listOf(
+                        AiToolResult(
+                            "compat_1",
+                            "search_exercise_history",
+                            """{"ok":true,"sessions":[]}"""
+                        )
+                    )
+                )
+            )
+        ).copy(toolMode = AiToolMode.COMPATIBILITY)
+
+        val body = GeminiProtocol.buildGenerateContentRequest(compatibilityRequest, includeTools = false)
+        val serialized = body.getJSONArray("contents").toString()
+        assertFalse(serialized.contains("functionCall"))
+        assertFalse(serialized.contains("functionResponse"))
+        assertFalse(serialized.contains("thoughtSignature"))
+
+        val contents = body.getJSONArray("contents")
+        assertEquals("model", contents.getJSONObject(1).getString("role"))
+        assertTrue(
+            contents.getJSONObject(1).getJSONArray("parts").getJSONObject(0)
+                .getString("text").contains("search_exercise_history")
+        )
+        assertEquals("user", contents.getJSONObject(2).getString("role"))
+        val results = contents.getJSONObject(2).getJSONArray("parts").getJSONObject(0).getString("text")
+        assertTrue(results.startsWith("TOOL RESULTS"))
+        assertTrue(results.contains("compat_1"))
+    }
+
+    @Test
     fun `Gemini parses a function call and preserves the thought signature`() {
         val response = GeminiProtocol.parseGenerateContentResponse(
             JSONObject(
@@ -525,5 +591,42 @@ class AiProtocolConversionTest {
         assertEquals(1, calls?.size)
         assertEquals("get_routine", calls!![0].name)
         assertEquals(3, JSONObject(calls[0].argumentsJson).getInt("routineId"))
+    }
+
+    @Test
+    fun `OpenAI and Anthropic compatibility transcripts stay plain text`() {
+        val messages = listOf(
+            AiMessage(AiRole.USER, "How much have I improved in push ups?"),
+            AiMessage(
+                AiRole.ASSISTANT,
+                """{"tool_calls":[{"name":"search_exercise_history","arguments":{"exerciseName":"Push-up"}}]}""",
+                toolCalls = listOf(
+                    AiToolCall(
+                        "compat_1",
+                        "search_exercise_history",
+                        """{"exerciseName":"Push-up"}"""
+                    )
+                )
+            ),
+            AiMessage(
+                AiRole.TOOL,
+                toolResults = listOf(
+                    AiToolResult("compat_1", "search_exercise_history", """{"ok":true}""")
+                )
+            )
+        )
+        val openAi = JSONObject()
+            .put("messages", OpenAiProtocol.serializeMessages(messages, compatibility = true))
+            .toString()
+        assertFalse(openAi.contains("tool_calls\":["))
+        assertFalse(openAi.contains("\"role\":\"tool\""))
+        assertTrue(openAi.contains("TOOL RESULTS"))
+
+        val anthropic = JSONObject()
+            .put("messages", AnthropicProtocol.serializeMessages(messages, compatibility = true))
+            .toString()
+        assertFalse(anthropic.contains("tool_use"))
+        assertFalse(anthropic.contains("tool_result"))
+        assertTrue(anthropic.contains("TOOL RESULTS"))
     }
 }

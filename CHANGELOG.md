@@ -9,8 +9,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet. See [CONTRIBUTING.md](CONTRIBUTING.md) to propose a change.
+Bug-fix and polish round on top of 4.1.0. No version change and no public release is implied.
 
+### Fixed
+- **AI Coach tool protocol.** Gemini tool schemas are sanitized to the provider's supported subset,
+  compatibility-mode tool calls and results stay in the text protocol instead of being sent as
+  native function parts, and malformed tool envelopes receive a bounded correction turn instead of
+  ending as an unreadable answer.
+- **AI Coach data queries.** Exercise names are normalized for case, punctuation, spacing and simple
+  plural differences before catalog and history lookups; empty results now distinguish "no history"
+  from "no such exercise" and include clearly labelled closest suggestions.
+- **Post-workout summaries.** An empty stored model now resolves to the provider's visible default
+  (Gemini 3.5 Flash Lite), so a configured key no longer fails with "No AI model is selected".
+- **Scheduled streak and Home week.** The week card marks only completed scheduled workouts, quick
+  workouts never tick a scheduled day, and scheduled completions update the streak and heatmap
+  immediately. Calendar-day arithmetic is daylight-saving safe.
+- **AI Coach routine creation.** The chat can propose a complete new routine, show every day and
+  prescription in an approval card, and save it only after explicit approval. The original Routine
+  Generator keeps its separate prompt and missing-exercise creation path.
+- **Profile and AI permissions.** Benchmark Records is removed from Profile, athlete-data sharing
+  moves into AI Data Access, the info dialog explains both independent permissions, and the AI Coach
+  toggle uses the same green switch styling as the rest of Settings.
+- **Liquid Glass and bottom navigation.** Scrollable screens reserve room for the floating dock,
+  the workout action bar and routine sheets sit above it, and the dock's glass body is one uniform
+  color with no pale top strip.
+- **AI chat input.** Sentence capitalization is enabled through the platform keyboard options.
+- **Native widgets.** The weekly and profile widgets target 3x1, the weekly heatmap fills the first
+  row with larger rounded day cells and a clear Start/Open action, the profile widget uses four
+  centered metric cards, the streak widget animates only when its value changes, and the in-app
+  previews mirror the native structure.
 ---
 
 ## [4.1.0] - 2026-11-04

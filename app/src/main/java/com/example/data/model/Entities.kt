@@ -422,6 +422,9 @@ data class ChatMessageEntity(
 object ChatMessageKind {
     const val TEXT = "TEXT"
     const val ROUTINE_PROPOSAL = "ROUTINE_PROPOSAL"
+
+    /** A complete new routine proposed by the AI Coach, saved only after approval. */
+    const val NEW_ROUTINE_PROPOSAL = "NEW_ROUTINE_PROPOSAL"
 }
 
 object ChatMessageStatus {

@@ -36,8 +36,13 @@ class AiService(
     fun configurationFlow(provider: AiProviderId): Flow<AiProviderConfiguration> =
         configurationRepository.configurationFlow(provider)
 
-    suspend fun activeConfiguration(): AiProviderConfiguration =
-        configurationRepository.activeConfiguration()
+    suspend fun activeConfiguration(): AiProviderConfiguration {
+        val stored = configurationRepository.activeConfiguration()
+        // An empty model means "use the provider default", which is exactly what the Settings
+        // screen shows for Google. Resolve it here so features such as the post-workout summary do
+        // not mistake that visible default for a missing selection.
+        return stored.withDefaults(stored.provider)
+    }
 
     suspend fun configuration(provider: AiProviderId): AiProviderConfiguration =
         configurationRepository.configuration(provider)

@@ -15,7 +15,13 @@ object OpenAiProtocol {
 
     fun buildChatRequest(request: AiRequest, includeTools: Boolean): JSONObject = JSONObject().apply {
         put("model", request.model)
-        put("messages", serializeMessages(request.messages))
+        put(
+            "messages",
+            serializeMessages(
+                request.messages,
+                compatibility = request.toolMode == AiToolMode.COMPATIBILITY
+            )
+        )
         if (request.systemInstruction.isNotBlank()) {
             // The system instruction is normally already the first message. Putting it here as well
             // would duplicate it, so only add it when the caller passed messages without one.
@@ -35,7 +41,10 @@ object OpenAiProtocol {
         }
     }
 
-    fun serializeMessages(messages: List<AiMessage>): JSONArray {
+    fun serializeMessages(
+        messages: List<AiMessage>,
+        compatibility: Boolean = false
+    ): JSONArray {
         val array = JSONArray()
         for (message in messages) {
             when (message.role) {
@@ -47,44 +56,97 @@ object OpenAiProtocol {
                 )
                 AiRole.ASSISTANT -> {
                     val obj = JSONObject().put("role", "assistant")
-                    if (message.text.isBlank()) {
-                        obj.put("content", JSONObject.NULL)
-                    } else {
-                        obj.put("content", message.text)
-                    }
-                    if (message.toolCalls.isNotEmpty()) {
-                        obj.put("tool_calls", JSONArray().apply {
-                            message.toolCalls.forEach { call ->
-                                put(
-                                    JSONObject().apply {
-                                        put("id", call.id)
-                                        put("type", "function")
-                                        put(
-                                            "function",
-                                            JSONObject().apply {
-                                                put("name", call.name)
-                                                put("arguments", call.argumentsJson)
-                                            }
-                                        )
+                    if (compatibility) {
+                        val text = message.text.ifBlank {
+                            if (message.toolCalls.isEmpty()) "" else
+                                JSONObject().put(
+                                    "tool_calls",
+                                    JSONArray().apply {
+                                        message.toolCalls.forEach { call ->
+                                            put(
+                                                JSONObject().apply {
+                                                    put("name", call.name)
+                                                    put(
+                                                        "arguments",
+                                                        runCatching { JSONObject(call.argumentsJson) }
+                                                            .getOrElse { JSONObject() }
+                                                    )
+                                                }
+                                            )
+                                        }
                                     }
-                                )
-                            }
-                        })
+                                ).toString()
+                        }
+                        obj.put("content", text)
+                    } else {
+                        if (message.text.isBlank()) {
+                            obj.put("content", JSONObject.NULL)
+                        } else {
+                            obj.put("content", message.text)
+                        }
+                        if (message.toolCalls.isNotEmpty()) {
+                            obj.put("tool_calls", JSONArray().apply {
+                                message.toolCalls.forEach { call ->
+                                    put(
+                                        JSONObject().apply {
+                                            put("id", call.id)
+                                            put("type", "function")
+                                            put(
+                                                "function",
+                                                JSONObject().apply {
+                                                    put("name", call.name)
+                                                    put("arguments", call.argumentsJson)
+                                                }
+                                            )
+                                        }
+                                    )
+                                }
+                            })
+                        }
                     }
                     array.put(obj)
                 }
                 AiRole.TOOL -> {
-                    message.toolResults.forEach { result ->
-                        array.put(
-                            JSONObject().apply {
-                                put("role", "tool")
-                                put("tool_call_id", result.callId)
-                                put("content", result.contentJson)
-                            }
-                        )
-                    }
-                    if (message.toolResults.isEmpty() && message.text.isNotBlank()) {
-                        array.put(JSONObject().put("role", "tool").put("content", message.text))
+                    if (compatibility) {
+                        if (message.toolResults.isNotEmpty()) {
+                            array.put(
+                                JSONObject().put(
+                                    "role",
+                                    "user"
+                                ).put(
+                                    "content",
+                                    "TOOL RESULTS (JSON): " + JSONArray().apply {
+                                        message.toolResults.forEach { result ->
+                                            put(
+                                                JSONObject().apply {
+                                                    put("name", result.name)
+                                                    put("call_id", result.callId)
+                                                    put("is_error", result.isError)
+                                                    put(
+                                                        "result",
+                                                        runCatching { JSONObject(result.contentJson) }
+                                                            .getOrElse { result.contentJson }
+                                                    )
+                                                }
+                                            )
+                                        }
+                                    }.toString()
+                                )
+                            )
+                        }
+                    } else {
+                        message.toolResults.forEach { result ->
+                            array.put(
+                                JSONObject().apply {
+                                    put("role", "tool")
+                                    put("tool_call_id", result.callId)
+                                    put("content", result.contentJson)
+                                }
+                            )
+                        }
+                        if (message.toolResults.isEmpty() && message.text.isNotBlank()) {
+                            array.put(JSONObject().put("role", "tool").put("content", message.text))
+                        }
                     }
                 }
             }

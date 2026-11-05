@@ -2,6 +2,7 @@ package com.example.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -105,6 +106,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -139,6 +141,7 @@ import com.example.ui.components.SelectRoutineDayDialog
 import com.example.data.model.Exercise
 import com.example.data.model.RoutineDay
 import com.example.data.model.RoutineParser
+import com.example.data.ai.NewRoutineProposal
 import com.example.data.ai.RoutineModificationProposal
 import com.example.data.model.ChatMessageKind
 import com.example.data.model.ChatMessageStatus
@@ -610,7 +613,9 @@ fun AiChatView(viewModel: MainViewModel) {
                         message = msg,
                         aiDataAccessEnabled = aiDataAccessEnabled,
                         onApproveProposal = { viewModel.approveRoutineProposal(it) },
-                        onRejectProposal = { viewModel.rejectRoutineProposal(it) }
+                        onRejectProposal = { viewModel.rejectRoutineProposal(it) },
+                        onApproveNewRoutine = { viewModel.approveNewRoutineProposal(it) },
+                        onRejectNewRoutine = { viewModel.rejectNewRoutineProposal(it) }
                     )
                 }
 
@@ -677,7 +682,13 @@ fun AiChatView(viewModel: MainViewModel) {
                         ),
                         singleLine = false,
                         minLines = 1,
-                        maxLines = 5
+                        maxLines = 5,
+                        // Standard Android sentence capitalization: the keyboard starts a new
+                        // sentence with an uppercase letter after . ! ? and on a new line, while
+                        // the athlete can still type lowercase deliberately.
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Sentences
+                        )
                     )
 
                     Spacer(modifier = Modifier.width(8.dp))
@@ -830,6 +841,157 @@ private fun RoutineProposalContent(
 }
 
 /**
+ * The in-chat approval card for a complete new routine.
+ *
+ * Nothing is written until the save button is tapped. The full plan is shown first, including every
+ * day and prescription, so the athlete can inspect it before it enters Saved Routines.
+ */
+@Composable
+private fun NewRoutineProposalContent(
+    message: ChatMessage,
+    accessEnabled: Boolean,
+    onApprove: () -> Unit,
+    onReject: () -> Unit
+) {
+    val proposal = NewRoutineProposal.fromJson(message.payloadJson)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Default.AutoAwesome,
+                contentDescription = null,
+                tint = ElectricCyan,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(7.dp))
+            Text(
+                text = "Proposed new routine",
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                color = TextWhite
+            )
+        }
+        if (message.text.isNotBlank()) {
+            Text(
+                text = message.text,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextWhite
+            )
+        }
+        if (proposal == null) {
+            Text(
+                text = "This routine proposal could not be read. Nothing was saved.",
+                style = MaterialTheme.typography.bodySmall,
+                color = FireRed
+            )
+            return@Column
+        }
+
+        Text(
+            text = proposal.routineName,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+            color = ElectricCyan
+        )
+        if (proposal.goal.isNotBlank()) {
+            Text(
+                text = "Goal: ${proposal.goal}",
+                style = MaterialTheme.typography.labelMedium,
+                color = TextMuted
+            )
+        }
+        if (proposal.summary.isNotBlank()) {
+            Text(
+                text = proposal.summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextWhite
+            )
+        }
+        Text(
+            text = "${proposal.trainingDays} training day" +
+                (if (proposal.trainingDays == 1) "" else "s") +
+                " • ${proposal.exerciseCount} exercises",
+            style = MaterialTheme.typography.labelMedium,
+            color = TextMuted
+        )
+
+        proposal.days.forEach { day ->
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = Weekday.name(day.weekday) +
+                        if (day.focus.isNotBlank()) " — ${day.focus}" else "",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = ElectricCyan
+                )
+                day.exercises.forEach { exercise ->
+                    Text(
+                        text = "• ${exercise.name} — ${exercise.prescription}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextWhite
+                    )
+                }
+            }
+        }
+
+        when (message.status) {
+            ChatMessageStatus.PENDING -> {
+                if (accessEnabled) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = onApprove,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MintGreen,
+                                contentColor = OnAccent
+                            ),
+                            shape = RoundedCornerShape(9.dp),
+                            modifier = Modifier.testTag("approve_new_routine")
+                        ) {
+                            Text("Save routine", color = OnAccent, fontWeight = FontWeight.Bold)
+                        }
+                        OutlinedButton(
+                            onClick = onReject,
+                            shape = RoundedCornerShape(9.dp),
+                            modifier = Modifier.testTag("reject_new_routine")
+                        ) {
+                            Text("Reject", color = TextMuted)
+                        }
+                    }
+                } else {
+                    Text(
+                        text = "AI workout-data access is disabled. Enable it in Settings before " +
+                            "saving this plan. Nothing has been created.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = FireRed
+                    )
+                }
+            }
+            ChatMessageStatus.APPROVED -> Text(
+                "Saved to your routines.",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                color = MintGreen
+            )
+            ChatMessageStatus.REJECTED -> Text(
+                "Rejected. Nothing was saved.",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                color = TextMuted
+            )
+            ChatMessageStatus.EXPIRED -> Text(
+                "Expired or invalidated. Nothing was saved.",
+                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                color = FireRed
+            )
+            else -> Text(
+                "This proposal is not actionable.",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted
+            )
+        }
+    }
+}
+
+/**
  * One chat message.
  *
  * The text can be selected with a long press so a single line can be copied, and every answer
@@ -840,7 +1002,9 @@ fun ChatBubble(
     message: ChatMessage,
     aiDataAccessEnabled: Boolean = true,
     onApproveProposal: (ChatMessage) -> Unit = {},
-    onRejectProposal: (ChatMessage) -> Unit = {}
+    onRejectProposal: (ChatMessage) -> Unit = {},
+    onApproveNewRoutine: (ChatMessage) -> Unit = {},
+    onRejectNewRoutine: (ChatMessage) -> Unit = {}
 ) {
     val isUser = message.sender == ChatMessage.Sender.USER
     val clipboard = LocalClipboardManager.current
@@ -929,6 +1093,13 @@ fun ChatBubble(
                             onApprove = { onApproveProposal(message) },
                             onReject = { onRejectProposal(message) }
                         )
+                    } else if (message.kind == ChatMessageKind.NEW_ROUTINE_PROPOSAL) {
+                        NewRoutineProposalContent(
+                            message = message,
+                            accessEnabled = aiDataAccessEnabled,
+                            onApprove = { onApproveNewRoutine(message) },
+                            onReject = { onRejectNewRoutine(message) }
+                        )
                     } else {
                         MarkdownView(
                             markdown = message.text,
@@ -948,7 +1119,9 @@ fun ChatBubble(
                 // Icon only, with no "Copy" word: the action is universally understood, the label
                 // forced the row wider than the narrowest message it sits under, and the outcome is
                 // already carried by the tick that replaces the icon once it is tapped.
-                if (!isUser && message.kind != ChatMessageKind.ROUTINE_PROPOSAL &&
+                if (!isUser &&
+                    message.kind != ChatMessageKind.ROUTINE_PROPOSAL &&
+                    message.kind != ChatMessageKind.NEW_ROUTINE_PROPOSAL &&
                     message.text.isNotBlank()
                 ) {
                     Box(

@@ -183,9 +183,9 @@ object WorkoutStreak {
                 planned && completed -> StreakDayStatus.COMPLETED
                 planned && key == todayKey -> StreakDayStatus.PENDING
                 planned -> StreakDayStatus.MISSED
-                // A rest day stays a rest day even if the athlete did an unrelated workout on it.
+                // This map is schedule adherence, not activity: a rest day stays a rest day even
+                // when an unrelated or extra workout was recorded on it.
                 plan != null -> StreakDayStatus.REST
-                completed -> StreakDayStatus.COMPLETED
                 else -> StreakDayStatus.UNTRACKED
             }
             StreakDay(

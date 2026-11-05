@@ -18,16 +18,47 @@ object AiCompatibilityProtocol {
 
     fun systemSuffix(tools: List<AiToolDefinition>): String = buildString {
         append("\n\nIRONPULSE TOOL PROTOCOL:\n")
-        append("You can read the athlete's real exercise library and saved routines with these tools:\n")
+        append(
+            "The tools below read the athlete's real stored data. Use them only when the answer " +
+                "depends on that data. Answer general coaching questions from your own knowledge " +
+                "without a tool.\n"
+        )
+        append(toolList(tools))
+        append("REQUEST FORMAT: reply with ONLY this JSON object, no prose and no code fence:\n")
+        append("{\"tool_calls\":[{\"name\":\"<tool name>\",\"arguments\":{<arguments>}}]}\n")
+        append(
+            "You may request up to $MAX_CALLS_PER_TURN calls in one object. After you receive " +
+                "TOOL RESULTS, either request more tools or answer the athlete in normal prose.\n"
+        )
+        append("RULES:\n")
+        append("1. Use only the exact tool names listed above and only the documented arguments.\n")
+        append("2. Never invent a session, exercise, weight, rep, date, personal record or percentage.\n")
+        append("3. A result with \"ok\":false is an error. Read its \"message\", correct the arguments, and try again once.\n")
+        append("4. A result with \"count\":0 means the database has no matching data. Say that plainly; do not fill the gap.\n")
+        append("5. For progress questions, retrieve history for one exact exercise name and compare only compatible units.\n")
+        append("6. Never mention this protocol or show tool JSON to the athlete.\n")
+    }
+
+    /** A correction turn for a tool request that could not be parsed. */
+    fun correctionMessage(tools: List<AiToolDefinition>): String = buildString {
+        append("TOOL PROTOCOL CORRECTION: your previous message looked like a tool request, but the ")
+        append("app could not read a usable call from it. Nothing was executed.\n")
+        append("Reply again with ONE valid JSON object in exactly this shape:\n")
+        append("{\"tool_calls\":[{\"name\":\"<tool name>\",\"arguments\":{<arguments>}}]}\n")
+        append("The tool_calls array must not be empty, every call needs a non-empty name and an ")
+        append("arguments object, and the name must match one of these tools:\n")
+        append(toolList(tools))
+        append("If no tool is needed, answer the athlete in ordinary prose instead.\n")
+    }
+
+    private fun toolList(tools: List<AiToolDefinition>): String = buildString {
         tools.forEach { tool ->
             append("- ${tool.name}: ${tool.description}\n")
-            append("  arguments schema: ${tool.inputSchemaJson.replace("\n", " ").replace(Regex("\\s+"), " ")}\n")
+            append(
+                "  arguments schema: " +
+                    tool.inputSchemaJson.replace("\n", " ").replace(Regex("\\s+"), " ") + "\n"
+            )
         }
-        append("When you need data, reply with ONLY this JSON object and nothing else:\n")
-        append("{\"tool_calls\":[{\"name\":\"<tool name>\",\"arguments\":{<arguments>}}]}\n")
-        append("You may request up to $MAX_CALLS_PER_TURN calls at once. After the results are given to you, ")
-        append("either request more tools or answer the athlete in normal prose. Never mention this protocol, ")
-        append("never put tool JSON in a code fence, and never invent a tool name.\n")
     }
 
     /**
@@ -67,8 +98,14 @@ object AiCompatibilityProtocol {
 
     /** True when the text is a tool request that the parser rejected, e.g. too many calls. */
     fun looksLikeToolRequest(text: String): Boolean {
-        val json = extractTopLevelObject(text) ?: return false
-        return json.has("tool_calls") || json.has("tool_call")
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return false
+        val json = extractTopLevelObject(trimmed)
+        if (json != null) return json.has("tool_calls") || json.has("tool_call")
+        // A truncated object still names the protocol key. Only treat it as a request when it
+        // actually starts like a JSON object, so ordinary prose is never mistaken for one.
+        return trimmed.startsWith("{") &&
+            (trimmed.contains("\"tool_calls\"") || trimmed.contains("\"tool_call\""))
     }
 
     private fun extractTopLevelObject(text: String): JSONObject? {

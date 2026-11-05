@@ -319,7 +319,12 @@ object BackupValidator {
             }
             if (message.sender !in setOf("USER", "AI")) invalid("An AI message has an unknown sender.")
             if (message.timestamp < 0L) invalid("An AI message has an invalid timestamp.")
-            if (message.kind !in setOf(ChatMessageKind.TEXT, ChatMessageKind.ROUTINE_PROPOSAL)) {
+            if (message.kind !in setOf(
+                    ChatMessageKind.TEXT,
+                    ChatMessageKind.ROUTINE_PROPOSAL,
+                    ChatMessageKind.NEW_ROUTINE_PROPOSAL
+                )
+            ) {
                 invalid("An AI message has an unknown kind.")
             }
             if (message.status !in setOf(

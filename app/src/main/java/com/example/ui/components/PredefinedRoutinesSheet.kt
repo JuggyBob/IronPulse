@@ -152,7 +152,14 @@ fun PredefinedRoutinesSheet(
                         // of the window rather than inside a fixed 420 dp box.
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                            // Leave room for the floating navigation dock so the final card can
+                            // scroll fully above it.
+                            contentPadding = PaddingValues(
+                                start = 16.dp,
+                                end = 16.dp,
+                                top = 4.dp,
+                                bottom = 120.dp
+                            ),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             items(PredefinedRoutines.all, key = { it.id }) { template ->
@@ -269,7 +276,7 @@ private fun TemplatePreview(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp)
+            .padding(start = 16.dp, end = 16.dp, bottom = 110.dp)
             .padding(bottom = 24.dp)
     ) {
         Spacer(modifier = Modifier.height(12.dp))

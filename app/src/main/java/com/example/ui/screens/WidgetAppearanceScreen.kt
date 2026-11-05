@@ -37,6 +37,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -45,8 +46,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.model.ActivityHeatmap
 import com.example.data.model.AndroidWidgetKind
 import com.example.data.model.AndroidWidgetThemes
+import com.example.data.model.HomeDashboard
 import com.example.data.model.LocalDateKey
 import com.example.data.model.ProfileMetrics
 import com.example.data.model.WeightConversion
@@ -63,6 +66,9 @@ import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import com.example.ui.theme.ThemeMode
 import com.example.ui.viewmodel.MainViewModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
@@ -81,6 +87,20 @@ fun WidgetAppearanceScreen(
     val profile by viewModel.userProfile.collectAsStateWithLifecycle()
     val streak by viewModel.streakSummary.collectAsStateWithLifecycle()
     val activeDays by viewModel.activeRoutineDays.collectAsStateWithLifecycle()
+    val workoutHistory by viewModel.workoutHistory.collectAsStateWithLifecycle()
+    val weeklyPreviewDays = remember(workoutHistory) {
+        val today = HomeDashboard.startOfDay(System.currentTimeMillis())
+        val trained = workoutHistory
+            .map { HomeDashboard.startOfDay(it.session.startTime) }
+            .toSet()
+        (6 downTo 0).map { offset ->
+            val day = ActivityHeatmap.addDays(today, -offset)
+            val label = SimpleDateFormat("EEE", Locale.getDefault())
+                .format(Date(day))
+                .take(1)
+            label to trained.contains(day)
+        }
+    }
     val todayPlan = activeDays.firstOrNull {
         it.weekday == LocalDateKey.isoDayOfWeek(LocalDateKey.keyOf(System.currentTimeMillis())) &&
             it.exercises.isNotEmpty()
@@ -163,6 +183,7 @@ fun WidgetAppearanceScreen(
                     streakAlive = streak.isAlive,
                     weeklyWorkoutDay = weeklyWorkoutDay,
                     weeklyTitle = weeklyTitle,
+                    weeklyDays = weeklyPreviewDays,
                     onSelect = { mode -> viewModel.setAndroidWidgetTheme(kind, mode) }
                 )
             }
@@ -184,6 +205,7 @@ private fun WidgetAppearanceCard(
     streakAlive: Boolean,
     weeklyWorkoutDay: Boolean,
     weeklyTitle: String,
+    weeklyDays: List<Pair<String, Boolean>>,
     onSelect: (ThemeMode) -> Unit
 ) {
     Card(
@@ -213,7 +235,8 @@ private fun WidgetAppearanceCard(
                 bestStreak = bestStreak,
                 streakAlive = streakAlive,
                 weeklyWorkoutDay = weeklyWorkoutDay,
-                weeklyTitle = weeklyTitle
+                weeklyTitle = weeklyTitle,
+                weeklyDays = weeklyDays
             )
             Spacer(Modifier.height(12.dp))
             Text("Appearance", style = MaterialTheme.typography.labelMedium, color = TextMuted)
@@ -274,7 +297,8 @@ private fun WidgetPreview(
     bestStreak: Int,
     streakAlive: Boolean,
     weeklyWorkoutDay: Boolean,
-    weeklyTitle: String
+    weeklyTitle: String,
+    weeklyDays: List<Pair<String, Boolean>>
 ) {
     val shape = RoundedCornerShape(18.dp)
     Column(
@@ -287,100 +311,146 @@ private fun WidgetPreview(
     ) {
         when (kind) {
             AndroidWidgetKind.STREAK -> {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // Same vertical hierarchy as the native widget: title, flame, count, label, best.
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        "WORKOUT STREAK",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = palette.textSecondary
+                    )
                     Icon(
                         Icons.Default.LocalFireDepartment,
                         contentDescription = null,
                         tint = if (streakAlive) palette.danger else palette.textDisabled,
-                        modifier = Modifier.size(28.dp)
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .size(40.dp)
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            currentStreak.toString(),
-                            style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
-                            color = palette.textPrimary
-                        )
-                        Text(
-                            if (streakAlive) "current workout streak" else "streak broken",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = palette.textSecondary
-                        )
-                    }
+                    Text(
+                        currentStreak.toString(),
+                        style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                        color = palette.textPrimary
+                    )
+                    Text(
+                        if (streakAlive) "workout days" else "streak broken",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textSecondary
+                    )
+                    Text(
+                        "Best: $bestStreak workout days",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = palette.textSecondary
+                    )
                 }
-                Text(
-                    "Best: $bestStreak workout days",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = palette.textSecondary
-                )
             }
 
             AndroidWidgetKind.WEEKLY -> {
-                Text("LAST 7 DAYS", style = MaterialTheme.typography.labelSmall, color = palette.textSecondary)
-                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    repeat(7) { index ->
-                        val active = index % 3 == 0 || index == 6
+                // Same structure as the native widget: the full seven-day strip on the first line,
+                // then today's workout and its action button.
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        weeklyDays.forEach { (label, active) ->
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(28.dp)
+                                    .background(
+                                        if (active) palette.accentSecondary else palette.surfaceVariant,
+                                        RoundedCornerShape(6.dp)
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (active) palette.accentSecondary else palette.border,
+                                        RoundedCornerShape(6.dp)
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = if (active) palette.onAccent else palette.textSecondary
+                                )
+                            }
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            if (weeklyWorkoutDay) "Today: $weeklyTitle" else "Today is a rest day",
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                            color = palette.textPrimary,
+                            maxLines = 2,
+                            modifier = Modifier.weight(1f)
+                        )
                         Box(
                             modifier = Modifier
-                                .size(27.dp)
-                                .background(
-                                    if (active) palette.accentSecondary else palette.surfaceVariant,
-                                    RoundedCornerShape(7.dp)
-                                )
-                                .border(
-                                    1.dp,
-                                    if (active) palette.accentSecondary else palette.border,
-                                    RoundedCornerShape(7.dp)
-                                )
-                        )
+                                .background(palette.accentPrimary, RoundedCornerShape(8.dp))
+                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                if (weeklyWorkoutDay) "Start" else "Open",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = palette.onAccent
+                            )
+                        }
                     }
-                }
-                Text(
-                    if (weeklyWorkoutDay) "Today is $weeklyTitle" else "Today is a rest day",
-                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                    color = palette.textPrimary
-                )
-                Box(
-                    modifier = Modifier
-                        .background(palette.accentPrimary, RoundedCornerShape(8.dp))
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                ) {
-                    Text(
-                        if (weeklyWorkoutDay) "Start workout" else "Start another workout",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = palette.onAccent
-                    )
                 }
             }
 
             AndroidWidgetKind.PROFILE -> {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
+                // Same four-card row as the native widget: every card centres its own text.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(
                         modifier = Modifier
-                            .size(34.dp)
-                            .background(palette.accentPrimary.copy(alpha = 0.18f), CircleShape),
-                        contentAlignment = Alignment.Center
+                            .weight(1.25f)
+                            .background(palette.surfaceVariant, RoundedCornerShape(8.dp))
+                            .border(1.dp, palette.border, RoundedCornerShape(8.dp))
+                            .padding(5.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(1.dp)
                     ) {
-                        Text(
-                            profileName.take(1).uppercase(),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = palette.accentPrimary
-                        )
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    Column {
+                        Box(
+                            modifier = Modifier
+                                .size(26.dp)
+                                .background(palette.accentPrimary, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                profileName.take(1).uppercase(),
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                color = palette.onAccent
+                            )
+                        }
                         Text(
                             profileName,
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                            color = palette.textPrimary
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = palette.textPrimary,
+                            maxLines = 1,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
-                        Text("Workout Profile", style = MaterialTheme.typography.labelSmall, color = palette.textSecondary)
+                        Text(
+                            "Profile",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = palette.textSecondary,
+                            maxLines = 1,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
                     }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    PreviewMetric("Weight", weightText, palette)
-                    PreviewMetric("Height", heightText, palette)
-                    PreviewMetric("BMI", bmiText, palette)
+                    PreviewMetricCard("WEIGHT", weightText, palette)
+                    PreviewMetricCard("HEIGHT", heightText, palette)
+                    PreviewMetricCard("BMI", bmiText, palette)
                 }
             }
         }
@@ -388,13 +458,33 @@ private fun WidgetPreview(
 }
 
 @Composable
-private fun PreviewMetric(label: String, value: String, palette: AppPalette) {
-    Column {
-        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = palette.textSecondary)
+private fun androidx.compose.foundation.layout.RowScope.PreviewMetricCard(
+    label: String,
+    value: String,
+    palette: AppPalette
+) {
+    Column(
+        modifier = Modifier
+            .weight(0.95f)
+            .background(palette.surfaceVariant, RoundedCornerShape(8.dp))
+            .border(1.dp, palette.border, RoundedCornerShape(8.dp))
+            .padding(5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(1.dp)
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = palette.textSecondary,
+            maxLines = 1,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
         Text(
             value,
-            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-            color = palette.textPrimary
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+            color = palette.textPrimary,
+            maxLines = 1,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
         )
     }
 }

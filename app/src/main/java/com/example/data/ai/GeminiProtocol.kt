@@ -24,7 +24,13 @@ object GeminiProtocol {
         "https://generativelanguage.googleapis.com/v1beta/models?key=$apiKey&pageSize=100"
 
     fun buildGenerateContentRequest(request: AiRequest, includeTools: Boolean): JSONObject = JSONObject().apply {
-        put("contents", serializeContents(request.messages))
+        put(
+            "contents",
+            serializeContents(
+                request.messages,
+                compatibility = request.toolMode == AiToolMode.COMPATIBILITY
+            )
+        )
         if (request.systemInstruction.isNotBlank()) {
             put(
                 "systemInstruction",
@@ -47,7 +53,37 @@ object GeminiProtocol {
         }
     }
 
-    fun serializeContents(messages: List<AiMessage>): JSONArray {
+    /**
+     * Gemini's function-calling schema is an OpenAPI subset and rejects fields such as
+     * additionalProperties and default. The app still validates those for other providers, so
+     * only the provider copy is sanitized.
+     */
+    fun sanitizeSchema(node: JSONObject): JSONObject = JSONObject().apply {
+        val keys = node.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            if (key == "additionalProperties" || key == "default") continue
+            val value = node.opt(key)
+            put(
+                key,
+                when (value) {
+                    is JSONObject -> sanitizeSchema(value)
+                    is JSONArray -> JSONArray().apply {
+                        for (i in 0 until value.length()) {
+                            val item = value.opt(i)
+                            put(if (item is JSONObject) sanitizeSchema(item) else item)
+                        }
+                    }
+                    else -> value
+                }
+            )
+        }
+    }
+
+    fun serializeContents(
+        messages: List<AiMessage>,
+        compatibility: Boolean = false
+    ): JSONArray {
         data class Turn(val role: String, val parts: MutableList<JSONObject>)
 
         val turns = mutableListOf<Turn>()
@@ -65,43 +101,104 @@ object GeminiProtocol {
                 AiRole.SYSTEM -> Unit
                 AiRole.USER -> append("user", JSONObject().put("text", message.text))
                 AiRole.ASSISTANT -> {
-                    if (message.text.isNotBlank()) {
-                        append("model", JSONObject().put("text", message.text))
-                    }
-                    message.toolCalls.forEach { call ->
-                        val part = JSONObject().put(
-                            "functionCall",
-                            JSONObject().apply {
-                                put("name", call.name)
-                                put("args", runCatching { JSONObject(call.argumentsJson) }
-                                    .getOrElse { JSONObject() })
-                            }
-                        )
-                        call.providerData["thoughtSignature"]?.let { part.put("thoughtSignature", it) }
-                        append("model", part)
-                    }
-                    if (message.text.isBlank() && message.toolCalls.isEmpty()) {
-                        append("model", JSONObject().put("text", ""))
-                    }
-                }
-                AiRole.TOOL -> {
-                    message.toolResults.forEach { result ->
-                        append(
-                            "user",
-                            JSONObject().put(
-                                "functionResponse",
+                    if (compatibility) {
+                        // The text protocol has no functionCall parts. Keep the model's own JSON
+                        // envelope in the transcript so it can see what it asked for, without
+                        // creating a native call Gemini would demand a thought signature for.
+                        val text = message.text.ifBlank {
+                            if (message.toolCalls.isEmpty()) "" else
+                                JSONObject().put(
+                                    "tool_calls",
+                                    JSONArray().apply {
+                                        message.toolCalls.forEach { call ->
+                                            put(
+                                                JSONObject().apply {
+                                                    put("name", call.name)
+                                                    put(
+                                                        "arguments",
+                                                        runCatching { JSONObject(call.argumentsJson) }
+                                                            .getOrElse { JSONObject() }
+                                                    )
+                                                }
+                                            )
+                                        }
+                                    }
+                                ).toString()
+                        }
+                        if (text.isNotBlank()) append("model", JSONObject().put("text", text))
+                    } else {
+                        if (message.text.isNotBlank()) {
+                            append("model", JSONObject().put("text", message.text))
+                        }
+                        message.toolCalls.forEach { call ->
+                            val part = JSONObject().put(
+                                "functionCall",
                                 JSONObject().apply {
-                                    put("name", result.name)
+                                    put("name", call.name)
                                     put(
-                                        "response",
-                                        runCatching { JSONObject(result.contentJson) }
-                                            .getOrElse {
-                                                JSONObject().put("result", result.contentJson)
-                                            }
+                                        "args",
+                                        runCatching { JSONObject(call.argumentsJson) }
+                                            .getOrElse { JSONObject() }
                                     )
                                 }
                             )
-                        )
+                            call.providerData["thoughtSignature"]?.let {
+                                part.put("thoughtSignature", it)
+                            }
+                            append("model", part)
+                        }
+                        if (message.text.isBlank() && message.toolCalls.isEmpty()) {
+                            append("model", JSONObject().put("text", ""))
+                        }
+                    }
+                }
+                AiRole.TOOL -> {
+                    if (compatibility) {
+                        if (message.toolResults.isNotEmpty()) {
+                            append(
+                                "user",
+                                JSONObject().put(
+                                    "text",
+                                    "TOOL RESULTS (JSON): " + JSONArray().apply {
+                                        message.toolResults.forEach { result ->
+                                            put(
+                                                JSONObject().apply {
+                                                    put("name", result.name)
+                                                    put("call_id", result.callId)
+                                                    put("is_error", result.isError)
+                                                    put(
+                                                        "result",
+                                                        runCatching { JSONObject(result.contentJson) }
+                                                            .getOrElse { result.contentJson }
+                                                    )
+                                                }
+                                            )
+                                        }
+                                    }.toString() +
+                                        "\nUse these results to answer the athlete. Do not " +
+                                        "mention the tool protocol."
+                                )
+                            )
+                        }
+                    } else {
+                        message.toolResults.forEach { result ->
+                            append(
+                                "user",
+                                JSONObject().put(
+                                    "functionResponse",
+                                    JSONObject().apply {
+                                        put("name", result.name)
+                                        put(
+                                            "response",
+                                            runCatching { JSONObject(result.contentJson) }
+                                                .getOrElse {
+                                                    JSONObject().put("result", result.contentJson)
+                                                }
+                                        )
+                                    }
+                                )
+                            )
+                        }
                     }
                 }
             }
@@ -127,8 +224,10 @@ object GeminiProtocol {
                     put("description", tool.description)
                     put(
                         "parameters",
-                        runCatching { JSONObject(tool.inputSchemaJson) }
-                            .getOrElse { JSONObject().put("type", "object") }
+                        sanitizeSchema(
+                            runCatching { JSONObject(tool.inputSchemaJson) }
+                                .getOrElse { JSONObject().put("type", "object") }
+                        )
                     )
                 }
             )

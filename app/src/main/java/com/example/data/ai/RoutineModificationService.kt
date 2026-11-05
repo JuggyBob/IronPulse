@@ -22,6 +22,15 @@ data class RoutineChangeResult(
     val generatedExerciseId: Long?
 )
 
+/** The persisted outcome of an approved new-routine proposal. */
+data class RoutineCreationResult(
+    val routineId: Long,
+    val routineName: String,
+    val trainingDays: Int,
+    val exerciseCount: Int,
+    val createdExercises: List<String>
+)
+
 /**
  * Applies exactly one user-approved routine proposal.
  *
@@ -30,6 +39,114 @@ data class RoutineChangeResult(
  * share one Room transaction, so a generated exercise can never exist without its approved use.
  */
 class RoutineModificationService(private val db: AppDatabase) {
+
+    /**
+     * Applies exactly one approved new-routine proposal.
+     *
+     * The model can never call this: only the athlete's approval button reaches it. Every catalog
+     * reference is re-read and every generated exercise is revalidated inside the same transaction,
+     * so a stale proposal cannot save a broken plan or leave an orphan exercise.
+     */
+    suspend fun applyNewRoutine(
+        proposal: NewRoutineProposal,
+        accessEnabled: Boolean
+    ): Result<RoutineCreationResult> {
+        if (!accessEnabled) {
+            return Result.failure(IllegalStateException("AI workout-data access is disabled."))
+        }
+        return runCatching {
+            db.withTransaction {
+                val catalog = db.exerciseDao().getAllExercisesList().toMutableList()
+                val items = mutableListOf<RoutineExerciseItem>()
+                val createdNames = mutableListOf<String>()
+
+                for (day in proposal.days.sortedBy { it.weekday }) {
+                    for (proposed in day.exercises) {
+                        val exercise = when {
+                            proposed.exerciseId > 0L -> {
+                                db.exerciseDao().getExerciseById(proposed.exerciseId)
+                                    ?: error(
+                                        "The exercise \"${proposed.name}\" no longer exists in the catalog."
+                                    )
+                            }
+                            proposed.generatedExercise != null -> {
+                                val generated = proposed.generatedExercise
+                                if (generated.instructions.isBlank()) {
+                                    error("The new exercise \"${generated.name}\" has no instructions.")
+                                }
+                                val key = AiExerciseName.canonical(generated.name)
+                                val existing = catalog.firstOrNull {
+                                    AiExerciseName.canonical(it.name) == key
+                                }
+                                if (existing != null) {
+                                    existing
+                                } else {
+                                    val id = db.exerciseDao().insert(generated.toExercise())
+                                    if (id <= 0L) {
+                                        error("The AI-generated exercise \"${generated.name}\" could not be created.")
+                                    }
+                                    val stored = db.exerciseDao().getExerciseById(id)
+                                        ?: error("The created exercise could not be read back.")
+                                    catalog.add(stored)
+                                    createdNames.add(stored.name)
+                                    stored
+                                }
+                            }
+                            else -> {
+                                catalog.firstOrNull {
+                                    AiExerciseName.matches(it.name, proposed.name)
+                                } ?: error(
+                                    "The exercise \"${proposed.name}\" no longer exists in the catalog."
+                                )
+                            }
+                        }
+                        items.add(
+                            RoutineExerciseItem(
+                                exerciseId = exercise.id,
+                                exerciseName = exercise.name,
+                                exerciseType = exercise.exerciseType,
+                                category = exercise.category,
+                                equipment = exercise.equipment,
+                                targetSets = proposed.targetSets,
+                                targetReps = proposed.targetReps,
+                                targetWeight = proposed.targetWeightKg,
+                                targetAddedWeightKg = proposed.targetAddedWeightKg,
+                                targetHoldSeconds = proposed.targetHoldSeconds,
+                                restSeconds = proposed.restSeconds,
+                                prescription = proposed.prescription,
+                                weekday = day.weekday,
+                                dayTitle = day.focus,
+                                dayNote = day.note
+                            )
+                        )
+                    }
+                }
+                if (items.isEmpty()) error("The proposed routine has no exercises.")
+
+                val trainingDays = items.map { it.weekday }.distinct().size
+                val saved = SavedRoutine(
+                    name = proposal.routineName.take(120),
+                    description = "AI Coach routine • ${items.size} exercises • " +
+                        "$trainingDays training day${if (trainingDays == 1) "" else "s"}",
+                    daysPerWeek = trainingDays,
+                    goal = proposal.goal.take(160),
+                    exercisesJson = RoutineParser.serializeExercises(items),
+                    scheduleVersion = 1
+                )
+                val routineId = db.savedRoutineDao().insertRoutine(saved)
+                if (routineId <= 0L) error("The routine could not be saved.")
+                val stored = db.savedRoutineDao().getRoutineById(routineId)
+                    ?: error("The saved routine could not be read back.")
+                RoutineCreationResult(
+                    routineId = stored.id,
+                    routineName = stored.name,
+                    trainingDays = trainingDays,
+                    exerciseCount = items.size,
+                    createdExercises = createdNames
+                )
+            }
+        }
+    }
 
     suspend fun apply(
         proposal: RoutineModificationProposal,

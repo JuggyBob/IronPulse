@@ -5,6 +5,7 @@ import com.example.data.ai.AiConversationEngine
 import com.example.data.ai.AiDataAccess
 import com.example.data.ai.AiErrorKind
 import com.example.data.ai.AiException
+import com.example.data.ai.AiExerciseName
 import com.example.data.ai.AiExerciseSearch
 import com.example.data.ai.AiMessage
 import com.example.data.ai.AiProvider
@@ -161,7 +162,7 @@ class AiToolExecutionTest {
             exercises.firstOrNull { it.id == id }
 
         override suspend fun getExerciseByName(name: String): Exercise? =
-            exercises.firstOrNull { it.name.equals(name, ignoreCase = true) }
+            exercises.firstOrNull { AiExerciseName.matches(it.name, name) }
 
         override suspend fun listExercises(
             category: String?,
@@ -284,6 +285,30 @@ class AiToolExecutionTest {
         )
         assertEquals(0, body(result).getInt("count"))
         assertTrue(body(result).getString("note").isNotBlank())
+    }
+
+    @Test
+    fun `exercise name normalization accepts spelling variants without merging variants`() {
+        listOf("Push-up", "Push Ups", "pushups", "  PUSH   UP  ", "Press-ups").forEach { variant ->
+            assertTrue("$variant should match Push Ups", AiExerciseName.matches("Push Ups", variant))
+        }
+        assertFalse(AiExerciseName.matches("Push Up Plus", "Push-up"))
+        assertFalse(AiExerciseName.matches("Pike Push Up", "Push-up"))
+        assertFalse(AiExerciseName.matches("Bench Press", "Push-up"))
+        assertTrue(AiExerciseName.matches("Pull-Up", "pull ups"))
+        assertTrue(AiExerciseName.matches("3/4 Sit-Up", "3/4 sit ups"))
+        assertFalse(AiExerciseName.matches("3/4 Sit-Up", "sit ups"))
+    }
+
+    @Test
+    fun `search accepts plural and hyphenated exercise naming`() = runBlocking {
+        val result = dispatcher().dispatch(
+            call(AiToolCatalog.SEARCH_EXERCISES, """{"query":"pull ups","limit":10}""")
+        )
+        assertFalse(result.isError)
+        val json = body(result)
+        assertEquals(1, json.getInt("count"))
+        assertEquals("Pull-up", json.getJSONArray("exercises").getJSONObject(0).getString("name"))
     }
 
     @Test
@@ -565,6 +590,141 @@ class AiToolExecutionTest {
         assertEquals(1, result.toolCallsExecuted)
         assertTrue(provider.requests[0].tools.isEmpty())
         assertTrue(provider.requests[0].systemInstruction.contains("IRONPULSE TOOL PROTOCOL"))
+    }
+
+    @Test
+    fun `a malformed text tool request gets a correction turn instead of becoming the answer`() = runBlocking {
+        val provider = ScriptedProvider { _, callNumber ->
+            when (callNumber) {
+                1 -> Result.success(AiResponse(text = """{"tool_calls":[]}"""))
+                2 -> Result.success(
+                    AiResponse(
+                        text = """{"tool_calls":[{"name":"list_routines","arguments":{"limit":5}}]}"""
+                    )
+                )
+                else -> Result.success(AiResponse(text = "You have two routines."))
+            }
+        }
+
+        val result = engine(provider).run(
+            configuration = configuration(AiToolMode.COMPATIBILITY),
+            systemInstruction = "coach",
+            messages = listOf(AiMessage(AiRole.USER, "List my routines"))
+        )
+
+        assertEquals("You have two routines.", result.text)
+        assertEquals(3, provider.callCount)
+        assertEquals(1, result.toolCallsExecuted)
+        val correction = provider.requests[1].messages[2]
+        assertEquals(AiRole.USER, correction.role)
+        assertTrue(correction.text.contains("TOOL PROTOCOL CORRECTION"))
+        assertTrue(correction.text.contains("tool_calls"))
+        assertTrue(correction.text.contains("list_routines"))
+    }
+
+    @Test
+    fun `repeated malformed tool requests stop with a clear parse error`() = runBlocking {
+        val provider = ScriptedProvider { _, _ ->
+            Result.success(AiResponse(text = """{"tool_calls":[]}"""))
+        }
+
+        val error = assertThrows(AiException::class.java) {
+            runBlocking {
+                engine(provider).run(
+                    configuration = configuration(AiToolMode.COMPATIBILITY),
+                    systemInstruction = "coach",
+                    messages = listOf(AiMessage(AiRole.USER, "List my routines"))
+                )
+            }
+        }
+        assertEquals(AiErrorKind.PARSE, error.kind)
+        assertTrue(error.message.orEmpty().contains("could not read"))
+        assertEquals(3, provider.callCount)
+    }
+
+    @Test
+    fun `new routine proposals resolve catalog names and carry a structured plan`() = runBlocking {
+        val result = dispatcher().dispatch(
+            call(
+                AiToolCatalog.PROPOSE_NEW_ROUTINE,
+                """
+                {
+                  "routineName": "Two Day Plan",
+                  "goal": "Strength",
+                  "days": [
+                    {
+                      "weekday": 1,
+                      "focus": "Push",
+                      "exercises": [
+                        {"name": "pull ups", "sets": 4, "reps": 6},
+                        {"name": "Barbell Bench Press", "exerciseId": 1, "sets": 3, "reps": 8}
+                      ]
+                    },
+                    {
+                      "weekday": 4,
+                      "focus": "Legs",
+                      "exercises": [
+                        {"name": "Pistol Squat", "sets": 3, "reps": 5,
+                         "newExercise": {
+                           "name": "Pistol Squat", "category": "Legs", "bodyPart": "upper legs",
+                           "target": "Quadriceps", "equipment": "Bodyweight",
+                           "exerciseType": "PURE_BODYWEIGHT",
+                           "instructions": "Stand on one leg. | Lower under control. | Drive back up."
+                         }}
+                      ]
+                    }
+                  ]
+                }
+                """.trimIndent()
+            )
+        )
+
+        assertFalse(result.isError)
+        val proposal = body(result).getJSONObject("proposal")
+        assertEquals("new_routine", proposal.getString("kind"))
+        assertEquals("Two Day Plan", proposal.getString("routineName"))
+        val days = proposal.getJSONArray("days")
+        assertEquals(2, days.length())
+        val firstExercise = days.getJSONObject(0).getJSONArray("exercises").getJSONObject(0)
+        assertEquals("Pull-up", firstExercise.getString("name"))
+        assertEquals(3L, firstExercise.getLong("exerciseId"))
+        assertTrue(
+            days.getJSONObject(1).getJSONArray("exercises").getJSONObject(0)
+                .getJSONObject("generatedExercise")
+                .getString("instructions")
+                .isNotBlank()
+        )
+    }
+
+    @Test
+    fun `invalid native arguments return the correct schema and allow a retry`() = runBlocking {
+        val provider = ScriptedProvider { _, callNumber ->
+            when (callNumber) {
+                1 -> Result.success(nativeCall(AiToolCatalog.SEARCH_EXERCISES, "{}"))
+                2 -> Result.success(
+                    nativeCall(AiToolCatalog.SEARCH_EXERCISES, """{"query":"bench"}""", "call_2")
+                )
+                else -> Result.success(AiResponse(text = "Two bench presses."))
+            }
+        }
+
+        val result = engine(provider).run(
+            configuration = configuration(AiToolMode.NATIVE),
+            systemInstruction = "coach",
+            messages = listOf(AiMessage(AiRole.USER, "What bench press do I have?"))
+        )
+
+        assertEquals("Two bench presses.", result.text)
+        assertEquals(2, result.toolCallsExecuted)
+        val errorPayload = provider.requests[1].messages
+            .filter { it.role == AiRole.TOOL }
+            .first()
+            .toolResults
+            .single()
+            .contentJson
+        assertTrue(errorPayload.contains("invalid_arguments"))
+        assertTrue(errorPayload.contains("correctArgumentsSchema"))
+        assertTrue(errorPayload.contains("howToCorrect"))
     }
 
     @Test

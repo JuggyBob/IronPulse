@@ -26,7 +26,10 @@ data class WidgetPalette(
     val dayOff: Int,
     val flame: Int,
     @DrawableRes val backgroundRes: Int,
-    @DrawableRes val buttonRes: Int
+    @DrawableRes val buttonRes: Int,
+    @DrawableRes val cardRes: Int,
+    @DrawableRes val dayOnRes: Int,
+    @DrawableRes val dayOffRes: Int
 )
 
 /** Maps the four app palettes onto the RemoteViews colour surface. */
@@ -58,6 +61,24 @@ object WidgetTheme {
                 ThemeMode.DARK -> R.drawable.widget_button_dark
                 ThemeMode.AMOLED -> R.drawable.widget_button_amoled
                 ThemeMode.IRONPULSE -> R.drawable.widget_button_ironpulse
+            },
+            cardRes = when (mode) {
+                ThemeMode.LIGHT -> R.drawable.widget_card_light
+                ThemeMode.DARK -> R.drawable.widget_card_dark
+                ThemeMode.AMOLED -> R.drawable.widget_card_amoled
+                ThemeMode.IRONPULSE -> R.drawable.widget_card_ironpulse
+            },
+            dayOnRes = when (mode) {
+                ThemeMode.LIGHT -> R.drawable.widget_day_on_light
+                ThemeMode.DARK -> R.drawable.widget_day_on_dark
+                ThemeMode.AMOLED -> R.drawable.widget_day_on_amoled
+                ThemeMode.IRONPULSE -> R.drawable.widget_day_on_ironpulse
+            },
+            dayOffRes = when (mode) {
+                ThemeMode.LIGHT -> R.drawable.widget_day_off_light
+                ThemeMode.DARK -> R.drawable.widget_day_off_dark
+                ThemeMode.AMOLED -> R.drawable.widget_day_off_amoled
+                ThemeMode.IRONPULSE -> R.drawable.widget_day_off_ironpulse
             }
         )
     }

@@ -668,7 +668,7 @@ interface ChatDao {
     /** Permission revocation invalidates every still-pending proposal. */
     @Query(
         "UPDATE chat_messages SET status = 'EXPIRED' " +
-            "WHERE kind = 'ROUTINE_PROPOSAL' AND status = 'PENDING'"
+            "WHERE kind IN ('ROUTINE_PROPOSAL', 'NEW_ROUTINE_PROPOSAL') AND status = 'PENDING'"
     )
     suspend fun expirePendingRoutineProposals()
 

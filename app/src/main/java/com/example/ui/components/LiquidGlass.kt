@@ -191,7 +191,12 @@ fun Modifier.liquidGlassBackdrop(
     enabled: Boolean,
     bounds: Rect?,
     cornerRadius: Dp,
-    blurRadius: Dp = 14.dp
+    blurRadius: Dp = 14.dp,
+    /**
+     * A uniform shade over the blurred copy. It keeps the blur and the page colours visible but
+     * flattens a bright card behind the dock into a soft glow instead of a separate pale band.
+     */
+    scrimAlpha: Float = 0.22f
 ): Modifier {
     if (!enabled || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return this
     return drawWithCache {
@@ -228,6 +233,9 @@ fun Modifier.liquidGlassBackdrop(
                     // The layer is in the content's own coordinates. Clip it to the dock and draw
                     // it in place; the dock then shows the pixels that were actually underneath it.
                     drawLayer(layer)
+                    if (scrimAlpha > 0f) {
+                        drawRect(color = Color.Black.copy(alpha = scrimAlpha.coerceIn(0f, 0.8f)))
+                    }
                 }
             }
         }
@@ -247,59 +255,76 @@ private fun DrawScope.drawLiquidGlassPanel(
     // the page entirely, which is why the previous implementation read as a coloured slab rather
     // than glass. Content-heavy panels are the exception: long labels need the sheet to be
     // substantially opaque, so readability wins over seeing the page behind it.
+    // For a real backdrop-blurred surface (the floating dock), the page underneath must not read
+    // as a separate pale band at the top. The body is one palette tone at an almost uniform alpha,
+    // so the visible result is a single glass colour while the blurred backdrop still contributes
+    // a faint texture. Other panels keep their gentle top-to-bottom depth.
     val bodyTop = when {
         contentHeavy -> 0.94f
-        backdropBlurred -> 0.42f
+        backdropBlurred -> 0.74f
         else -> 0.64f
     }
     val bodyMid = when {
         contentHeavy -> 0.96f
-        backdropBlurred -> 0.50f
+        backdropBlurred -> 0.74f
         else -> 0.72f
     }
     val bodyBottom = when {
         contentHeavy -> 0.98f
-        backdropBlurred -> 0.58f
+        backdropBlurred -> 0.74f
         else -> 0.80f
     }
+    val topBodyColor = if (backdropBlurred) glass.panelMid else glass.panelTop
+    val bottomBodyColor = if (backdropBlurred) glass.panelMid else glass.panelBottom
     drawRect(
         brush = Brush.verticalGradient(
             colors = listOf(
-                glass.panelTop.copy(alpha = bodyTop),
+                topBodyColor.copy(alpha = bodyTop),
                 glass.panelMid.copy(alpha = bodyMid),
-                glass.panelBottom.copy(alpha = bodyBottom)
+                bottomBodyColor.copy(alpha = bodyBottom)
             )
         )
     )
 
-    // A restrained tint wash, stronger at the top left where the light enters.
-    drawRect(
-        brush = Brush.linearGradient(
-            colors = listOf(
-                tint.copy(alpha = if (contentHeavy) 0.04f else if (backdropBlurred) 0.07f else 0.10f),
-                Color.Transparent,
-                tint.copy(alpha = if (contentHeavy) 0.02f else if (backdropBlurred) 0.03f else 0.05f)
-            ),
-            start = Offset.Zero,
-            end = Offset(size.width, size.height)
+    // A restrained tint wash. On the backdrop-blurred dock it is one flat tint rather than a
+    // directional wash, because a directional highlight was the second source of the pale top
+    // band the athlete could see.
+    if (backdropBlurred) {
+        // The dock is deliberately one flat tint. The athlete asked for a single unified colour
+        // instead of a visible blurred band at the top, and a flat tint is the only way to
+        // guarantee that at every scroll position.
+    } else {
+        drawRect(
+            brush = Brush.linearGradient(
+                colors = listOf(
+                    tint.copy(alpha = if (contentHeavy) 0.04f else 0.10f),
+                    Color.Transparent,
+                    tint.copy(alpha = if (contentHeavy) 0.02f else 0.05f)
+                ),
+                start = Offset.Zero,
+                end = Offset(size.width, size.height)
+            )
         )
-    )
+    }
 
     // The broad specular sheen across the top half. It is drawn as an oval so the highlight fades
-    // out before it reaches the lower edge instead of looking like a flat white stripe.
-    drawOval(
-        brush = Brush.radialGradient(
-            colors = listOf(
-                glass.highlight.copy(alpha = if (contentHeavy) 0.09f else if (backdropBlurred) 0.13f else 0.17f),
-                glass.highlight.copy(alpha = if (contentHeavy) 0.03f else if (backdropBlurred) 0.04f else 0.05f),
-                Color.Transparent
+    // out before it reaches the lower edge instead of looking like a flat white stripe. The real
+    // backdrop dock deliberately has no top sheen: it must read as one uniform glass colour.
+    if (!backdropBlurred) {
+        drawOval(
+            brush = Brush.radialGradient(
+                colors = listOf(
+                    glass.highlight.copy(alpha = if (contentHeavy) 0.09f else 0.17f),
+                    glass.highlight.copy(alpha = if (contentHeavy) 0.03f else 0.05f),
+                    Color.Transparent
+                ),
+                center = Offset(size.width * 0.5f, -size.height * 0.15f),
+                radius = size.width * 0.72f
             ),
-            center = Offset(size.width * 0.5f, -size.height * 0.15f),
-            radius = size.width * 0.72f
-        ),
-        topLeft = Offset(-size.width * 0.1f, -size.height * 0.55f),
-        size = Size(size.width * 1.2f, size.height * 0.95f)
-    )
+            topLeft = Offset(-size.width * 0.1f, -size.height * 0.55f),
+            size = Size(size.width * 1.2f, size.height * 0.95f)
+        )
+    }
 
     // A soft inner shadow along the bottom edge gives the panel thickness without a hard line.
     drawRect(

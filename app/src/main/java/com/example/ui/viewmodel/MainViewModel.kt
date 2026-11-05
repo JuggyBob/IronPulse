@@ -14,6 +14,7 @@ import com.example.data.ai.AiConfigurationRepository
 import com.example.data.ai.AiExerciseFactory
 import com.example.data.ai.AiErrorKind
 import com.example.data.ai.AiException
+import com.example.data.ai.AiExerciseName
 import com.example.data.ai.AiMessage
 import com.example.data.ai.AiModelDescriptor
 import com.example.data.ai.AiProviderConfiguration
@@ -21,6 +22,7 @@ import com.example.data.ai.AiProviderId
 import com.example.data.ai.AiRole
 import com.example.data.ai.AiService
 import com.example.data.ai.AiToolMode
+import com.example.data.ai.NewRoutineProposal
 import com.example.data.ai.RepositoryAiDataAccess
 import com.example.data.ai.RoutineModificationProposal
 import com.example.data.api.ReleaseApi
@@ -4142,28 +4144,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             result.fold(
                 onSuccess = { conversationResult ->
-                    if (conversationResult.routineProposal != null) {
-                        val proposal = conversationResult.routineProposal
-                        repository.insertChatMessage(
-                            ChatMessageEntity(
-                                sessionId = session.id,
-                                sender = "AI",
-                                text = conversationResult.text,
-                                timestamp = System.currentTimeMillis(),
-                                kind = ChatMessageKind.ROUTINE_PROPOSAL,
-                                payloadJson = proposal.toJson().toString(),
-                                status = ChatMessageStatus.PENDING
+                    when {
+                        conversationResult.routineProposal != null -> {
+                            val proposal = conversationResult.routineProposal
+                            repository.insertChatMessage(
+                                ChatMessageEntity(
+                                    sessionId = session.id,
+                                    sender = "AI",
+                                    text = conversationResult.text,
+                                    timestamp = System.currentTimeMillis(),
+                                    kind = ChatMessageKind.ROUTINE_PROPOSAL,
+                                    payloadJson = proposal.toJson().toString(),
+                                    status = ChatMessageStatus.PENDING
+                                )
                             )
-                        )
-                    } else {
-                        repository.insertChatMessage(
-                            ChatMessageEntity(
-                                sessionId = session.id,
-                                sender = "AI",
-                                text = conversationResult.text,
-                                timestamp = System.currentTimeMillis()
+                        }
+                        conversationResult.newRoutineProposal != null -> {
+                            val proposal = conversationResult.newRoutineProposal
+                            repository.insertChatMessage(
+                                ChatMessageEntity(
+                                    sessionId = session.id,
+                                    sender = "AI",
+                                    text = conversationResult.text,
+                                    timestamp = System.currentTimeMillis(),
+                                    kind = ChatMessageKind.NEW_ROUTINE_PROPOSAL,
+                                    payloadJson = proposal.toJson().toString(),
+                                    status = ChatMessageStatus.PENDING
+                                )
                             )
-                        )
+                        }
+                        else -> {
+                            repository.insertChatMessage(
+                                ChatMessageEntity(
+                                    sessionId = session.id,
+                                    sender = "AI",
+                                    text = conversationResult.text,
+                                    timestamp = System.currentTimeMillis()
+                                )
+                            )
+                        }
                     }
                 },
                 onFailure = { error ->
@@ -4279,6 +4298,102 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * Saves one complete AI Coach routine proposal after explicit approval.
+     *
+     * The proposal itself is inert. This is the only path from a chat proposal to the routine
+     * table, and it revalidates every reference in one transaction before writing anything.
+     */
+    fun approveNewRoutineProposal(message: ChatMessage) {
+        if (message.status != ChatMessageStatus.PENDING) return
+        val proposal = NewRoutineProposal.fromJson(message.payloadJson)
+        viewModelScope.launch(Dispatchers.IO) {
+            val current = db.chatDao().getMessagesListForSession(message.sessionId)
+                .firstOrNull { it.id == message.id }
+            if (current == null || current.status != ChatMessageStatus.PENDING) return@launch
+            if (proposal == null) {
+                db.chatDao().updateMessageStatus(message.id, ChatMessageStatus.EXPIRED)
+                return@launch
+            }
+            val enabled = userPreferencesRepo.aiWorkoutDataAccessFlow.first()
+            val result = routineModificationService.applyNewRoutine(proposal, accessEnabled = enabled)
+            result.fold(
+                onSuccess = { created ->
+                    db.chatDao().updateMessageStatus(message.id, ChatMessageStatus.APPROVED)
+                    refreshAndroidWidgets()
+                    val generated = created.createdExercises
+                        .takeIf { it.isNotEmpty() }
+                        ?.joinToString()
+                        ?.let { " New exercises created: $it." }
+                        .orEmpty()
+                    val fallback = "Saved **${created.routineName}** with ${created.trainingDays} " +
+                        "training day${if (created.trainingDays == 1) "" else "s"} and " +
+                        "${created.exerciseCount} exercises.$generated"
+                    val explanation = continueAfterProposalDecision(
+                        sessionId = message.sessionId,
+                        instruction = "The athlete approved the new routine proposal and IronPulse " +
+                            "saved it. Confirm that it was saved, state its name, training days and " +
+                            "exercise count, and explain briefly how to start it from Saved Routines. " +
+                            "Do not claim that it is already the active schedule and do not propose " +
+                            "another change.",
+                        fallback = fallback
+                    )
+                    repository.insertChatMessage(
+                        ChatMessageEntity(
+                            sessionId = message.sessionId,
+                            sender = "AI",
+                            text = explanation,
+                            timestamp = System.currentTimeMillis()
+                        )
+                    )
+                },
+                onFailure = { error ->
+                    db.chatDao().updateMessageStatus(message.id, ChatMessageStatus.EXPIRED)
+                    repository.insertChatMessage(
+                        ChatMessageEntity(
+                            sessionId = message.sessionId,
+                            sender = "AI",
+                            text = "That routine could not be saved because the catalog changed or " +
+                                "the proposal is no longer valid. Nothing was created or changed. " +
+                                error.message.orEmpty(),
+                            timestamp = System.currentTimeMillis()
+                        )
+                    )
+                }
+            )
+        }
+    }
+
+    /** Rejects a new-routine proposal without writing an exercise or a routine. */
+    fun rejectNewRoutineProposal(message: ChatMessage) {
+        if (message.status != ChatMessageStatus.PENDING) return
+        val proposal = NewRoutineProposal.fromJson(message.payloadJson)
+        viewModelScope.launch(Dispatchers.IO) {
+            db.chatDao().updateMessageStatus(message.id, ChatMessageStatus.REJECTED)
+            val fallback = if (proposal != null) {
+                "No routine was saved. You can ask me to adjust **${proposal.routineName}** or " +
+                    "create a different plan."
+            } else {
+                "No routine was saved. Ask me for a different plan when you are ready."
+            }
+            val explanation = continueAfterProposalDecision(
+                sessionId = message.sessionId,
+                instruction = "The athlete rejected the new routine proposal. Nothing was saved " +
+                    "and no exercise was created. Acknowledge that briefly, offer to adjust the " +
+                    "plan, and do not claim that any change happened.",
+                fallback = fallback
+            )
+            repository.insertChatMessage(
+                ChatMessageEntity(
+                    sessionId = message.sessionId,
+                    sender = "AI",
+                    text = explanation,
+                    timestamp = System.currentTimeMillis()
+                )
+            )
+        }
+    }
+
+    /**
      * Lets the coach respond to an approval or rejection as a normal chat turn.
      *
      * The explanation call deliberately has tools disabled: the decision is already final, and a
@@ -4330,17 +4445,80 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         append("\n\n")
         if (dataAccessEnabled) {
             append(
-                "You are also IronPulse's evidence-based workout data assistant. For any question " +
-                    "about the athlete's workouts, routines, exercise history, progress or schedule, " +
-                    "you MUST call the provided retrieval tools before answering. Never invent a " +
-                    "session, measurement, date, personal record or percentage. Compare only the same " +
-                    "exercise name and compatible units. If there is not enough data, say so plainly. " +
-                    "Keep dates and units explicit. Do not return raw database dumps.\n" +
-                    "You may propose at most one routine change with the proposal tool. A proposal " +
-                    "does not modify anything; the app shows it for explicit approval. Never claim a " +
-                    "change happened before approval. Do not diagnose injuries or guarantee that an " +
-                    "exercise is medically safe; advise professional guidance when appropriate.\n\n"
+                """
+                You are also IronPulse's evidence-based workout data assistant. The tools below read
+                the athlete's real stored data. Use them only when the answer depends on that data;
+                answer general training questions from your own knowledge without a tool.
+
+                TOOLS
+                - search_exercises(query, limit): find real catalog names by name, muscle group,
+                  body part, target or equipment. Use it before naming an exercise you are not sure
+                  exists, and before searching history for an exercise the athlete spelled loosely.
+                - get_exercise_details(exerciseId or name): category, target muscles, equipment and
+                  instructions for one catalog exercise.
+                - list_exercises(category, equipment, limit, offset): browse one page of the catalog.
+                - get_current_routine(): the active weekly schedule, including rest days, day titles
+                  and every prescribed exercise. Use this for "my routine", "my plan" or "what am I
+                  training this week".
+                - list_routines(limit): the athlete's saved routines.
+                - get_routine(routineId or name): one saved routine with its full prescription.
+                - search_recent_workouts(daysBack, exerciseName?, limit, offset): completed sessions
+                  in a date range, with dates, duration, order and completed sets. Use it for "what
+                  did I train last week" or training-frequency questions.
+                - search_exercise_history(exerciseName, daysBack, limit): completed sets for ONE
+                  exercise, newest first. Use it for progress, PRs and improvement comparisons.
+                - propose_routine_modification(...): propose ONE exercise replacement. It never
+                  changes data; the app shows an approval card.
+                - propose_new_routine(...): propose a complete new weekly routine. It never saves
+                  anything; the app shows the full plan and creates it only after approval.
+
+                HOW TO USE THEM
+                - Never answer a question about the athlete's history, schedule, routine, exercise
+                  catalog or progress from memory. Call the relevant tool first.
+                - For progress questions, resolve the exercise name first when it may be ambiguous,
+                  then call search_exercise_history with a real catalog name. Pass the athlete's
+                  wording when it is already clear; the app normalizes case, punctuation, spacing
+                  and simple plurals ("push ups" matches "Push-Up") but does not merge different
+                  movements such as "Push-Up" and "Pike Push Up".
+                - Dates and windows are local to the athlete. "Last week" means the previous seven
+                  days unless the athlete names a calendar week; state the window you used.
+                - Every session result carries both "date" (yyyy-MM-dd) and "dateLabel". Copy one of
+                  those fields exactly for each session. Never shift a workout to another day and
+                  never merge two sessions into one date.
+                - You may call several independent tools in one turn (for example history plus the
+                  current routine), and you may make another round when the results raise a new
+                  question. Stop and answer once you have enough evidence.
+                - Empty result: a successful result with count 0 means the database has no matching
+                  data. Say that plainly. If exerciseInCatalog is false, closestMatches are
+                  suggestions only; never present one as the athlete's exercise and never fabricate
+                  sets, weights, dates or percentages.
+                - Tool error: a result with "ok": false is an error, not data. Read "message" and
+                  "correctArgumentsSchema", correct the arguments and retry once. If it still fails,
+                  explain the limitation to the athlete instead of guessing.
+                - Compare only the same exercise and compatible units. Keep dates and units explicit,
+                  and do not dump raw database output.
+
+                ROUTINE CHANGES AND NEW ROUTINES
+                Use propose_routine_modification for a change to the current weekly routine. When
+                the athlete asks for a NEW routine from scratch, first make sure you have enough
+                detail: goal, experience level, available equipment, training days per week and any
+                injury constraints. Ask a short clarifying question only when a missing detail would
+                materially change the plan; otherwise use sensible defaults and state them. Then
+                call propose_new_routine once with the complete week. A routine request is not
+                complete until propose_new_routine has been called: do not answer a create-a-routine
+                request with a prose plan only, because the app cannot save prose as a routine.
+                Prefer catalog exercises and call search_exercises before using a name you are unsure
+                about. Include newExercise metadata only for a genuinely missing movement. The app
+                validates the plan, shows every day and prescription, and saves it only after
+                explicit approval.
+
+                Make at most one proposal per message. A proposal does not modify anything; never
+                claim that a routine or exercise was created before approval. Do not diagnose
+                injuries or guarantee that an exercise is medically safe; advise professional
+                guidance when appropriate.
+                """.trimIndent()
             )
+            append("\n\n")
             append(
                 athleteContextPromptBlock(
                     includeBenchmarks = true,
@@ -4461,9 +4639,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 append(athleteContextPromptBlock())
 
-                append("CRITICAL DATABASE ENFORCEMENT:\n")
-                append("You MUST ONLY choose exercises that exist in the complete local database list below. Do not invent any new exercise names.\n")
-                append("The list includes the IronPulse library, exercises previously generated by the AI and custom exercises created by the user: if one of them already matches what you need, you MUST use that exact name instead of creating a new exercise.\n")
+                append("EXERCISE RULES:\n")
+                append("1. ALWAYS prefer an exercise that already exists in the complete local database list below, and use its exact name.\n")
+                append("2. If the routine genuinely needs a movement that is NOT in the list, do NOT force-map it to an unrelated exercise. Put it in \"new_exercises_to_create\" and use the same exact name in the day's \"exercises\" array. The app creates it locally.\n")
+                append("3. Never substitute a biomechanically different movement just because it shares a word.\n")
+                append("4. The list includes the IronPulse library, exercises previously generated by the AI and custom exercises created by the user: if one already matches what you need, reuse that exact name.\n")
                 append("COMPLETE LOCAL DATABASE CATALOG (ALL EXERCISES IN THE APP):\n$candidates\n\n")
 
                 append("OUTPUT FORMAT: RESPOND WITH ONE SINGLE JSON OBJECT AND NOTHING ELSE.\n")
@@ -4474,6 +4654,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 append("{\n")
                 append("  \"routine_name\": \"<short routine title>\",\n")
                 append("  \"routine_goal\": \"<short goal>\",\n")
+                append("  \"new_exercises_to_create\": [],\n")
                 append("  \"days\": [\n")
                 append("    {\n")
                 append("      \"weekday\": \"Monday\",\n")
@@ -4494,7 +4675,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 append("}\n\n")
 
                 append("FIELD RULES:\n")
-                append("- \"name\" MUST be copied character for character from the catalog. Never write a sentence there.\n")
+                append("- \"name\" MUST be copied character for character from the catalog, or match a name in \"new_exercises_to_create\". Never write a sentence there.\n")
+                append("- \"new_exercises_to_create\" MUST be an array, empty when every exercise exists. Each entry needs: \"name\", \"category\" (Chest, Back, Legs, Shoulders, Arms, Core, Calisthenics), \"bodyPart\" (chest, back, shoulders, upper arms, lower arms, waist, upper legs, lower legs, cardio, neck), \"target\", \"secondaryMuscles\" (array), \"equipment\", \"exerciseType\" (STANDARD_WEIGHT, ADDED_WEIGHT, PURE_BODYWEIGHT) and \"instructions\" (2-4 coaching sentences separated by ' | '). Every created name MUST also appear verbatim in the routine days.\n")
                 append("- \"holdSeconds\": use a value > 0 ONLY for isometric holds (plank, hollow hold). For a rep based movement such as an explosive pull-up it MUST be 0 and \"reps\" MUST carry the rep count.\n")
                 append("- \"reps\": use 0 ONLY when \"holdSeconds\" > 0. Never leave both at 0.\n")
                 append("- \"prescription\" MUST be exactly '<sets> sets x <reps> reps' and NOTHING else (e.g. '4 sets x 8 reps'). For an isometric hold use '<sets> sets x <seconds>s' (e.g. '3 sets x 30s').\n")
@@ -4510,7 +4692,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             result.fold(
                 onSuccess = { rawResponse ->
                     // The model may still wrap the object in prose: parse it, never store it raw
-                    val parsed = parseAiRoutine(rawResponse, knownExercises)
+                    var parsed = parseAiRoutine(rawResponse, knownExercises)
+                    if (parsed.isValid && parsed.items.isNotEmpty()) {
+                        // A movement the catalog does not know is created through the same
+                        // validated factory and only then re-parsed, so the routine carries real
+                        // exercise ids instead of dangling names.
+                        val created = createMissingRoutineExercises(rawResponse, parsed, knownExercises)
+                        if (created.isNotEmpty()) {
+                            parsed = parseAiRoutine(rawResponse, knownExercises + created)
+                        }
+                    }
                     if (!parsed.isValid || parsed.items.isEmpty()) {
                         generatedRoutine.value = ""
                         showAiError(
@@ -4530,6 +4721,65 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
             isGeneratingRoutine.value = false
         }
+    }
+
+    /**
+     * Creates the exercises a generated routine declared as missing.
+     *
+     * This is the Routine Generator's own original mechanism: it never uses the AI Coach tools and
+     * never receives an AI Coach tool definition. The model supplies metadata in
+     * `new_exercises_to_create`; [AiExerciseFactory] validates each record, then the routine is
+     * re-parsed so its items carry the new database ids.
+     */
+    private suspend fun createMissingRoutineExercises(
+        rawResponse: String,
+        parsed: AiRoutineSchedule.Parsed,
+        knownExercises: List<Exercise>
+    ): List<Exercise> {
+        val unresolved = parsed.items.filter {
+            it.exerciseId <= 0L && it.exerciseName.isNotBlank()
+        }
+        if (unresolved.isEmpty()) return emptyList()
+
+        val declaredByName = mutableMapOf<String, Exercise>()
+        runCatching {
+            val root = JSONObject(RoutineParser.extractJson(rawResponse))
+            val array = root.optJSONArray("new_exercises_to_create") ?: return@runCatching
+            for (index in 0 until array.length()) {
+                val obj = array.optJSONObject(index) ?: continue
+                val name = obj.optString("name").trim()
+                if (name.isBlank()) continue
+                AiExerciseFactory.fromJsonObject(obj, name)?.let {
+                    declaredByName[AiExerciseName.canonical(name)] = it
+                }
+            }
+        }
+
+        val existingKeys = knownExercises.mapTo(mutableSetOf()) {
+            AiExerciseName.canonical(it.name)
+        }
+        val created = mutableListOf<Exercise>()
+        for (item in unresolved) {
+            val key = AiExerciseName.canonical(item.exerciseName)
+            if (key.isBlank() || key in existingKeys) continue
+            val prototype = declaredByName[key] ?: AiExerciseFactory.fromJsonObject(
+                JSONObject().apply {
+                    put("name", item.exerciseName)
+                    put("category", item.category)
+                    put("bodyPart", "")
+                    put("target", "")
+                    put("equipment", item.equipment)
+                    put("exerciseType", item.exerciseType)
+                    put("instructions", "")
+                },
+                fallbackName = item.exerciseName
+            ) ?: continue
+            val id = insertCustomExercise(prototype.copy(id = 0))
+            if (id <= 0L) continue
+            created.add(prototype.copy(id = id))
+            existingKeys.add(key)
+        }
+        return created
     }
 
     /**

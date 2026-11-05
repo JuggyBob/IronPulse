@@ -26,7 +26,8 @@ class AiConversationEngine(
     private val maxRounds: Int = 4,
     private val maxToolCalls: Int = 12,
     private val requestTimeoutMillis: Long = 90_000L,
-    private val maxRetries: Int = 1
+    private val maxRetries: Int = 1,
+    private val maxCorrections: Int = 2
 ) {
 
     suspend fun run(
@@ -53,6 +54,7 @@ class AiConversationEngine(
         var usedCompatibility = compatibility
         var rounds = 0
         var executedCalls = 0
+        var corrections = 0
         val cache = mutableMapOf<String, AiToolResult>()
         suspend fun currentAccess(): AiAccessPolicy =
             accessPolicyProvider?.invoke() ?: accessPolicy
@@ -105,6 +107,29 @@ class AiConversationEngine(
 
             if (calls.isEmpty()) {
                 val text = response.text.trim()
+                // A response that clearly tried to use the text protocol but produced no usable
+                // call is a correctable mistake, not an answer. Send the model its own attempt plus
+                // the exact shape and schemas, then let it try again before failing the athlete.
+                if (enableTools && AiCompatibilityProtocol.looksLikeToolRequest(text)) {
+                    if (corrections >= maxCorrections) {
+                        throw AiException(
+                            AiErrorKind.PARSE,
+                            "The AI provider kept sending a tool request the app could not read. " +
+                                "No data was changed. Please rephrase the question or try again."
+                        )
+                    }
+                    corrections++
+                    conversation.add(AiMessage(AiRole.ASSISTANT, text))
+                    conversation.add(
+                        AiMessage(
+                            AiRole.USER,
+                            AiCompatibilityProtocol.correctionMessage(
+                                dispatcher.definitions(currentAccess())
+                            )
+                        )
+                    )
+                    continue
+                }
                 if (text.isBlank()) {
                     throw AiException(
                         AiErrorKind.PARSE,
@@ -119,8 +144,10 @@ class AiConversationEngine(
                 )
             }
 
-            // A compatibility answer is a protocol envelope, not prose: never show it to the user.
-            val assistantText = if (response.toolCalls.isEmpty()) "" else response.text
+            // Keep exactly what the model emitted in the transcript. In compatibility mode this is
+            // the tool envelope, and the serializer needs it verbatim so the next request mirrors
+            // the model's own format. It is never returned as the visible answer.
+            val assistantText = response.text
             conversation.add(
                 AiMessage(
                     role = AiRole.ASSISTANT,
@@ -151,16 +178,20 @@ class AiConversationEngine(
 
             // A routine change is a proposal, never an automatic write. Stop here so the app can
             // render the approval card; the model resumes only after the athlete decides.
-            val proposal = results.asSequence()
-                .mapNotNull { result ->
-                    if (result.isError) return@mapNotNull null
-                    runCatching {
-                        val json = JSONObject(result.contentJson)
-                        json.optJSONObject("proposal")?.let(RoutineModificationProposal::fromJson)
-                    }.getOrNull()
+            var modification: RoutineModificationProposal? = null
+            var newRoutine: NewRoutineProposal? = null
+            for (result in results) {
+                if (result.isError) continue
+                val json = runCatching { JSONObject(result.contentJson) }.getOrNull() ?: continue
+                val proposalJson = json.optJSONObject("proposal") ?: continue
+                if (proposalJson.optString("kind") == NewRoutineProposal.KIND) {
+                    newRoutine = NewRoutineProposal.fromJson(proposalJson) ?: continue
+                } else {
+                    modification = RoutineModificationProposal.fromJson(proposalJson) ?: continue
                 }
-                .firstOrNull()
-            if (proposal != null) {
+                break
+            }
+            if (modification != null) {
                 return AiConversationResult(
                     text = response.text.trim().ifBlank {
                         "I prepared a routine change for your approval."
@@ -168,7 +199,18 @@ class AiConversationEngine(
                     rounds = rounds,
                     toolCallsExecuted = executedCalls,
                     usedCompatibilityFallback = usedCompatibility,
-                    routineProposal = proposal
+                    routineProposal = modification
+                )
+            }
+            if (newRoutine != null) {
+                return AiConversationResult(
+                    text = response.text.trim().ifBlank {
+                        "I prepared a new routine for your approval."
+                    },
+                    rounds = rounds,
+                    toolCallsExecuted = executedCalls,
+                    usedCompatibilityFallback = usedCompatibility,
+                    newRoutineProposal = newRoutine
                 )
             }
         }

@@ -648,19 +648,6 @@ fun SettingsScreen(
                     HorizontalDivider(color = DarkBorder)
                     Spacer(modifier = Modifier.height(2.dp))
 
-                    // The athlete decides whether their profile may be sent to the AI provider at all.
-                    // Off means the prompts carry no personal data: no name, no weight, no records.
-                    SettingSwitchRow(
-                        title = "Share athlete data with AI",
-                        subtitle = if (shareAthleteDataWithAi) {
-                            "Your name, weight, fitness level and benchmark records are sent with every AI request."
-                        } else {
-                            "AI requests are sent without any of your personal data."
-                        },
-                        checked = shareAthleteDataWithAi,
-                        onCheckedChange = { viewModel.setShareAthleteDataWithAi(it) },
-                        tag = "settings_share_athlete_data"
-                    )
                 }
             }
         }
@@ -689,31 +676,7 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             color = TextWhite
                         )
-                    }
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Control exactly what the AI Coach may read and change. Both options are off by default.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = TextMuted
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Allow AI Coach to access workout data",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                                color = TextWhite
-                            )
-                            Text(
-                                text = if (aiWorkoutDataAccess) {
-                                    "The Coach can retrieve your workouts, schedule, exercise history and catalog, and can propose routine changes for approval."
-                                } else {
-                                    "The Coach can chat normally but cannot read or change any workout data."
-                                },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextMuted
-                            )
-                        }
+                        Spacer(modifier = Modifier.weight(1f))
                         IconButton(
                             onClick = { showAiAccessInfoDialog = true },
                             modifier = Modifier.testTag("settings_ai_data_info_button")
@@ -722,21 +685,48 @@ fun SettingsScreen(
                                 imageVector = Icons.Default.Info,
                                 contentDescription = "What the AI can access",
                                 tint = ElectricCyan,
-                                modifier = Modifier.size(18.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                         }
-                        Switch(
-                            checked = aiWorkoutDataAccess,
-                            onCheckedChange = { viewModel.setAiWorkoutDataAccess(it) },
-                            modifier = Modifier.testTag("settings_ai_workout_data_access"),
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = OnAccent,
-                                checkedTrackColor = ElectricCyan,
-                                uncheckedThumbColor = TextMuted,
-                                uncheckedTrackColor = DarkSurfaceVariant
-                            )
-                        )
                     }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Two independent permissions. Workout-data access is for the AI Coach " +
+                            "chat; athlete-data sharing also applies to workout generation and routine " +
+                            "parsing. Both are off by default.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    // Permission A: the existing profile/benchmark sharing used by workout
+                    // generation and routine parsing. Moving it here must not change its behavior.
+                    SettingSwitchRow(
+                        title = "Share athlete data with AI",
+                        subtitle = if (appSettings.shareAthleteDataWithAi) {
+                            "Your name, weight, fitness level and benchmark records are sent with every AI request."
+                        } else {
+                            "AI requests are sent without any of your personal data."
+                        },
+                        checked = appSettings.shareAthleteDataWithAi,
+                        onCheckedChange = { viewModel.setShareAthleteDataWithAi(it) },
+                        tag = "settings_share_athlete_data"
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    HorizontalDivider(color = DarkBorder)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    // Permission B: AI Coach workout-history tools. It is checked independently from
+                    // Permission A in every code path.
+                    SettingSwitchRow(
+                        title = "Allow AI Coach to access workout data",
+                        subtitle = if (aiWorkoutDataAccess) {
+                            "The Coach can retrieve your workouts, schedule, exercise history and catalog, and can propose routine changes for approval."
+                        } else {
+                            "The Coach can chat normally but cannot read or change any workout data."
+                        },
+                        checked = aiWorkoutDataAccess,
+                        onCheckedChange = { viewModel.setAiWorkoutDataAccess(it) },
+                        tag = "settings_ai_workout_data_access"
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
                     HorizontalDivider(color = DarkBorder)
                     Spacer(modifier = Modifier.height(4.dp))
@@ -3162,6 +3152,28 @@ private fun AiWorkoutAccessInfoDialog(onDismiss: () -> Unit) {
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                Text(
+                    text = "ATHLETE DATA SHARING (SEPARATE PERMISSION)",
+                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                    color = GoldenAmber
+                )
+                BulletLine(
+                    "Controlled by \"Share athlete data with AI\". It is independent from the AI Coach workout-data switch; changing one never changes the other.",
+                    TextMuted
+                )
+                BulletLine(
+                    "When on, every AI request may include your name, age, height, current and target weight, fitness level, goal and benchmark records.",
+                    TextMuted
+                )
+                BulletLine(
+                    "Benchmark records are the best reps logged for Push Ups, Pull Ups and a single-leg squat variant, with the added load used for each. They are read-only, never typed by hand, and never drop when a workout is deleted.",
+                    TextMuted
+                )
+                BulletLine(
+                    "The AI uses this basic athlete data to tailor coaching, workout generation and routine parsing. Turn it off to send requests without any personal data.",
+                    TextMuted
+                )
+
                 Text(
                     text = "THE AI COACH CAN RETRIEVE",
                     style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),

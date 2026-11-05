@@ -107,7 +107,11 @@ class RepositoryAiDataAccess(
 
     override suspend fun getExerciseById(id: Long): Exercise? = repository.getExerciseById(id)
 
-    override suspend fun getExerciseByName(name: String): Exercise? = repository.getExerciseByName(name)
+    override suspend fun getExerciseByName(name: String): Exercise? =
+        repository.getExerciseByName(name)
+            ?: repository.getAllExercisesOnce().firstOrNull {
+                AiExerciseName.matches(it.name, name)
+            }
 
     override suspend fun listExercises(
         category: String?,
@@ -138,15 +142,15 @@ class RepositoryAiDataAccess(
         limit: Int,
         offset: Int
     ): AiWorkoutSearchPage {
-        val query = exerciseName?.trim()?.lowercase()
+        val query = exerciseName?.takeIf { it.isNotBlank() }
         val matching = repository.getAllSessionsWithSetsOnce()
             .asSequence()
             .filter { it.sets.any { set -> set.isCompleted } }
             .filter { it.session.startTime >= (fromMillis ?: Long.MIN_VALUE) }
             .filter { it.session.startTime <= (toMillis ?: Long.MAX_VALUE) }
             .filter { wrapper ->
-                query.isNullOrBlank() || wrapper.sets.any {
-                    it.isCompleted && it.exerciseName.trim().lowercase().contains(query)
+                query == null || wrapper.sets.any {
+                    it.isCompleted && AiExerciseName.matches(it.exerciseName, query)
                 }
             }
             .sortedByDescending { it.session.startTime }
@@ -163,14 +167,13 @@ class RepositoryAiDataAccess(
         toMillis: Long?,
         limit: Int
     ): List<SessionWithSets> {
-        val query = exerciseName.trim().lowercase()
         return repository.getAllSessionsWithSetsOnce()
             .asSequence()
             .filter { it.session.startTime >= (fromMillis ?: Long.MIN_VALUE) }
             .filter { it.session.startTime <= (toMillis ?: Long.MAX_VALUE) }
             .mapNotNull { wrapper ->
                 val matchingSets = wrapper.sets.filter {
-                    it.isCompleted && it.exerciseName.trim().lowercase() == query
+                    it.isCompleted && AiExerciseName.matches(it.exerciseName, exerciseName)
                 }
                 if (matchingSets.isEmpty()) null else wrapper.copy(sets = matchingSets)
             }
@@ -199,39 +202,98 @@ class RepositoryAiDataAccess(
 }
 
 /**
+ * Canonical form for comparing an exercise name produced by a model with the names stored locally.
+ *
+ * Models alternate between "Push-up", "Push Ups" and "pushups" for the same movement. The key below
+ * removes case, punctuation, spacing and simple plural differences, and expands a small set of
+ * compound spellings. It is deliberately an equality key, not a substring key: "push up" must never
+ * be treated as the same exercise as "pike push up" or "push up plus". The stored name is never
+ * changed; this only decides whether two names refer to the same movement.
+ */
+object AiExerciseName {
+
+    private val compoundUps = Regex("\\b(push|press|pull|sit|chin|muscle)[- ]?ups?\\b")
+
+    fun canonical(raw: String): String {
+        var text = raw.trim().lowercase(Locale.ROOT)
+        if (text.isBlank()) return ""
+        text = text.replace('&', ' ')
+        text = text.replace(compoundUps) { match ->
+            if (match.groupValues[1] == "press") "push up" else match.groupValues[1] + " up"
+        }
+        text = text.replace(Regex("[^a-z0-9]+"), " ")
+        val words = text.split(Regex("\\s+"))
+            .filter { it.isNotBlank() }
+            .map(::singularize)
+        return words.joinToString(" ")
+    }
+
+    fun compact(raw: String): String = canonical(raw).replace(" ", "")
+
+    /** True when the two names describe the same movement under [canonical]. */
+    fun matches(stored: String, query: String): Boolean {
+        val storedKey = canonical(stored)
+        val queryKey = canonical(query)
+        if (storedKey.isBlank() || queryKey.isBlank()) return false
+        return storedKey == queryKey || compact(stored) == compact(query)
+    }
+
+    private fun singularize(word: String): String = when {
+        word.length <= 2 -> word
+        word.endsWith("ies") && word.length > 4 -> word.dropLast(3) + "y"
+        word.endsWith("sses") -> word.dropLast(2)
+        word.endsWith("ches") || word.endsWith("shes") ||
+            word.endsWith("xes") || word.endsWith("zes") -> word.dropLast(2)
+        word.endsWith("s") && !word.endsWith("ss") &&
+            !word.endsWith("us") && !word.endsWith("is") -> word.dropLast(1)
+        else -> word
+    }
+}
+
+/**
  * Deterministic, bounded exercise search.
  *
  * The catalog is around 1,300 rows, so ranking in memory is cheaper than a second query surface and
  * keeps the tool contract identical for every provider. The score is intentionally simple and
  * explainable: an exact name beats a prefix, a prefix beats a substring, and a muscle or equipment
  * match is a weaker hit. Every token the model typed must match somewhere, so "bench press" does not
- * return every chest exercise.
+ * return every chest exercise. Names and query both go through [AiExerciseName], so "push ups"
+ * still finds "Push-Up" without matching "Pike Push Up".
  */
 object AiExerciseSearch {
 
     fun rank(exercises: List<Exercise>, rawQuery: String): List<Exercise> {
-        val query = rawQuery.trim().lowercase()
+        val query = AiExerciseName.canonical(rawQuery)
         if (query.isBlank()) return emptyList()
+        val compactQuery = query.replace(" ", "")
         val tokens = query.split(Regex("\\s+")).filter { it.isNotBlank() }
         return exercises.mapNotNull { exercise ->
-            val name = exercise.name.lowercase()
-            val haystack = listOf(
-                exercise.name,
-                exercise.category,
-                exercise.bodyPart,
-                exercise.target,
-                exercise.equipment
-            ).joinToString(" ").lowercase()
-            if (tokens.any { !haystack.contains(it) }) return@mapNotNull null
+            val name = AiExerciseName.canonical(exercise.name)
+            val compactName = name.replace(" ", "")
+            val haystack = AiExerciseName.canonical(
+                listOf(
+                    exercise.name,
+                    exercise.category,
+                    exercise.bodyPart,
+                    exercise.target,
+                    exercise.equipment
+                ).joinToString(" ")
+            )
+            val compactHaystack = haystack.replace(" ", "")
+            if (tokens.any { !haystack.contains(it) && !compactHaystack.contains(it) }) {
+                return@mapNotNull null
+            }
             val score = when {
                 name == query -> 100
+                compactName == compactQuery -> 96
                 name.startsWith(query) -> 80
                 name.contains(query) -> 60
-                tokens.all { name.contains(it) } -> 50
-                exercise.category.equals(query, ignoreCase = true) -> 40
-                exercise.bodyPart.equals(query, ignoreCase = true) -> 38
-                exercise.target.equals(query, ignoreCase = true) -> 36
-                exercise.equipment.equals(query, ignoreCase = true) -> 34
+                compactName.contains(compactQuery) -> 58
+                tokens.all { name.contains(it) || compactName.contains(it) } -> 50
+                AiExerciseName.canonical(exercise.category) == query -> 40
+                AiExerciseName.canonical(exercise.bodyPart) == query -> 38
+                AiExerciseName.canonical(exercise.target) == query -> 36
+                AiExerciseName.canonical(exercise.equipment) == query -> 34
                 else -> 20
             }
             exercise to score
@@ -335,6 +397,7 @@ object AiToolCatalog {
     const val GET_CURRENT_ROUTINE = "get_current_routine"
     const val SEARCH_EXERCISE_HISTORY = "search_exercise_history"
     const val PROPOSE_ROUTINE_MODIFICATION = "propose_routine_modification"
+    const val PROPOSE_NEW_ROUTINE = "propose_new_routine"
 
     /** Tools exposed for one request under the athlete's explicit permission. */
     fun available(access: AiAccessPolicy): List<AiToolDefinition> =
@@ -610,6 +673,83 @@ object AiToolCatalog {
             """.trimIndent(),
             domain = AiToolDomain.ROUTINE_WRITE,
             maxResultBytes = 24 * 1024
+        ),
+        AiToolDefinition(
+            name = PROPOSE_NEW_ROUTINE,
+            description = "Propose a complete NEW weekly workout routine for explicit approval. " +
+                "Use this only when the athlete asks to create a new routine and has given enough " +
+                "detail (goal, experience, training days, equipment). This never saves anything: the " +
+                "app shows the full plan in an approval card and creates it only when the athlete " +
+                "taps save. Prefer exercises from the catalog (use search_exercises first). For a " +
+                "genuinely missing movement, provide newExercise metadata; it is created only after " +
+                "approval.",
+            inputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {
+                    "routineName": {"type": "string", "description": "Short routine name."},
+                    "goal": {"type": "string", "description": "Short training goal."},
+                    "summary": {"type": "string", "description": "One short sentence describing the plan."},
+                    "days": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 7,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "weekday": {"type": "integer", "minimum": 1, "maximum": 7, "description": "1 = Monday ... 7 = Sunday."},
+                          "focus": {"type": "string", "description": "Short day title, e.g. Upper Body Push."},
+                          "note": {"type": "string", "description": "One short optional note; omit or leave empty."},
+                          "exercises": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 12,
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "name": {"type": "string", "description": "Exact catalog name, or the new exercise name."},
+                                "exerciseId": {"type": "integer", "description": "Catalog id from search_exercises when known."},
+                                "sets": {"type": "integer", "minimum": 1, "maximum": 10},
+                                "reps": {"type": "integer", "minimum": 0, "maximum": 100},
+                                "weightKg": {"type": "number", "minimum": 0},
+                                "addedWeightKg": {"type": "number", "minimum": 0},
+                                "holdSeconds": {"type": "integer", "minimum": 0, "maximum": 600},
+                                "restSeconds": {"type": "integer", "minimum": 0, "maximum": 600},
+                                "prescription": {"type": "string", "description": "Optional, e.g. 4 sets x 8 reps."},
+                                "newExercise": {
+                                  "type": "object",
+                                  "description": "Only when no catalog exercise fits. Do not create it before approval.",
+                                  "properties": {
+                                    "name": {"type": "string"},
+                                    "category": {"type": "string"},
+                                    "bodyPart": {"type": "string"},
+                                    "target": {"type": "string"},
+                                    "secondaryMuscles": {"type": "array", "items": {"type": "string"}},
+                                    "equipment": {"type": "string"},
+                                    "exerciseType": {"type": "string"},
+                                    "instructions": {"type": "string"},
+                                    "description": {"type": "string"}
+                                  },
+                                  "required": ["name", "category", "equipment", "exerciseType", "instructions"],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "required": ["name", "sets", "reps"],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": ["weekday", "exercises"],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": ["routineName", "days"],
+                  "additionalProperties": false
+                }
+            """.trimIndent(),
+            domain = AiToolDomain.ROUTINE_WRITE,
+            maxResultBytes = 32 * 1024
         )
     )
 
@@ -646,6 +786,7 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
             AiToolCatalog.GET_CURRENT_ROUTINE -> getCurrentRoutine(arguments)
             AiToolCatalog.SEARCH_EXERCISE_HISTORY -> searchExerciseHistory(arguments)
             AiToolCatalog.PROPOSE_ROUTINE_MODIFICATION -> proposeRoutineModification(arguments)
+            AiToolCatalog.PROPOSE_NEW_ROUTINE -> proposeNewRoutine(arguments)
             else -> toolError("unknown_tool", "The tool \"$name\" is not available.")
         }
     }
@@ -840,16 +981,167 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
         val to = System.currentTimeMillis()
         val from = to - daysBack * DAY_MILLIS
         val sessions = dataAccess.exerciseHistory(exerciseName, from, to, limit)
+        val catalog = dataAccess.allExercises()
+        val catalogMatch = catalog.firstOrNull { AiExerciseName.matches(it.name, exerciseName) }
         return JSONObject().apply {
             put("ok", true)
             put("exerciseName", exerciseName)
+            put("found", sessions.isNotEmpty())
+            put("exerciseInCatalog", catalogMatch != null)
+            catalogMatch?.let { put("catalogName", it.name) }
             put("fromDate", isoDate(from))
             put("toDate", isoDate(to))
             put("count", sessions.size)
             if (sessions.isEmpty()) {
-                put("note", "No completed sets matched that exact exercise name in this period.")
+                put(
+                    "note",
+                    if (catalogMatch != null) {
+                        "The exercise exists in the catalog but has no completed sets in this period."
+                    } else {
+                        "No catalog exercise matches that name and there is no workout history for it."
+                    }
+                )
+                if (catalogMatch == null) {
+                    val closest = AiExerciseSearch.rank(catalog, exerciseName).take(5)
+                    if (closest.isNotEmpty()) {
+                        put(
+                            "closestMatches",
+                            JSONArray().apply { closest.forEach { put(it.toSummaryJson()) } }
+                        )
+                        put(
+                            "closestMatchesNote",
+                            "These are suggestions only. They are not the exact exercise the caller named."
+                        )
+                    }
+                }
             }
             put("sessions", JSONArray().apply { sessions.forEach { put(it.toWorkoutJson()) } })
+        }
+    }
+
+    private suspend fun proposeNewRoutine(args: JSONObject): JSONObject {
+        val routineName = AiToolArgs.requireText(args, "routineName", maxLength = 120)
+        val goal = AiToolArgs.optionalText(args, "goal", maxLength = 160).orEmpty()
+        val summary = AiToolArgs.optionalText(args, "summary", maxLength = 400).orEmpty()
+        val daysArray = args.optJSONArray("days")
+            ?: throw AiToolArgumentException("Missing required array argument \"days\".")
+        if (daysArray.length() == 0) {
+            throw AiToolArgumentException("Argument \"days\" must contain at least one training day.")
+        }
+
+        val byWeekday = linkedMapOf<Int, ProposedRoutineDay>()
+        for (dayIndex in 0 until daysArray.length()) {
+            val dayObj = daysArray.optJSONObject(dayIndex)
+                ?: throw AiToolArgumentException("Each entry of \"days\" must be an object.")
+            val weekday = dayObj.optInt("weekday", 0)
+            if (weekday !in 1..7) {
+                throw AiToolArgumentException("Each day needs \"weekday\" between 1 (Monday) and 7 (Sunday).")
+            }
+            val focus = dayObj.optString("focus", "").trim()
+            val note = dayObj.optString("note", "").trim()
+            val exercisesArray = dayObj.optJSONArray("exercises")
+                ?: throw AiToolArgumentException("Day $weekday is missing its \"exercises\" array.")
+            if (exercisesArray.length() == 0) {
+                throw AiToolArgumentException("Day $weekday must contain at least one exercise.")
+            }
+            val parsedExercises = mutableListOf<ProposedRoutineExercise>()
+            for (exerciseIndex in 0 until exercisesArray.length()) {
+                val exObj = exercisesArray.optJSONObject(exerciseIndex)
+                    ?: throw AiToolArgumentException("Each exercise must be an object.")
+                val rawName = exObj.optString("name", "").trim()
+                if (rawName.isBlank()) {
+                    throw AiToolArgumentException("Every exercise needs a non-empty \"name\".")
+                }
+                val suppliedId = exObj.optLong("exerciseId", 0L).takeIf { it > 0L }
+                val catalog = if (suppliedId != null) {
+                    dataAccess.getExerciseById(suppliedId)
+                } else {
+                    dataAccess.getExerciseByName(rawName)
+                }
+                val generated = exObj.optJSONObject("newExercise")?.let { newObj ->
+                    AiExerciseFactory.fromJsonObject(
+                        newObj,
+                        fallbackName = newObj.optString("name", rawName)
+                    ) ?: throw AiToolArgumentException(
+                        "The newExercise \"$rawName\" is not a valid exercise record."
+                    )
+                }
+                if (generated != null && generated.instructions.isBlank()) {
+                    throw AiToolArgumentException(
+                        "The newExercise \"$rawName\" needs non-empty \"instructions\"."
+                    )
+                }
+                if (catalog == null && generated == null) {
+                    throw AiToolArgumentException(
+                        "No catalog exercise matches \"$rawName\". Call search_exercises and use a " +
+                            "real name, or include newExercise metadata for a genuinely new movement."
+                    )
+                }
+                val sets = exObj.optInt("sets", 3).coerceIn(1, 10)
+                var reps = exObj.optInt("reps", 8).coerceIn(0, 100)
+                val hold = exObj.optInt("holdSeconds", 0).coerceIn(0, 600)
+                if (reps <= 0 && hold <= 0) reps = 8
+                val equipment = catalog?.equipment
+                    ?: generated?.equipment.orEmpty().ifBlank { "Bodyweight" }
+                val prescription = RoutineParser.shortPrescription(
+                    exObj.optString("prescription", ""),
+                    equipment
+                ).ifBlank {
+                    when {
+                        hold > 0 && reps > 0 -> "$sets sets x $reps reps / ${hold}s"
+                        hold > 0 -> "$sets sets x ${hold}s"
+                        else -> "$sets sets x $reps reps"
+                    }
+                }
+                parsedExercises.add(
+                    ProposedRoutineExercise(
+                        name = catalog?.name ?: generated!!.name,
+                        exerciseId = catalog?.id ?: 0L,
+                        category = catalog?.category ?: generated?.category.orEmpty(),
+                        equipment = equipment,
+                        exerciseType = catalog?.exerciseType
+                            ?: generated?.exerciseType
+                            ?: com.example.data.model.ExerciseType.PURE_BODYWEIGHT,
+                        generatedExercise = generated?.let(ProposedExercise::fromExercise),
+                        targetSets = sets,
+                        targetReps = reps,
+                        targetWeightKg = exObj.optDouble("weightKg", 0.0).coerceAtLeast(0.0),
+                        targetAddedWeightKg = exObj.optDouble("addedWeightKg", 0.0)
+                            .coerceAtLeast(0.0),
+                        targetHoldSeconds = hold,
+                        restSeconds = exObj.optInt("restSeconds", 90).coerceIn(0, 600),
+                        prescription = prescription
+                    )
+                )
+            }
+            val existing = byWeekday[weekday]
+            byWeekday[weekday] = if (existing == null) {
+                ProposedRoutineDay(weekday, focus, note, parsedExercises)
+            } else {
+                existing.copy(
+                    focus = existing.focus.ifBlank { focus },
+                    note = existing.note.ifBlank { note },
+                    exercises = existing.exercises + parsedExercises
+                )
+            }
+        }
+
+        val proposal = NewRoutineProposal(
+            routineName = routineName,
+            goal = goal,
+            summary = summary,
+            days = byWeekday.values.sortedBy { it.weekday }
+        )
+        if (proposal.trainingDays == 0 || proposal.exerciseCount == 0) {
+            throw AiToolArgumentException("The routine must contain at least one exercise.")
+        }
+        return JSONObject().apply {
+            put("ok", true)
+            put("proposal", proposal.toJson())
+            put(
+                "message",
+                "The app will show this plan for approval. Nothing has been created or saved yet."
+            )
         }
     }
 
@@ -1038,17 +1330,33 @@ class AiToolDispatcher(private val registry: AiToolRegistry) {
         }
     }
 
-    private fun errorResult(call: AiToolCall, code: String, message: String): AiToolResult =
-        AiToolResult(
+    private fun errorResult(call: AiToolCall, code: String, message: String): AiToolResult {
+        val definition = AiToolCatalog.definition(call.name)
+        val json = JSONObject().apply {
+            put("ok", false)
+            put("error", code)
+            put("message", message)
+            if (definition != null) {
+                put("tool", definition.name)
+                put(
+                    "correctArgumentsSchema",
+                    runCatching { JSONObject(definition.inputSchemaJson) }
+                        .getOrElse { JSONObject().put("type", "object") }
+                )
+                put(
+                    "howToCorrect",
+                    "Call ${definition.name} again with an arguments object that matches " +
+                        "correctArgumentsSchema, or answer without tools."
+                )
+            }
+        }
+        return AiToolResult(
             callId = call.id,
             name = call.name,
-            contentJson = JSONObject().apply {
-                put("ok", false)
-                put("error", code)
-                put("message", message)
-            }.toString(),
+            contentJson = json.toString(),
             isError = true
         )
+    }
 }
 
 private fun Exercise.toSummaryJson(): JSONObject = JSONObject().apply {
@@ -1132,6 +1440,12 @@ private fun SessionWithSets.toWorkoutJson(): JSONObject = JSONObject().apply {
     put("sessionId", session.id)
     put("title", session.title)
     put("date", isoDate(session.startTime))
+    // A human-readable copy makes small models far less likely to shift a date by a day when
+    // summarising several sessions. Both fields come from the same local timestamp.
+    put(
+        "dateLabel",
+        SimpleDateFormat("EEE, MMM d, yyyy", Locale.getDefault()).format(Date(session.startTime))
+    )
     put("startMillis", session.startTime)
     put("endMillis", session.endTime)
     put("durationMinutes", ((session.endTime - session.startTime).coerceAtLeast(0L) / 60_000L))
