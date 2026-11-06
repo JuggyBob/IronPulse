@@ -321,6 +321,7 @@ fun IronPulseApp(
     val liquidGlassEnabled by viewModel.liquidGlassEnabled.collectAsStateWithLifecycle()
     val fullscreenEnabled by viewModel.fullscreenEnabled.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
+    val accentColorHex by viewModel.accentColorHex.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     // The activity owns the window policy; Compose owns the preference. The two are connected here
@@ -336,7 +337,7 @@ fun IronPulseApp(
     // The theme wraps the whole app, including the navigation bar and every dialog, and is read
     // from its own flow so an unrelated setting change never re-applies it. Liquid Glass stays a
     // separate provider: it is an effect, not a theme, and works in all four looks.
-    MyApplicationTheme(themeMode = themeMode) {
+    MyApplicationTheme(themeMode = themeMode, accentColorHex = accentColorHex) {
         CompositionLocalProvider(LocalLiquidGlassEnabled provides liquidGlassEnabled) {
             val insetModifier = if (fullscreenEnabled) {
                 Modifier.windowInsetsPadding(fullscreenCutoutInsets())

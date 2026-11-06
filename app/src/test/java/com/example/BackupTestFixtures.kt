@@ -80,6 +80,7 @@ object BackupTestFixtures {
                 liquidGlassEnabled = true,
                 fullscreenEnabled = false,
                 themeMode = "amoled",
+                accentColor = "#9465E8",
                 onboardingCompleted = true,
                 activeWorkoutDraft = """{"kind":"quick","title":"Draft","startTime":123}""",
                 weekStartsOnMonday = false,

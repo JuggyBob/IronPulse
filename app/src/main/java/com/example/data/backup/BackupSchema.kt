@@ -143,6 +143,8 @@ data class PreferencesSectionV1(
     val liquidGlassEnabled: Boolean? = null,
     val fullscreenEnabled: Boolean? = null,
     val themeMode: String? = null,
+    /** The selected accent as `#RRGGBB`; null keeps the original per-theme blue. */
+    val accentColor: String? = null,
     val onboardingCompleted: Boolean? = null,
     val activeWorkoutDraft: String? = null,
     val weekStartsOnMonday: Boolean? = null,
@@ -428,6 +430,7 @@ private fun PreferencesSectionV1.filledFieldCount(): Int {
     if (liquidGlassEnabled != null) count++
     if (fullscreenEnabled != null) count++
     if (themeMode != null) count++
+    if (accentColor != null) count++
     if (onboardingCompleted != null) count++
     if (activeWorkoutDraft != null) count++
     if (weekStartsOnMonday != null) count++

@@ -272,7 +272,7 @@ fun RoutineWorkoutScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 14.dp),
-                contentPadding = PaddingValues(top = 12.dp, bottom = 190.dp),
+                contentPadding = PaddingValues(top = 12.dp, bottom = 120.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 item {
@@ -381,13 +381,13 @@ fun RoutineWorkoutScreen(
         }
 
         // === FLOATING BOTTOM ACTION BAR WITH REST TIMER ===
-        // The app's floating navigation dock is an overlay above this screen. The action bar has
-        // to sit above it instead of underneath it, or Finish/Exit become unreachable.
+        // The active workout is rendered instead of the main navigation host, so there is no
+        // floating dock to clear here. The action bar belongs at the bottom edge, as it was before
+        // the navigation clearance was added for the tab screens.
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(bottom = 92.dp),
+                .fillMaxWidth(),
             horizontalAlignment = Alignment.Start
         ) {
             // Small button on the lower left (right on top of the number of sets completed)
@@ -406,9 +406,12 @@ fun RoutineWorkoutScreen(
                             Modifier.liquidGlass(
                                 shape = actionBarShape,
                                 enabled = true,
-                                tint = MintGreen,
+                                tint = ElectricCyan,
                                 cornerRadius = 16.dp,
-                                elevation = 14.dp
+                                elevation = 14.dp,
+                                // Match the main dock's single-tone glass instead of the old
+                                // top-lit panel gradient.
+                                uniformSurface = true
                             )
                         } else {
                             Modifier

@@ -167,7 +167,7 @@ a whole. These keys are exported:
 | Group | Keys |
 |---|---|
 | Profile mirror | `profile_is_saved`, `profile_name`, `profile_height_cm`, `profile_current_weight_kg`, `profile_target_weight_kg`, `profile_age`, `profile_preferred_unit`, `profile_fitness_level` |
-| Units and appearance | `weight_unit`, `theme_mode`, `liquid_glass_enabled`, `fullscreen_mode` |
+| Units and appearance | `weight_unit`, `theme_mode`, `accent_color`, `liquid_glass_enabled`, `fullscreen_mode` |
 | Rest timer | `rest_timer_vibration_enabled`, `rest_timer_sound_enabled`, `saved_rest_timers_json` |
 | Workout behavior | `week_starts_on_monday`, `auto_save_interval_seconds`, `active_workout_draft`, `share_athlete_data_with_ai`, `autoplay_exercise_demos`, `auto_check_updates_on_start` |
 | Onboarding | `onboarding_completed` |

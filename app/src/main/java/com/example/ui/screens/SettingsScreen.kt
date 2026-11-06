@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.MonitorWeight
 import androidx.compose.material.icons.filled.NewReleases
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.SystemUpdateAlt
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
@@ -99,6 +100,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -120,10 +123,14 @@ import com.example.data.ai.AiProviderId
 import com.example.data.ai.AiToolMode
 import com.example.data.model.UserProfile
 import com.example.data.preferences.UserPreferencesRepository
+import com.example.ui.components.AccentColorPickerDialog
 import com.example.ui.components.ProgressionLineChart
 import com.example.ui.components.AboutDialog
 import com.example.ui.components.UpdateDialog
 import com.example.util.ApkInstaller
+import com.example.ui.theme.AccentColors
+import com.example.ui.theme.AccentPreset
+import com.example.ui.theme.AppPalettes
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.DarkSurface
@@ -174,6 +181,7 @@ fun SettingsScreen(
     var showClearDataDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
     var showRestoreWidgetsDialog by remember { mutableStateOf(false) }
+    var showAccentColorPicker by remember { mutableStateOf(false) }
     var widgetsRestored by remember { mutableStateOf(false) }
     var widgetsRestoreFailed by remember { mutableStateOf(false) }
 
@@ -433,6 +441,24 @@ fun SettingsScreen(
                     ThemeSelector(
                         selected = appSettings.themeMode,
                         onSelect = { viewModel.setThemeMode(it) }
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    HorizontalDivider(color = DarkBorder)
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    AccentColorSelector(
+                        selectedHex = appSettings.accentColorHex,
+                        defaultColor = AppPalettes.forMode(appSettings.themeMode).accentPrimary,
+                        onSelectPreset = { preset ->
+                            // The default preset clears the override so the original per-theme
+                            // IronPulse blue is preserved exactly, including the light theme's
+                            // darker #0969DA default.
+                            viewModel.setAccentColor(
+                                if (preset.isDefault) null else preset.hex
+                            )
+                        },
+                        onOpenCustom = { showAccentColorPicker = true }
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
@@ -2631,6 +2657,18 @@ fun SettingsScreen(
             }
         )
     }
+
+    if (showAccentColorPicker) {
+        AccentColorPickerDialog(
+            initialColor = AccentColors.parseHex(appSettings.accentColorHex)
+                ?: AppPalettes.forMode(appSettings.themeMode).accentPrimary,
+            onDismiss = { showAccentColorPicker = false },
+            onApply = { color ->
+                viewModel.setAccentColor(AccentColors.toHex(color))
+                showAccentColorPicker = false
+            }
+        )
+    }
 }
 
 /**
@@ -2888,6 +2926,189 @@ private fun ThemeSelector(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * The accent section inside Preferences.
+ *
+ * Presets are a compact four-column swatch grid. A custom colour owns the row below, which also
+ * acts as the entry point to the custom picker. The current selection is spelled out as well as
+ * carrying a check mark, so colour is never the only selection indicator.
+ */
+@Composable
+private fun AccentColorSelector(
+    selectedHex: String,
+    defaultColor: Color,
+    onSelectPreset: (AccentPreset) -> Unit,
+    onOpenCustom: () -> Unit
+) {
+    val normalized = AccentColors.normalizeHex(selectedHex)
+    val selectedPreset = AccentColors.presets.firstOrNull { preset ->
+        if (preset.isDefault) normalized == null else preset.hex == normalized
+    }
+    val customSelected = AccentColors.isCustom(selectedHex)
+    val currentColor = AccentColors.parseHex(selectedHex) ?: defaultColor
+    val selectionLabel = when {
+        selectedPreset != null -> selectedPreset.displayName
+        customSelected -> "Custom ${normalized.orEmpty()}"
+        else -> "IronPulse Blue"
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("settings_accent_section")
+    ) {
+        Text(
+            text = "Accent Color",
+            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = TextWhite
+        )
+        Text(
+            text = "Changes buttons, tabs, selections and controls throughout IronPulse.",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextMuted
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        AccentColors.presets.chunked(4).forEachIndexed { rowIndex, row ->
+            if (rowIndex > 0) Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                row.forEach { preset ->
+                    val swatchColor = if (preset.isDefault) {
+                        defaultColor
+                    } else {
+                        AccentColors.parseHex(preset.hex) ?: defaultColor
+                    }
+                    AccentSwatch(
+                        preset = preset,
+                        color = swatchColor,
+                        selected = selectedPreset == preset,
+                        onClick = { onSelectPreset(preset) }
+                    )
+                }
+                repeat(4 - row.size) {
+                    Spacer(modifier = Modifier.size(44.dp))
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(9.dp))
+        Text(
+            text = "Selected: $selectionLabel",
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+            color = ElectricCyan
+        )
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(DarkBg)
+                .border(
+                    width = 1.dp,
+                    color = if (customSelected) ElectricCyan else DarkBorder,
+                    shape = RoundedCornerShape(12.dp)
+                )
+                .clickable { onOpenCustom() }
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .testTag("accent_custom_button"),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .background(currentColor)
+                    .border(
+                        width = 1.dp,
+                        color = TextWhite.copy(alpha = 0.28f),
+                        shape = CircleShape
+                    )
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Custom Color",
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = TextWhite
+                )
+                Text(
+                    text = if (customSelected) {
+                        "Using ${normalized.orEmpty()}"
+                    } else {
+                        "Pick any color with the wheel, HEX or RGB"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted
+                )
+            }
+            if (customSelected) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Custom accent selected",
+                    tint = ElectricCyan,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+            }
+            Icon(
+                imageVector = Icons.Default.Palette,
+                contentDescription = null,
+                tint = TextMuted,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun AccentSwatch(
+    preset: AccentPreset,
+    color: Color,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .clickable { onClick() }
+            .semantics { contentDescription = "${preset.displayName} accent" }
+            .border(
+                width = if (selected) 2.dp else 1.dp,
+                color = if (selected) TextWhite else DarkBorder,
+                shape = CircleShape
+            )
+            .padding(3.dp)
+            .testTag(
+                "accent_preset_${preset.displayName.lowercase(Locale.US).replace(" ", "_")}"
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(color, CircleShape)
+        )
+        if (selected) {
+            Icon(
+                imageVector = Icons.Default.Check,
+                contentDescription = null,
+                tint = AccentColors.contrastTextColor(color),
+                modifier = Modifier.size(18.dp)
+            )
         }
     }
 }

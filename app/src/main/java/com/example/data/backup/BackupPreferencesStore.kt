@@ -14,6 +14,7 @@ import com.example.data.ai.AiConfigurationRepository
 import com.example.data.ai.AiProviderId
 import com.example.data.ai.AiToolMode
 import com.example.data.preferences.UserPreferencesRepository
+import com.example.ui.theme.AccentColors
 import com.example.ui.theme.ThemeMode
 import com.example.data.preferences.userDataStore
 import com.example.data.seed.LibraryEditTracker
@@ -141,6 +142,11 @@ open class BackupPreferencesStore(private val context: Context) {
             preferences.liquidGlassEnabled?.let { prefs[UserPreferencesRepository.LIQUID_GLASS_ENABLED] = it }
             preferences.fullscreenEnabled?.let { prefs[UserPreferencesRepository.FULLSCREEN_MODE] = it }
             preferences.themeMode?.let { prefs[UserPreferencesRepository.THEME_MODE] = it }
+            preferences.accentColor?.let { raw ->
+                AccentColors.normalizeHex(raw)?.let {
+                    prefs[UserPreferencesRepository.ACCENT_COLOR] = it
+                }
+            }
             preferences.onboardingCompleted?.let { prefs[UserPreferencesRepository.ONBOARDING_COMPLETED] = it }
             preferences.activeWorkoutDraft?.let { prefs[UserPreferencesRepository.ACTIVE_WORKOUT_DRAFT] = it }
             preferences.weekStartsOnMonday?.let { prefs[UserPreferencesRepository.WEEK_STARTS_ON_MONDAY] = it }
@@ -321,6 +327,9 @@ open class BackupPreferencesStore(private val context: Context) {
             liquidGlassEnabled = prefs[UserPreferencesRepository.LIQUID_GLASS_ENABLED],
             fullscreenEnabled = prefs[UserPreferencesRepository.FULLSCREEN_MODE],
             themeMode = prefs[UserPreferencesRepository.THEME_MODE],
+            accentColor = AccentColors.normalizeHex(
+                prefs[UserPreferencesRepository.ACCENT_COLOR]
+            ),
             onboardingCompleted = prefs[UserPreferencesRepository.ONBOARDING_COMPLETED],
             activeWorkoutDraft = prefs[UserPreferencesRepository.ACTIVE_WORKOUT_DRAFT]?.takeIf { it.isNotBlank() },
             weekStartsOnMonday = prefs[UserPreferencesRepository.WEEK_STARTS_ON_MONDAY],
@@ -437,6 +446,7 @@ open class BackupPreferencesStore(private val context: Context) {
             UserPreferencesRepository.LIQUID_GLASS_ENABLED,
             UserPreferencesRepository.FULLSCREEN_MODE,
             UserPreferencesRepository.THEME_MODE,
+            UserPreferencesRepository.ACCENT_COLOR,
             UserPreferencesRepository.ONBOARDING_COMPLETED,
             UserPreferencesRepository.ACTIVE_WORKOUT_DRAFT,
             UserPreferencesRepository.WEEK_STARTS_ON_MONDAY,

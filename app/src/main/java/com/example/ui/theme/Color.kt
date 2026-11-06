@@ -6,6 +6,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import java.util.Locale
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.pow
+import kotlin.math.roundToInt
 
 /**
  * The four complete looks the app can wear.
@@ -49,6 +55,143 @@ enum class ThemeMode(
         fun fromStorageKey(raw: String?): ThemeMode =
             values().firstOrNull { it.storageKey == raw } ?: IRONPULSE
     }
+}
+
+/**
+ * One selectable accent swatch.
+ *
+ * The default entry is a sentinel for the original per-theme IronPulse blue. Selecting it clears
+ * the override instead of storing a hex value, so the original dark and light blues are preserved
+ * exactly for anyone who never customizes the accent.
+ */
+@Immutable
+data class AccentPreset(
+    val displayName: String,
+    val hex: String,
+    val isDefault: Boolean = false
+)
+
+/**
+ * Accent parsing, contrast and preset metadata.
+ *
+ * Kept pure so the Settings UI, the picker and the persistence layer all agree on what counts as
+ * a valid colour and so the contrast rules can be unit tested without a Compose host.
+ */
+object AccentColors {
+
+    /** The minimum contrast the adjusted accent must keep against app surfaces. */
+    const val MIN_CONTRAST = 4.5f
+
+    private val hexPattern = Regex("^[0-9A-Fa-f]{6}$")
+
+    /**
+     * The current default accent is #58A6FF in the dark themes. The light theme keeps its own
+     * #0969DA default through the sentinel above, so it is intentionally not listed as a hex here.
+     */
+    val presets = listOf(
+        AccentPreset("IronPulse Blue", "#58A6FF", isDefault = true),
+        AccentPreset("Purple", "#9465E8"),
+        AccentPreset("Cyan", "#22B8CF"),
+        AccentPreset("Green", "#35AD75"),
+        AccentPreset("Orange", "#E99539"),
+        AccentPreset("Red", "#E45D65"),
+        AccentPreset("Pink", "#DF70A8"),
+        AccentPreset("Yellow", "#D6B43D")
+    )
+
+    /** Normalizes to `#RRGGBB`, or null when the input is not a complete six-digit colour. */
+    fun normalizeHex(raw: String?): String? {
+        val candidate = raw?.trim()?.removePrefix("#") ?: return null
+        if (!hexPattern.matches(candidate)) return null
+        return "#${candidate.uppercase(Locale.US)}"
+    }
+
+    fun parseHex(raw: String?): Color? {
+        val normalized = normalizeHex(raw) ?: return null
+        val rgb = normalized.removePrefix("#").toInt(16)
+        return Color(0xFF000000.toInt() or rgb)
+    }
+
+    fun toHex(color: Color): String = String.format(
+        Locale.US,
+        "#%02X%02X%02X",
+        (color.red * 255f).roundToInt().coerceIn(0, 255),
+        (color.green * 255f).roundToInt().coerceIn(0, 255),
+        (color.blue * 255f).roundToInt().coerceIn(0, 255)
+    )
+
+    /** The preset matching [raw], or the default preset when no override is stored. */
+    fun presetFor(raw: String?): AccentPreset? {
+        val normalized = normalizeHex(raw) ?: return presets.firstOrNull { it.isDefault }
+        return presets.firstOrNull { it.hex == normalized }
+    }
+
+    /** True when [raw] is a valid colour that is not one of the presets. */
+    fun isCustom(raw: String?): Boolean {
+        val normalized = normalizeHex(raw) ?: return false
+        return presets.none { it.hex == normalized }
+    }
+
+    /** White or a dark page tone, whichever is more readable on [color]. */
+    fun contrastTextColor(color: Color): Color {
+        val dark = Color(0xFF0D1117)
+        return if (contrastRatio(color, Color.White) >= contrastRatio(color, dark)) {
+            Color.White
+        } else {
+            dark
+        }
+    }
+
+    /**
+     * Keeps a custom colour visible on the active theme.
+     *
+     * A colour is adjusted only when it would be too close to the page, surface or on-accent tone.
+     * The adjustment moves toward white on dark themes and toward black on light ones, preserving
+     * the chosen hue while making text and small controls readable.
+     */
+    fun adjustForTheme(accent: Color, palette: AppPalette): Color {
+        val targets = listOf(
+            palette.onAccent,
+            palette.background,
+            palette.surface,
+            palette.surfaceVariant
+        )
+        var candidate = accent
+        var attempts = 0
+        while (attempts < 24 && targets.any { contrastRatio(candidate, it) < MIN_CONTRAST }) {
+            candidate = lerp(candidate, if (palette.isLight) Color.Black else Color.White, 0.10f)
+            attempts++
+        }
+        return candidate
+    }
+}
+
+/** WCAG relative luminance of an sRGB colour. */
+fun Color.relativeLuminance(): Float {
+    fun channel(value: Float): Float =
+        if (value <= 0.03928f) value / 12.92f else ((value + 0.055f) / 1.055f).pow(2.4f)
+
+    return 0.2126f * channel(red) + 0.7152f * channel(green) + 0.0722f * channel(blue)
+}
+
+/** WCAG contrast ratio between two colours, from 1 to 21. */
+fun contrastRatio(first: Color, second: Color): Float {
+    val firstLuminance = first.relativeLuminance()
+    val secondLuminance = second.relativeLuminance()
+    val lighter = max(firstLuminance, secondLuminance)
+    val darker = min(firstLuminance, secondLuminance)
+    return (lighter + 0.05f) / (darker + 0.05f)
+}
+
+/**
+ * Returns a palette with the athlete's accent applied.
+ *
+ * Null deliberately returns the base palette untouched, which is what keeps existing installations
+ * exactly on their original blue until they choose an accent.
+ */
+fun AppPalette.withAccent(accent: Color?): AppPalette {
+    if (accent == null) return this
+    return copy(accentPrimary = AccentColors.adjustForTheme(accent, this))
 }
 
 /** Chart-specific colours, kept together so a new chart cannot invent a one-off palette. */
@@ -415,11 +558,20 @@ object AppPalettes {
         scrim = Color(0xFF000000)
     )
 
-    fun forMode(mode: ThemeMode): AppPalette = when (mode) {
-        ThemeMode.IRONPULSE -> ironPulse
-        ThemeMode.DARK -> dark
-        ThemeMode.LIGHT -> light
-        ThemeMode.AMOLED -> amoled
+    /**
+     * The complete palette for a theme, optionally with the athlete's accent override applied.
+     *
+     * The optional parameter keeps every existing caller on the original palette and makes the
+     * accent a single centralized override rather than a second theme system.
+     */
+    fun forMode(mode: ThemeMode, accent: Color? = null): AppPalette {
+        val base = when (mode) {
+            ThemeMode.IRONPULSE -> ironPulse
+            ThemeMode.DARK -> dark
+            ThemeMode.LIGHT -> light
+            ThemeMode.AMOLED -> amoled
+        }
+        return base.withAccent(accent)
     }
 }
 
