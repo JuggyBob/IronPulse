@@ -65,8 +65,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -1418,6 +1416,37 @@ fun AiRoutineGeneratorView(
                             Text("Generate Structured Routine", color = OnAccent, fontWeight = FontWeight.Bold)
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // The AI Parser belonged to a floating corner button that the navigation
+                    // dock could cover. It now lives directly under the Generate button, in the
+                    // same card, so it is reachable in both Liquid Glass and standard themes.
+                    OutlinedButton(
+                        onClick = {
+                            viewModel.resetUnstructuredParseState()
+                            showUnstructuredDialog = true
+                        },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ElectricCyan),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, ElectricCyan),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("unstructured_parser_fab")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AutoFixHigh,
+                            contentDescription = "AI Parser",
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "AI Parser",
+                            color = ElectricCyan,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }
@@ -1619,56 +1648,6 @@ fun AiRoutineGeneratorView(
                     }
                 }
             )
-        }
-
-        // Bottom Right Button for Unstructured Workout Parser
-        val parserGlassEnabled = LocalLiquidGlassEnabled.current
-        FloatingActionButton(
-            onClick = {
-                viewModel.resetUnstructuredParseState()
-                showUnstructuredDialog = true
-            },
-            containerColor = if (parserGlassEnabled) Color.Transparent else ElectricCyan,
-            contentColor = if (parserGlassEnabled) TextWhite else OnAccent,
-            shape = RoundedCornerShape(16.dp),
-            elevation = if (parserGlassEnabled) {
-                FloatingActionButtonDefaults.elevation(0.dp, 0.dp, 0.dp, 0.dp)
-            } else {
-                FloatingActionButtonDefaults.elevation()
-            },
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(16.dp)
-                .then(
-                    if (parserGlassEnabled) {
-                        Modifier.liquidGlass(
-                            shape = RoundedCornerShape(16.dp),
-                            enabled = true,
-                            tint = ElectricCyan,
-                            cornerRadius = 16.dp,
-                            elevation = 12.dp
-                        )
-                    } else {
-                        Modifier
-                    }
-                )
-                .testTag("unstructured_parser_fab")
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Default.AutoFixHigh,
-                    contentDescription = "AI Parser",
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "AI Parser",
-                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
-                )
-            }
         }
 
         if (showUnstructuredDialog) {

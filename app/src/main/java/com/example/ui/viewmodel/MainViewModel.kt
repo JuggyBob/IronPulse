@@ -3021,6 +3021,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
+     * The athlete's accent override, or blank for the original per-theme IronPulse blue.
+     *
+     * Its own flow so a theme or Liquid Glass change never re-applies the accent and an accent
+     * change never disturbs an unrelated setting.
+     */
+    val accentColorHex: StateFlow<String> = userPreferencesRepo.accentColorHexFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
+
+    /** Persists a preset/custom accent, or clears the override when [hex] is null or blank. */
+    fun setAccentColor(hex: String?) {
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.setAccentColorHex(hex)
+        }
+    }
+
+    /**
      * Whether the athlete's week starts on Monday.
      *
      * Read straight from the settings, so the routine editor, the dashboard, the weekly summaries

@@ -17,6 +17,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -49,6 +50,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.StreakDay
@@ -364,36 +366,48 @@ private fun StreakHeatmap(
     modifier: Modifier = Modifier
 ) {
     val weeks = remember(summary.days) { summary.days.chunked(7) }
-    Row(modifier = modifier) {
-        Column(
-            modifier = Modifier.width(22.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            repeat(7) { row ->
-                Box(
-                    modifier = Modifier.height(10.dp),
-                    contentAlignment = Alignment.CenterStart
-                ) {
-                    val label = weekdayLabel(row, summary.weekStartsOnMonday)
-                    if (label.isNotEmpty()) {
-                        Text(
-                            text = label,
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
-                            color = TextMuted,
-                            maxLines = 1
-                        )
+    BoxWithConstraints(modifier = modifier) {
+        val labelWidth = 22.dp
+        val spacing = 3.dp
+        val columns = weeks.size.coerceAtLeast(1)
+        val gridWidth = (maxWidth - labelWidth).coerceAtLeast(0.dp)
+        val availableCell = (gridWidth - spacing * (columns - 1)) / columns
+        // Shrink to fit narrow cards instead of clipping the last column, but never grow past
+        // the original compact 10dp square on wide cards.
+        val cellSize = availableCell.coerceIn(5.dp, 10.dp)
+
+        Row {
+            Column(
+                modifier = Modifier.width(labelWidth),
+                verticalArrangement = Arrangement.spacedBy(spacing)
+            ) {
+                repeat(7) { row ->
+                    Box(
+                        modifier = Modifier.height(cellSize),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        val label = weekdayLabel(row, summary.weekStartsOnMonday)
+                        if (label.isNotEmpty()) {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
+                                color = TextMuted,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
             }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-            weeks.forEach { week ->
-                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    week.forEach { day ->
-                        StreakCell(
-                            day = day,
-                            isToday = day.dayStart == summary.todayStart
-                        )
+            Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
+                weeks.forEach { week ->
+                    Column(verticalArrangement = Arrangement.spacedBy(spacing)) {
+                        week.forEach { day ->
+                            StreakCell(
+                                day = day,
+                                isToday = day.dayStart == summary.todayStart,
+                                size = cellSize
+                            )
+                        }
                     }
                 }
             }
@@ -402,7 +416,7 @@ private fun StreakHeatmap(
 }
 
 @Composable
-private fun StreakCell(day: StreakDay, isToday: Boolean) {
+private fun StreakCell(day: StreakDay, isToday: Boolean, size: Dp) {
     val fill = when (day.status) {
         StreakDayStatus.COMPLETED -> MintGreen
         StreakDayStatus.MISSED -> FireRed.copy(alpha = 0.78f)
@@ -419,7 +433,7 @@ private fun StreakCell(day: StreakDay, isToday: Boolean) {
     }
     Box(
         modifier = Modifier
-            .size(10.dp)
+            .size(size)
             .background(fill, RoundedCornerShape(3.dp))
             .border(
                 width = if (edge == Color.Transparent) 0.dp else 1.dp,

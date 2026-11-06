@@ -103,23 +103,45 @@ object WorkoutStreak {
         val byDate = schedule.associateBy { row ->
             row.dateKey.takeIf { it > 0L } ?: LocalDateKey.keyOf(row.dateStart)
         }
-        val plannedDates = byDate.values
+        val scheduledDates = byDate.values
             .filter { it.exerciseCount > 0 }
             .map { it.dateKey.takeIf { key -> key > 0L } ?: LocalDateKey.keyOf(it.dateStart) }
             .sorted()
 
-        // A session only counts when it is linked to a planned date and actually contains completed
+        // A session counts only when it is linked to a planned date and actually contains completed
         // work. Quick workouts, drafts and abandoned sessions have no planned date and are ignored.
+        //
+        // Older installations can contain a routine session without a persisted plannedDate. That
+        // workout still carries the routine id, so its local start date is a reliable completion
+        // date. If a schedule row exists for that date it must be a training day; a rest-day row
+        // wins and the session is not treated as a scheduled completion. This makes the fix
+        // retroactive without rewriting any historical workout rows.
         val completedDates = sessions.asSequence()
-            .filter { wrapper ->
-                wrapper.session.plannedDate > 0L &&
-                    wrapper.sets.any { it.isCompleted }
-            }
-            .map { wrapper ->
-                wrapper.session.plannedDateKey.takeIf { it > 0L }
-                    ?: LocalDateKey.keyOf(wrapper.session.plannedDate)
+            .mapNotNull { wrapper ->
+                if (wrapper.sets.none { it.isCompleted }) return@mapNotNull null
+                val session = wrapper.session
+                val explicitDate = session.plannedDateKey.takeIf { it > 0L }
+                    ?: session.plannedDate.takeIf { it > 0L }?.let(LocalDateKey::keyOf)
+                if (explicitDate != null) {
+                    val plan = byDate[explicitDate]
+                    return@mapNotNull if (plan == null || plan.exerciseCount > 0) {
+                        explicitDate
+                    } else {
+                        null
+                    }
+                }
+                if (session.routineId <= 0L) return@mapNotNull null
+                val startDate = LocalDateKey.keyOf(session.startTime)
+                val plan = byDate[startDate]
+                return@mapNotNull if (plan == null || plan.exerciseCount > 0) startDate else null
             }
             .toSet()
+
+        // A legacy routine completion proves that its date was a scheduled training day even when
+        // the materialized schedule starts later. Only completed dates are added, never guessed
+        // missed days, so old history is recognized without fabricating a schedule.
+        val plannedDates = (scheduledDates + completedDates).distinct().sorted()
+        val plannedDateSet = plannedDates.toSet()
 
         val firstKey = minOf(
             plannedDates.firstOrNull() ?: todayKey,
@@ -137,7 +159,7 @@ object WorkoutStreak {
         var guard = 0
         while (dateKey <= todayKey && guard < MAX_HISTORY_DAYS) {
             guard++
-            val planned = (byDate[dateKey]?.exerciseCount ?: 0) > 0
+            val planned = plannedDateSet.contains(dateKey)
             val completed = completedDates.contains(dateKey)
 
             if (planned) {
@@ -159,7 +181,7 @@ object WorkoutStreak {
         }
 
         val todayPlan = byDate[todayKey]
-        val todayPlanned = (todayPlan?.exerciseCount ?: 0) > 0
+        val todayPlanned = plannedDateSet.contains(todayKey)
         // A linked session on a rest day is a real workout, but it is not completion of a planned
         // day. Keeping this false is what stops the broken-state copy saying "today is complete".
         val todayCompleted = todayPlanned && completedDates.contains(todayKey)
@@ -176,7 +198,7 @@ object WorkoutStreak {
         val days = (0 until HEATMAP_WEEKS * 7).map { offset ->
             val key = LocalDateKey.plusDays(heatmapStartKey, offset)
             val plan = byDate[key]
-            val planned = (plan?.exerciseCount ?: 0) > 0
+            val planned = plannedDateSet.contains(key)
             val completed = completedDates.contains(key)
             val status = when {
                 key > todayKey -> StreakDayStatus.FUTURE

@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.data.model.UserProfile
+import com.example.ui.theme.AccentColors
 import com.example.ui.theme.ThemeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -137,6 +138,14 @@ class UserPreferencesRepository(private val context: Context) {
          * or renaming the modes later cannot silently change an existing athlete's theme.
          */
         val THEME_MODE = stringPreferencesKey("theme_mode")
+
+        /**
+         * The athlete's accent override as a `#RRGGBB` string.
+         *
+         * Absent means the original per-theme IronPulse blue, which is what keeps existing
+         * installations looking exactly as they did before accent customization existed.
+         */
+        val ACCENT_COLOR = stringPreferencesKey("accent_color")
 
         /**
          * Set once the athlete has finished the first run onboarding, so the landing pages are shown
@@ -266,6 +275,10 @@ class UserPreferencesRepository(private val context: Context) {
          */
         val themeMode: ThemeMode = ThemeMode.IRONPULSE,
         /**
+         * The selected accent as `#RRGGBB`, or blank for the original per-theme IronPulse blue.
+         */
+        val accentColorHex: String = "",
+        /**
          * Whether a week is displayed starting on Monday. False means it starts on Sunday.
          *
          * Monday is the default because it is the convention most training plans are written in,
@@ -292,6 +305,7 @@ class UserPreferencesRepository(private val context: Context) {
             liquidGlassEnabled = prefs[LIQUID_GLASS_ENABLED] ?: true,
             fullscreenEnabled = prefs[FULLSCREEN_MODE] ?: true,
             themeMode = ThemeMode.fromStorageKey(prefs[THEME_MODE]),
+            accentColorHex = AccentColors.normalizeHex(prefs[ACCENT_COLOR]).orEmpty(),
             weekStartsOnMonday = prefs[WEEK_STARTS_ON_MONDAY] ?: true,
             autoSaveIntervalSeconds = (prefs[AUTO_SAVE_INTERVAL_SECONDS]
                 ?: DEFAULT_AUTO_SAVE_INTERVAL_SECONDS).coerceIn(5, 300),
@@ -412,6 +426,31 @@ class UserPreferencesRepository(private val context: Context) {
 
     suspend fun setThemeMode(mode: ThemeMode) {
         context.userDataStore.edit { it[THEME_MODE] = mode.storageKey }
+    }
+
+    /**
+     * The selected accent override, exposed on its own like the theme.
+     *
+     * Blank means the original per-theme IronPulse blue. Invalid stored values fall back to the
+     * default instead of making the app render an unpredictable colour.
+     */
+    val accentColorHexFlow: Flow<String> = context.userDataStore.data.map { prefs ->
+        AccentColors.normalizeHex(prefs[ACCENT_COLOR]).orEmpty()
+    }
+
+    /**
+     * Persists a preset or custom accent. Null/blank clears the override and restores the original
+     * per-theme blue; an invalid value is ignored so it can never overwrite a valid saved accent.
+     */
+    suspend fun setAccentColorHex(hex: String?) {
+        context.userDataStore.edit { prefs ->
+            if (hex.isNullOrBlank()) {
+                prefs.remove(ACCENT_COLOR)
+                return@edit
+            }
+            val normalized = AccentColors.normalizeHex(hex) ?: return@edit
+            prefs[ACCENT_COLOR] = normalized
+        }
     }
 
     /**

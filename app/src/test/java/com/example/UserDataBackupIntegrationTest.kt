@@ -138,6 +138,7 @@ class UserDataBackupIntegrationTest {
         preferences.setHomeWidgetConfig(listOf("today", "streak", "photo"), setOf("week", "recent"))
         preferences.setHomeWidgetWeeklyGoal(5)
         preferences.setThemeMode(com.example.ui.theme.ThemeMode.AMOLED)
+        preferences.setAccentColorHex("#9465E8")
         preferences.setWeightUnit("lb")
         preferences.setAutoSaveIntervalSeconds(15)
         preferences.setActiveRoutineId(ids.routine)
@@ -266,6 +267,7 @@ class UserDataBackupIntegrationTest {
 
         // Restored preferences and dashboard.
         assertEquals(com.example.ui.theme.ThemeMode.AMOLED, preferences.themeModeFlow.first())
+        assertEquals("#9465E8", preferences.accentColorHexFlow.first())
         assertEquals("lb", preferences.preferredUnitFlow.first())
         assertEquals(15, preferences.autoSaveIntervalSecondsFlow.first())
         assertEquals(ids.routine, preferences.activeRoutineIdFlow.first())

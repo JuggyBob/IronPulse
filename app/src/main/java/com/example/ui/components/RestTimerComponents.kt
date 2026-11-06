@@ -56,12 +56,6 @@ fun RestTimerDockedButton(
         topStart = 0.dp,
         bottomStart = 0.dp
     )
-    val dockedTint = when {
-        activeTimer.hasFinished -> ElectricCyan
-        activeTimer.isRunning -> MintGreen
-        else -> ElectricCyan
-    }
-
     // Subtle pulsing animation when timer is active
     val infiniteTransition = rememberInfiniteTransition(label = "timer_pulse")
     val pulseAlpha by infiniteTransition.animateFloat(
@@ -112,9 +106,12 @@ fun RestTimerDockedButton(
                             Modifier.liquidGlass(
                                 shape = dockedShape,
                                 enabled = true,
-                                tint = dockedTint,
+                                tint = ElectricCyan,
                                 cornerRadius = 12.dp,
-                                elevation = 8.dp
+                                elevation = 8.dp,
+                                // The docked timer is a floating control, not a content panel:
+                                // use the same single-tone glass as the bottom navigation.
+                                uniformSurface = true
                             )
                         } else {
                             Modifier

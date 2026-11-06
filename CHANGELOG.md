@@ -7,6 +7,63 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [4.3.0] - 2026-11-06
+
+IronPulse 4.3.0 adds app-wide accent color customization and carries the 4.2.x workout, streak,
+heatmap and Markdown reliability fixes. The 4.2.0 data format and settings remain compatible; no
+Room migration is required.
+
+### Added
+
+- **Accent Color in Settings.** A new Accent Color section inside the existing Preferences card
+  offers IronPulse Blue, Purple, Cyan, Green, Orange, Red, Pink and Yellow circular swatches, with a
+  clear selected ring/checkmark and a "Selected: ..." label.
+- **Custom accent picker.** A dedicated dialog provides a circular hue ring, a
+  saturation/brightness square, a live preview, HEX input and separate R/G/B inputs. Apply commits
+  the color; Cancel discards it.
+- **Application-wide accent propagation.** The selected accent drives primary buttons, selected
+  bottom-navigation and tab items, focused text-field borders and cursors, checkboxes, sliders,
+  progress indicators, selected chips and other active controls that already use the standard
+  accent, through the existing centralized Material 3 palette.
+- **Contrast-aware rendering.** Custom colors are adjusted only when necessary to remain readable
+  against the active theme's surfaces while preserving the chosen hue. Unusual colors are accepted,
+  not rejected.
+- **Accent backup support.** `.ironpulse` backups now include the selected accent alongside the
+  existing appearance preferences.
+
+### Changed
+
+- The accent defaults to the original IronPulse blue. Existing installations and fresh installs
+  keep the current per-theme blue until the athlete chooses another color.
+- Accent selection persists independently of the theme and Liquid Glass, applies immediately without
+  a restart, and survives a full app restart.
+- The workout control bar and docked rest timer are back at the bottom edge, and their Liquid Glass
+  surface uses the same uniform single-tone treatment as the navigation dock.
+- The AI Parser now sits directly under **Generate Structured Routine** in the Routine Generator
+  card, in both standard and Liquid Glass themes.
+
+### Fixed
+
+- Historical routine sessions saved without a `plannedDate` are now recognized as scheduled
+  completions, so old workout history contributes to the current and best streak. Scheduled rest days
+  still remain neutral.
+- The Home streak heatmap now sizes its cells from the available width, keeping the final column
+  visible on narrow screens and alternate display sizes.
+- Post-workout AI summaries now render Markdown tables as real tables with header/body rows and
+  horizontal scrolling, and support H1-H6, horizontal rules, nested lists, strikethrough, bold+italic,
+  inline code, links and escaped characters.
+- The AI Parser button is no longer obscured by the bottom navigation dock.
+
+### Technical
+
+- `versionCode = 11`, `versionName = "4.3.0"`.
+- The accent is stored as `#RRGGBB` in the existing DataStore preferences and is exported through the
+  existing allowlisted backup preference section. No database migration was added.
+- Unit coverage includes accent parsing, preset metadata, contrast enforcement, palette isolation,
+  DataStore round-trips, backup round-trips, legacy streak sessions and Markdown tables.
+
+---
+
 ## [4.2.0] - 2026-11-05
 
 IronPulse 4.2.0 is a reliability and polish release focused on the AI Coach, scheduled streak and
@@ -812,7 +869,8 @@ Entries are grouped under **Added**, **Changed**, **Deprecated**, **Removed**, *
 **Security**, each newest first. Versions follow [SemVer](https://semver.org/): bump the patch for a
 fix, the minor for a feature, the major for a breaking change.
 
-[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v4.2.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v4.3.0...HEAD
+[4.3.0]: https://github.com/JuggyBob/IronPulse/compare/v4.2.0...v4.3.0
 [4.2.0]: https://github.com/JuggyBob/IronPulse/compare/v4.1.0...v4.2.0
 [4.1.0]: https://github.com/JuggyBob/IronPulse/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/JuggyBob/IronPulse/compare/v3.0.0...v4.0.0

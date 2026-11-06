@@ -86,8 +86,9 @@ the whole export rather than creating a partial archive.
 7. The imported Home photo is written through a staging name and renamed. The destination's old file
    is not deleted yet.
 8. One DataStore edit removes every allowlisted exportable key and writes the imported profile,
-   preferences, dashboard configuration, AI-access/summary switches, the three Android widget
-   themes and the new widget-photo path. API keys, the avatar path, the cached release and
+   preferences (including the selected theme and accent color), dashboard configuration,
+   AI-access/summary switches, the three Android widget themes and the new widget-photo path.
+   API keys, the avatar path, the cached release and
    update-prompt suppression are not in the removal list and are not written.
 9. The rest-alert SharedPreferences mirror is rebuilt from the imported switches.
 10. Verification reads Room, DataStore and the widget file again and compares them with the imported

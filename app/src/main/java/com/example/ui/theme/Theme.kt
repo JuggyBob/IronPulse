@@ -85,15 +85,17 @@ private fun AppPalette.toColorScheme(): ColorScheme {
 @Composable
 fun MyApplicationTheme(
     themeMode: ThemeMode = ThemeMode.IRONPULSE,
+    accentColorHex: String? = null,
     content: @Composable () -> Unit
 ) {
-    val palette = AppPalettes.forMode(themeMode)
+    val accentColor = remember(accentColorHex) { AccentColors.parseHex(accentColorHex) }
+    val palette = AppPalettes.forMode(themeMode, accentColor)
 
     // Deliberately before the content: the legacy getters below read this value while the tree
     // composes, so the new palette is already in effect on the first frame after a switch.
     ThemeRuntime.palette = palette
 
-    val colorScheme = remember(themeMode) { palette.toColorScheme() }
+    val colorScheme = remember(themeMode, accentColor) { palette.toColorScheme() }
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {

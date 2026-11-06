@@ -82,7 +82,7 @@ A failure at any point produces a user-facing error and leaves destination data 
 | Section | DTO | Contents |
 |---|---|---|
 | `profile` | `ProfileSectionV1` | DataStore profile fields and Room profile fields; `customApiKey` is not present. |
-| `preferences` | `PreferencesSectionV1` | Explicit allowlist of non-secret preferences, benchmark records, rest timers, AI provider/model/tool-mode selections, the AI Coach workout-data and post-workout-summary switches, and the three independent Android widget themes. |
+| `preferences` | `PreferencesSectionV1` | Explicit allowlist of non-secret preferences, including the theme, accent color, Liquid Glass/fullscreen flags, benchmark records, rest timers, AI provider/model/tool-mode selections, the AI Coach workout-data and post-workout-summary switches, and the three independent Android widget themes. |
 | `dashboard` | `DashboardSectionV1` | Widget order, hidden ids, weekly goal and Home photo metadata. |
 | `exercises` | `ExerciseSectionV1` | User-created/AI exercises, athlete-edited library rows, and the edited-library id set. Local media fields are absent. |
 | `workouts` | `WorkoutsSectionV1` | All `WorkoutSessionV1` rows and all `LoggedSetV1` rows, ids preserved. |

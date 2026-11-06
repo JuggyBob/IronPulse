@@ -83,6 +83,20 @@ class WorkoutStreakTest {
         )
     }
 
+    /** A routine session saved before plannedDate was persisted. */
+    private fun legacyRoutineSession(date: Long, routineId: Long = 1L): SessionWithSets {
+        val wrapper = completed(date, routineId)
+        return wrapper.copy(
+            session = wrapper.session.copy(
+                id = date + 2,
+                plannedDate = 0L,
+                plannedDateKey = 0L,
+                routineId = routineId,
+                routineWeekday = ActivityHeatmap.isoDayOfWeek(date)
+            )
+        )
+    }
+
     private fun unscheduled(date: Long): SessionWithSets =
         completed(date).let { wrapper ->
             wrapper.copy(
@@ -247,6 +261,62 @@ class WorkoutStreakTest {
 
         assertEquals(1, summary.currentStreak)
         assertEquals(1, summary.completedDays)
+    }
+
+    @Test
+    fun `streak heatmap always has twelve complete weeks and today in the final column`() {
+        val summary = WorkoutStreak.calculate(emptyList(), emptyList(), today)
+        val columns = summary.days.chunked(7)
+
+        assertEquals(84, summary.days.size)
+        assertEquals(WorkoutStreak.HEATMAP_WEEKS, columns.size)
+        assertTrue(columns.all { it.size == 7 })
+        assertTrue(columns.last().any { it.dayStart == summary.todayStart })
+        assertTrue(columns.last().last().dateKey >= LocalDateKey.keyOf(today))
+    }
+
+    @Test
+    fun `legacy routine sessions without a planned date still count on scheduled days`() {
+        val summary = WorkoutStreak.calculate(
+            schedule = listOf(planned(day(-2)), rest(day(-1)), planned(today)),
+            sessions = listOf(legacyRoutineSession(day(-2)), legacyRoutineSession(today)),
+            today = today
+        )
+
+        assertEquals(2, summary.currentStreak)
+        assertEquals(2, summary.completedDays)
+        assertTrue(summary.hasSchedule)
+        assertEquals(StreakDayStatus.COMPLETED, summary.days.first { it.dayStart == day(-2) }.status)
+        assertEquals(StreakDayStatus.COMPLETED, summary.days.first { it.dayStart == today }.status)
+    }
+
+    @Test
+    fun `legacy routine history without schedule rows is recognized but not fabricated`() {
+        val summary = WorkoutStreak.calculate(
+            schedule = emptyList(),
+            sessions = listOf(legacyRoutineSession(day(-4))),
+            today = today
+        )
+
+        assertEquals(1, summary.currentStreak)
+        assertEquals(1, summary.completedDays)
+        assertTrue(summary.hasSchedule)
+        assertEquals(StreakDayStatus.COMPLETED, summary.days.first { it.dayStart == day(-4) }.status)
+        // The unknown days between the legacy session and today are not invented as misses.
+        assertEquals(0, summary.missedDays)
+    }
+
+    @Test
+    fun `a legacy routine session on a rest day is not a scheduled completion`() {
+        val summary = WorkoutStreak.calculate(
+            schedule = listOf(rest(day(-1)), rest(today)),
+            sessions = listOf(legacyRoutineSession(day(-1))),
+            today = today
+        )
+
+        assertEquals(0, summary.currentStreak)
+        assertEquals(0, summary.completedDays)
+        assertEquals(StreakDayStatus.REST, summary.days.first { it.dayStart == day(-1) }.status)
     }
 
     @Test

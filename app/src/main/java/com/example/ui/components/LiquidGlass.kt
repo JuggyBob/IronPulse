@@ -137,6 +137,12 @@ fun Modifier.liquidGlass(
      */
     backdropBlurred: Boolean = false,
     /**
+     * True for floating controls that have no captured backdrop but must still match the dock's
+     * single-tone glass. It removes the top-lit gradient and sheen while keeping the border,
+     * depth and translucency.
+     */
+    uniformSurface: Boolean = false,
+    /**
      * True for content-heavy panels such as the Customize Home sheet. These need a nearly opaque
      * body: a decorative alpha that lets the page show through makes long labels unreadable.
      */
@@ -158,6 +164,7 @@ fun Modifier.liquidGlass(
                 tint = tint,
                 cornerRadiusPx = cornerRadius?.toPx() ?: (size.minDimension / 2f),
                 backdropBlurred = backdropBlurred,
+                uniformSurface = uniformSurface,
                 contentHeavy = contentHeavy
             )
         }
@@ -246,6 +253,7 @@ private fun DrawScope.drawLiquidGlassPanel(
     tint: Color,
     cornerRadiusPx: Float,
     backdropBlurred: Boolean,
+    uniformSurface: Boolean,
     contentHeavy: Boolean
 ) {
     val glass = ThemeRuntime.palette.glass
@@ -262,20 +270,24 @@ private fun DrawScope.drawLiquidGlassPanel(
     val bodyTop = when {
         contentHeavy -> 0.94f
         backdropBlurred -> 0.74f
+        uniformSurface -> 0.86f
         else -> 0.64f
     }
     val bodyMid = when {
         contentHeavy -> 0.96f
         backdropBlurred -> 0.74f
+        uniformSurface -> 0.86f
         else -> 0.72f
     }
     val bodyBottom = when {
         contentHeavy -> 0.98f
         backdropBlurred -> 0.74f
+        uniformSurface -> 0.86f
         else -> 0.80f
     }
-    val topBodyColor = if (backdropBlurred) glass.panelMid else glass.panelTop
-    val bottomBodyColor = if (backdropBlurred) glass.panelMid else glass.panelBottom
+    val uniformBodyColor = backdropBlurred || uniformSurface
+    val topBodyColor = if (uniformBodyColor) glass.panelMid else glass.panelTop
+    val bottomBodyColor = if (uniformBodyColor) glass.panelMid else glass.panelBottom
     drawRect(
         brush = Brush.verticalGradient(
             colors = listOf(
@@ -289,10 +301,8 @@ private fun DrawScope.drawLiquidGlassPanel(
     // A restrained tint wash. On the backdrop-blurred dock it is one flat tint rather than a
     // directional wash, because a directional highlight was the second source of the pale top
     // band the athlete could see.
-    if (backdropBlurred) {
-        // The dock is deliberately one flat tint. The athlete asked for a single unified colour
-        // instead of a visible blurred band at the top, and a flat tint is the only way to
-        // guarantee that at every scroll position.
+    if (uniformBodyColor) {
+        // One flat tint: no directional wash that could read as a brighter upper half.
     } else {
         drawRect(
             brush = Brush.linearGradient(
@@ -310,7 +320,7 @@ private fun DrawScope.drawLiquidGlassPanel(
     // The broad specular sheen across the top half. It is drawn as an oval so the highlight fades
     // out before it reaches the lower edge instead of looking like a flat white stripe. The real
     // backdrop dock deliberately has no top sheen: it must read as one uniform glass colour.
-    if (!backdropBlurred) {
+    if (!uniformBodyColor) {
         drawOval(
             brush = Brush.radialGradient(
                 colors = listOf(
@@ -332,7 +342,7 @@ private fun DrawScope.drawLiquidGlassPanel(
             colors = listOf(
                 Color.Transparent,
                 Color.Transparent,
-                glass.shade.copy(alpha = if (backdropBlurred) 0.14f else 0.20f)
+                glass.shade.copy(alpha = if (uniformBodyColor) 0.16f else 0.20f)
             ),
             startY = size.height * 0.45f,
             endY = size.height
