@@ -56,6 +56,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ShowChart
@@ -124,7 +125,7 @@ import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.LogWorkoutScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.WidgetAppearanceScreen
-import com.example.ui.screens.ProfileScreen
+import com.example.ui.screens.SavedRoutinesView
 import com.example.ui.screens.ProgressScreen
 import com.example.ui.screens.RoutineWorkoutScreen
 import com.example.ui.theme.DarkBg
@@ -146,7 +147,7 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector,
     object LogWorkout : Screen("log_workout", "Exercises", Icons.Default.FitnessCenter, "nav_log_workout")
     object Progress : Screen("progress", "Progress", Icons.Default.ShowChart, "nav_progress")
     object Home : Screen("home", "Home", Icons.Default.Home, "nav_home")
-    object Profile : Screen("profile", "Profile", Icons.Default.Person, "nav_profile")
+    object Routine : Screen("routine", "Routine", Icons.Default.Checklist, "nav_routine")
     object AiCoach : Screen("ai_coach", "AI Coach", Icons.Default.AutoAwesome, "nav_ai_coach")
     object Settings : Screen("settings", "Settings", Icons.Default.Settings, "nav_settings")
     object WidgetAppearance : Screen(
@@ -164,7 +165,7 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector,
          * destinations of their own, so the dock would otherwise have no selected index.
          */
         fun selectedTabRoute(route: String): String =
-            if (route == Settings.route || route == WidgetAppearance.route) Profile.route else route
+            if (route == Settings.route || route == WidgetAppearance.route) Home.route else route
     }
 }
 
@@ -393,18 +394,15 @@ private fun IronPulseAppContent(
                 viewModel.startTodayWorkoutFromWidget()
             }
             com.example.widget.WidgetNavigation.ACTION_SAVED_ROUTINES -> {
-                viewModel.requestSavedRoutinesTab()
-                navController.navigate(Screen.AiCoach.route) {
+                navController.navigate(Screen.Routine.route) {
                     popUpTo(navController.graph.findStartDestination().id) { saveState = true }
                     launchSingleTop = true
                     restoreState = true
                 }
             }
             com.example.widget.WidgetNavigation.ACTION_OPEN_PROFILE -> {
-                navController.navigate(Screen.Profile.route) {
-                    popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                navController.navigate(Screen.Settings.route) {
                     launchSingleTop = true
-                    restoreState = true
                 }
             }
         }
@@ -415,7 +413,7 @@ private fun IronPulseAppContent(
     val allSessions by viewModel.allSessions.collectAsStateWithLifecycle()
     val workoutSummaryState by viewModel.workoutSummaryState.collectAsStateWithLifecycle()
     // Gate rather than a route: the landing pages are a modal flow with no back navigation, and
-    // showing the tab bar behind them would let the athlete wander into an empty Profile mid form.
+    // showing the tab bar behind them would let the athlete wander into another tab mid form.
     val onboardingCompleted by viewModel.onboardingCompleted.collectAsStateWithLifecycle()
 
     // A workout that was in progress when the app was closed, waiting for the athlete to decide.
@@ -639,21 +637,21 @@ private fun IronPulseAppContent(
                 workoutSnapshot = lastWorkout
             )
         } else {
-        // The order of the bottom bar. Home sits between Progress and Profile, which is where the
+        // The order of the bottom bar. Home sits between Progress and Routine, which is where the
         // athlete expects the entry point to the app to be.
         val screens = listOf(
             Screen.LogWorkout,
             Screen.Progress,
             Screen.Home,
-            Screen.Profile,
+            Screen.Routine,
             Screen.AiCoach
         )
 
         val navBackStackEntry by navController.currentBackStackEntryAsState()
         val currentRoute = navBackStackEntry?.destination?.route ?: Screen.Home.route
-        // Settings is a pushed detail reachable from Profile, not a sixth tab. Keep Profile
-        // highlighted while it is open instead of clearing the indicator because no tab owns the
-        // Settings route. Navigation callbacks still compare against the real route above.
+        // Settings is a pushed detail reachable from Home, not a sixth tab. Keep Home highlighted
+        // while it is open instead of clearing the indicator because no tab owns the Settings
+        // route. Navigation callbacks still compare against the real route above.
         val selectedTabRoute = Screen.selectedTabRoute(currentRoute)
 
         val isKeyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
@@ -719,12 +717,16 @@ private fun IronPulseAppContent(
                 composable(Screen.Progress.route) {
                     ProgressScreen(viewModel = viewModel)
                 }
-                composable(Screen.Profile.route) {
-                    ProfileScreen(
+                composable(Screen.Routine.route) {
+                    SavedRoutinesView(
                         viewModel = viewModel,
-                        onOpenSettings = {
-                            navController.navigate(Screen.Settings.route) {
+                        onLaunchRoutine = {
+                            navController.navigate(Screen.LogWorkout.route) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = true
+                                }
                                 launchSingleTop = true
+                                restoreState = true
                             }
                         }
                     )
@@ -750,11 +752,7 @@ private fun IronPulseAppContent(
                     HomeScreen(
                         viewModel = viewModel,
                         onOpenSavedRoutines = {
-                            // The saved routines live in a tab of the AI Coach screen rather than in
-                            // a destination of their own, so the request goes through the view
-                            // model and the tab opens when the coach screen is on screen.
-                            viewModel.requestSavedRoutinesTab()
-                            navController.navigate(Screen.AiCoach.route) {
+                            navController.navigate(Screen.Routine.route) {
                                 popUpTo(navController.graph.findStartDestination().id) {
                                     saveState = true
                                 }
@@ -779,6 +777,11 @@ private fun IronPulseAppContent(
                                 launchSingleTop = true
                                 restoreState = true
                             }
+                        },
+                        onOpenSettings = {
+                            navController.navigate(Screen.Settings.route) {
+                                launchSingleTop = true
+                            }
                         }
                     )
                 }
@@ -787,6 +790,15 @@ private fun IronPulseAppContent(
                         viewModel = viewModel,
                         onNavigateToLogWorkout = {
                             navController.navigate(Screen.LogWorkout.route) {
+                                popUpTo(navController.graph.findStartDestination().id) {
+                                    saveState = true
+                                }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        onNavigateToSavedRoutines = {
+                            navController.navigate(Screen.Routine.route) {
                                 popUpTo(navController.graph.findStartDestination().id) {
                                     saveState = true
                                 }

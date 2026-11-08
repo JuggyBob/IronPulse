@@ -605,9 +605,9 @@ fun RestTimerDialog(
                                     },
                                     shape = RoundedCornerShape(8.dp),
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                    border = BorderStroke(1.dp, if (isSelected) MintGreen else DarkBorder),
+                                    border = BorderStroke(1.dp, if (isSelected) ElectricCyan else DarkBorder),
                                     colors = ButtonDefaults.outlinedButtonColors(
-                                        containerColor = if (isSelected) MintGreen.copy(alpha = 0.15f) else Color.Transparent
+                                        containerColor = if (isSelected) ElectricCyan.copy(alpha = 0.15f) else Color.Transparent
                                     ),
                                     modifier = Modifier
                                         .weight(1f)
@@ -616,7 +616,7 @@ fun RestTimerDialog(
                                     Text(
                                         text = label,
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = if (isSelected) MintGreen else TextWhite
+                                        color = if (isSelected) ElectricCyan else TextWhite
                                     )
                                 }
                             }

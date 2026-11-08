@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
@@ -105,7 +106,6 @@ import com.example.ui.components.HomePhotoWidget
 import com.example.ui.components.HomeStatTile
 import com.example.ui.components.HomeWeeklyGoalWidget
 import com.example.ui.components.HomeWidget
-import com.example.ui.components.HomeWidgetManagerSheet
 import com.example.ui.components.HomeWidgetsEmptyState
 import com.example.ui.components.WorkoutStreakCard
 import com.example.ui.components.TrainingQuotes
@@ -145,6 +145,7 @@ fun HomeScreen(
     onOpenSavedRoutines: () -> Unit,
     onOpenProgress: () -> Unit,
     onOpenLogWorkout: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
@@ -196,7 +197,6 @@ fun HomeScreen(
     val widgetPhotoError by viewModel.widgetPhotoError.collectAsStateWithLifecycle()
     val fullscreenEnabled by viewModel.fullscreenEnabled.collectAsStateWithLifecycle()
     val streakFocusRequest by viewModel.homeStreakFocusRequest.collectAsStateWithLifecycle()
-    var showWidgetManager by remember { mutableStateOf(false) }
     var showGoalDialog by remember { mutableStateOf(false) }
 
     val widgetPhotoPicker = rememberLauncherForActivityResult(
@@ -635,14 +635,14 @@ fun HomeScreen(
                     )
                 }
                 IconButton(
-                    onClick = { showWidgetManager = true },
+                    onClick = onOpenSettings,
                     modifier = Modifier
                         .size(44.dp)
-                        .testTag("home_widget_manage_button")
+                        .testTag("home_settings_button")
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Tune,
-                        contentDescription = "Customize Home widgets",
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Settings",
                         tint = ElectricCyan,
                         modifier = Modifier.size(22.dp)
                     )
@@ -716,7 +716,7 @@ fun HomeScreen(
         // An empty Home is a valid configuration, not a broken one. The way back is right here.
         if (orderedWidgets.isEmpty()) {
             item(key = "home_widgets_empty") {
-                HomeWidgetsEmptyState(onOpenManager = { showWidgetManager = true })
+                HomeWidgetsEmptyState(onOpenManager = onOpenSettings)
             }
         }
 
@@ -768,60 +768,6 @@ fun HomeScreen(
         }
     }
 
-    // === Widget management ===
-    if (showWidgetManager) {
-        HomeWidgetManagerSheet(
-            enabled = orderedWidgets,
-            hasWeekRoutine = hasWeekWidget,
-            photoPath = widgetPhotoPath,
-            weeklyGoal = weeklyGoal,
-            photoError = widgetPhotoError,
-            onDismiss = {
-                showWidgetManager = false
-                viewModel.clearWidgetPhotoError()
-            },
-            onAdd = { widget ->
-                val next = HomeWidget.add(orderedWidgets, widget)
-                if (next != orderedWidgets) {
-                    val nextHidden = hiddenWidgetIds - widget.id
-                    orderedWidgets = next
-                    hiddenWidgetIds = nextHidden
-                    viewModel.setHomeWidgetConfig(next.map { it.id }, nextHidden)
-                }
-            },
-            onRemove = { widget ->
-                val next = HomeWidget.remove(orderedWidgets, widget)
-                if (next != orderedWidgets) {
-                    val nextHidden = hiddenWidgetIds + widget.id
-                    orderedWidgets = next
-                    hiddenWidgetIds = nextHidden
-                    viewModel.setHomeWidgetConfig(next.map { it.id }, nextHidden)
-                    if (widget == HomeWidget.PHOTO) {
-                        // The photo belongs to the widget, not to the athlete's gallery. Removing
-                        // the widget is the point at which its app-private copy stops being needed.
-                        viewModel.clearWidgetPhoto()
-                    }
-                }
-            },
-            onMove = { widget, delta ->
-                val next = HomeWidget.move(orderedWidgets, widget, delta)
-                if (next != orderedWidgets) {
-                    orderedWidgets = next
-                    viewModel.setHomeWidgetOrder(next.map { it.id })
-                }
-            },
-            onChoosePhoto = {
-                widgetPhotoPicker.launch(
-                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                )
-            },
-            onRemovePhoto = { viewModel.clearWidgetPhoto() },
-            onGoalChange = { viewModel.setHomeWidgetWeeklyGoal(it) },
-            fullscreenEnabled = fullscreenEnabled
-        )
-    }
-
-    // === Weekly goal customization from the card itself ===
     if (showGoalDialog) {
         WeeklyGoalDialog(
             goal = weeklyGoal,

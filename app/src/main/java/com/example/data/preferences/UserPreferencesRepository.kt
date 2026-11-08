@@ -147,6 +147,12 @@ class UserPreferencesRepository(private val context: Context) {
          */
         val ACCENT_COLOR = stringPreferencesKey("accent_color")
 
+        /** Custom accent colours the athlete saved, as a JSON array of #RRGGBB. */
+        val SAVED_CUSTOM_ACCENTS = stringPreferencesKey("saved_custom_accents")
+
+        /** Whether the optional accent-coloured settings preview animations are shown. */
+        val MATERIAL_EXPRESSIVE_3 = booleanPreferencesKey("material_expressive_3")
+
         /**
          * Set once the athlete has finished the first run onboarding, so the landing pages are shown
          * to a new install and never again.
@@ -292,7 +298,9 @@ class UserPreferencesRepository(private val context: Context) {
         /** Explicit permission for the AI Coach to retrieve personal workout data. */
         val aiWorkoutDataAccess: Boolean = false,
         /** Whether a completed workout automatically receives an AI comparison. */
-        val postWorkoutAiSummaries: Boolean = false
+        val postWorkoutAiSummaries: Boolean = false,
+        /** Whether Material Expressive 3 animations are enabled. */
+        val materialExpressive3: Boolean = false
     )
 
     val appSettingsFlow: Flow<AppSettings> = context.userDataStore.data.map { prefs ->
@@ -311,7 +319,8 @@ class UserPreferencesRepository(private val context: Context) {
                 ?: DEFAULT_AUTO_SAVE_INTERVAL_SECONDS).coerceIn(5, 300),
             autoCheckUpdatesOnStart = prefs[AUTO_CHECK_UPDATES_ON_START] ?: true,
             aiWorkoutDataAccess = prefs[AI_WORKOUT_DATA_ACCESS] ?: false,
-            postWorkoutAiSummaries = prefs[POST_WORKOUT_AI_SUMMARIES] ?: false
+            postWorkoutAiSummaries = prefs[POST_WORKOUT_AI_SUMMARIES] ?: false,
+            materialExpressive3 = prefs[MATERIAL_EXPRESSIVE_3] ?: false
         )
     }
 
@@ -451,6 +460,50 @@ class UserPreferencesRepository(private val context: Context) {
             val normalized = AccentColors.normalizeHex(hex) ?: return@edit
             prefs[ACCENT_COLOR] = normalized
         }
+    }
+
+    /** Custom accents saved by the athlete, oldest first and de-duplicated. */
+    val savedCustomAccentsFlow: Flow<List<String>> = context.userDataStore.data.map { prefs ->
+        val raw = prefs[SAVED_CUSTOM_ACCENTS].orEmpty()
+        if (raw.isBlank()) return@map emptyList()
+        runCatching {
+            val array = org.json.JSONArray(raw)
+            (0 until array.length()).mapNotNull { index ->
+                AccentColors.normalizeHex(array.optString(index))
+            }.distinct()
+        }.getOrElse { emptyList() }
+    }
+
+    suspend fun saveCustomAccent(hex: String) {
+        val normalized = AccentColors.normalizeHex(hex) ?: return
+        context.userDataStore.edit { prefs ->
+            val current = runCatching {
+                val array = org.json.JSONArray(prefs[SAVED_CUSTOM_ACCENTS].orEmpty())
+                (0 until array.length()).mapNotNull { index ->
+                    AccentColors.normalizeHex(array.optString(index))
+                }
+            }.getOrElse { emptyList() }
+            val updated = (current + normalized).distinct().takeLast(8)
+            prefs[SAVED_CUSTOM_ACCENTS] = org.json.JSONArray(updated).toString()
+        }
+    }
+
+    suspend fun removeCustomAccent(hex: String) {
+        val normalized = AccentColors.normalizeHex(hex) ?: return
+        context.userDataStore.edit { prefs ->
+            val current = runCatching {
+                val array = org.json.JSONArray(prefs[SAVED_CUSTOM_ACCENTS].orEmpty())
+                (0 until array.length()).mapNotNull { index ->
+                    AccentColors.normalizeHex(array.optString(index))
+                }
+            }.getOrElse { emptyList() }
+            prefs[SAVED_CUSTOM_ACCENTS] =
+                org.json.JSONArray(current.filterNot { it == normalized }).toString()
+        }
+    }
+
+    suspend fun setMaterialExpressive3(enabled: Boolean) {
+        context.userDataStore.edit { it[MATERIAL_EXPRESSIVE_3] = enabled }
     }
 
     /**

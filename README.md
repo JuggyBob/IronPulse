@@ -3,15 +3,15 @@
 [![License](https://img.shields.io/badge/license-source--available-lightgrey.svg)](LICENSE)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.2-7F52FF.svg)](https://kotlinlang.org)
 [![Android](https://img.shields.io/badge/Android-7.1%2B-3DDC84.svg)](https://developer.android.com)
-[![Release](https://img.shields.io/badge/release-v4.3.0-blue.svg)](https://github.com/JuggyBob/IronPulse/releases/tag/v4.3.0)
+[![Release](https://img.shields.io/badge/release-v4.4.0-blue.svg)](https://github.com/JuggyBob/IronPulse/releases/tag/v4.4.0)
 
 A dark-themed workout logger for strength training and calisthenics, built for the gym:
 offline by default, no account, no tracking, and a 1,300+ movement catalog that streams its
-animations on demand instead of shipping them in the APK. IronPulse 4.3.0 adds app-wide accent color
-customization: eight presets and a custom hue / HEX / RGB picker that recolor buttons, navigation,
-fields and active controls consistently. It keeps the 4.2.0 AI Coach tools and routine creation,
-scheduled streak and heatmap corrections, native launcher widgets, `.ironpulse` backups, four app
-themes, Liquid Glass navigation, fullscreen mode, and schedule-adherence streak.
+animations on demand instead of shipping them in the APK. IronPulse 4.4.0 reorganizes Settings into
+a category hub, gives Saved Routines its own **Routine** tab, adds the Exercise Progression page and
+five-day Session History paging, and redraws the interactive muscle map. It keeps the 4.3.0 accent
+customization, AI Coach tools, schedule-adherence streak, native launcher widgets, `.ironpulse`
+backups, four app themes, Liquid Glass navigation and fullscreen mode.
 
 <p align="center">
   <img src="docs/screenshots/01-home-dashboard.png" width="30%" alt="The Home dashboard" />
@@ -41,7 +41,7 @@ themes, Liquid Glass navigation, fullscreen mode, and schedule-adherence streak.
 ### Home
 - **Home is where the app opens.** It is the first screen after the onboarding and the first screen
   on every later launch, and it has a button of its own in the bottom navigation, between Progress
-  and Profile.
+  and Routine.
 - It answers the questions you have when you open a workout logger: what day it is, what is planned
   for today, whether you can start right now, what you have been doing, when you last weighed in,
   and how the week is going.
@@ -62,17 +62,18 @@ themes, Liquid Glass navigation, fullscreen mode, and schedule-adherence streak.
   animated flame that changes to ash when the streak is broken.
 - **This week** in three numbers: workouts, time and volume.
 - **Body weight**: the latest weigh-in, the change since the one before it, and a **Log Weight**
-  button that saves through the same weigh-in the Profile page uses.
+  button that saves through the same weigh-in the Progress page uses.
 - **Last workout** with its time and its set count, and a line for the day. Tap the card and it
   expands in place: exercise names in bold, one bullet per logged set with its numbers, and a
   **See full history** link. The arrow rotates as the panel opens.
-- **Customize Home from the tune button in the top-right corner.** The widget manager lists every
-  card on Home with what it shows, and every available card with a short description. Add a card,
-  remove one, or move it with **Up** and **Down**; removing a card only hides it, so the workouts,
-  weigh-ins and routines behind it are untouched. You can still long-press a card and drag it: the
-  other cards move aside live so the gap under your finger is the new order. Selection, order and
-  customizations are saved together and survive restarts, and a widget added by a later update is
-  inserted rather than dropped. Removing every card leaves a clear empty state with **Add widgets**.
+- **Open Settings from the gear in the top-right corner.** Home widget configuration lives in
+  **Settings → Appearance → Home Tab Widgets**. The manager lists every card on Home with what it
+  shows, and every available card with a short description. Add a card, remove one, or move it with
+  **Up** and **Down**; removing a card only hides it, so the workouts, weigh-ins and routines behind
+  it are untouched. You can still long-press a card and drag it: the other cards move aside live so
+  the gap under your finger is the new order. Selection, order and customizations are saved together
+  and survive restarts, and a widget added by a later update is inserted rather than dropped.
+  Removing every card leaves a clear empty state with **Add widgets**.
 - **Motivation Photo** puts a picture from your gallery on Home. It uses Android's photo picker,
   copies the image into app-private storage and centre-crops it to the card's 16:9 shape, so
   deleting the original from the gallery does not break it. Replace or remove it from the card or
@@ -80,8 +81,8 @@ themes, Liquid Glass navigation, fullscreen mode, and schedule-adherence streak.
   a broken image.
 - **Weekly Goal** counts this week's finished workouts against a target of 1 to 7, set from the
   card's tune button or the manager.
-- **Settings → Home Widgets → Restore Default Home Widgets** brings back the original eight-card
-  dashboard. The confirmation spells out exactly what is discarded — selection, order, weekly
+- **Settings → Appearance → Home Tab Widgets → Restore Default Home Widgets** brings back the
+  original eight-card dashboard. The confirmation spells out exactly what is discarded — selection, order, weekly
   target, photo and its app-private copy — and that it cannot be undone; **Cancel** leaves
   everything as it was. Workouts, weigh-ins, routines, the profile, the exercise library and every
   other setting are not touched. **Delete App Data** also clears the widget layout and saved widget
@@ -98,9 +99,9 @@ the matching Home card is hidden:
   a burnt-out flame. Tapping it opens Home and scrolls to the streak card when that card is visible.
 - **Weekly Workout Overview (4x2)** shows seven binary training days, today's scheduled workout (or
   rest day), and a **Start workout** / **Start another workout** action. The action uses the same
-  routine start and Saved Routines navigation as the in-app Today's Workout card.
+  routine start and Routine-tab navigation as the in-app Today's Workout card.
 - **Workout Profile (4x2)** shows name, weight, height and BMI from the same merged profile and BMI
-  calculation as the Profile tab. Tapping it opens Profile.
+  calculation as the Athlete Profile card. Tapping it opens Settings.
 
 Each widget has its own **Light**, **Dark**, **AMOLED Dark** or **IronPulse** appearance under
 **Settings -> Android Home Screen Widgets -> Widget appearance**. The choice is independent per
@@ -110,6 +111,9 @@ imports, app start, boot and timezone changes, with one lightweight midnight ala
 week.
 
 ### Routines
+- **Saved Routines lives in the Routine tab.** The bottom navigation includes a dedicated Routine
+  destination with the full existing list, cards, expand/collapse behavior, creation, editing,
+  copying, deletion and workout launch.
 - A routine is a **week of seven days**, one slot per weekday. A day with no exercise in it is a
   **rest day** — there is no separate rest flag to keep in step with the exercises.
 - The routine editor is a **week planner**: all seven weekdays are shown with how many exercises
@@ -135,6 +139,10 @@ Title Case vocabulary shared by the dataset, the editor and the detail dialog, s
 `Pectorals` mean the same thing everywhere. Instructions are shown as one step per sentence or line
 rather than as a paragraph. The animation GIFs are **streamed and cached**, not bundled, so the app
 stays small and an exercise you never open costs nothing.
+
+The body-part picker uses an interactive front/back anatomical map. Its muscle regions follow the
+shape of the underlying muscle groups, highlight with the current accent color, and filter the
+exercise list by the same `MusclePart` metadata the database already uses.
 
 <p align="center">
   <img src="docs/screenshots/02-exercise-detail.png" width="45%" alt="Exercise detail with animation, instructions and targets" />
@@ -176,32 +184,45 @@ stays small and an exercise you never open costs nothing.
 </p>
 
 ### Themes, Liquid Glass and fullscreen
-- **Four complete looks:** IronPulse, Dark, Light and AMOLED Dark. The selector is at the top of
-  Settings, applies immediately, persists across restarts, and falls back to IronPulse for unknown
-  stored values. Charts, activity heat maps, the muscle map, dialogs, buttons and the Liquid Glass
-  lens all draw from the same semantic palette.
-- **Accent color customization.** **Settings -> Preferences -> Accent Color** offers IronPulse Blue,
+- **Four complete looks:** IronPulse, Dark, Light and AMOLED Dark. The selector is in
+  **Settings → Appearance**, applies immediately, persists across restarts, and falls back to
+  IronPulse for unknown stored values. Charts, activity heat maps, the muscle map, dialogs, buttons
+  and the Liquid Glass lens all draw from the same semantic palette.
+- **Accent color customization.** **Settings → Appearance → Accent Color** offers IronPulse Blue,
   Purple, Cyan, Green, Orange, Red, Pink and Yellow, plus a **Custom Color** picker with a circular
-  hue ring, saturation/brightness square, live preview and synchronized HEX / R/G/B inputs. The
-  chosen accent applies immediately to primary buttons, the selected navigation item and tabs,
-  focused fields and cursors, checkboxes, sliders, progress indicators and selected chips. It
-  persists across restarts and theme changes, and the original IronPulse blue remains the default.
+  hue ring, saturation/brightness square, live preview and synchronized HEX / R/G/B inputs. Custom
+  colors can be saved and reused. The chosen accent applies immediately to primary buttons, the
+  selected navigation item and tabs, focused fields and cursors, checkboxes, sliders, progress
+  indicators, selected chips and Settings switches. It persists across restarts and theme changes,
+  and the original IronPulse blue remains the default.
+- **Material Expressive 3.** An optional appearance setting previews and enables the accent-colored
+  countdown-line and completed-set snake treatments. With it off, the existing animation behavior is
+  unchanged.
 - **Liquid Glass navigation.** The bottom dock floats over the page instead of sitting in an opaque
   reserved strip. On Android 12+ it captures and blurs the content behind it; Android 7.1-11 use the
   documented translucent fallback. Hold the dock to magnify neighbouring tabs, then release over one
-  to navigate. Normal taps still work, and releasing outside the dock does nothing.
-- **Fullscreen Mode** is on by default. It hides the status and navigation bars and reserves only the
-  actual display-cutout path on API 33+; turning it off restores both bars and `safeDrawing` insets.
-  The setting is independent of the theme and Liquid Glass.
+  to navigate. Normal taps still work, and releasing outside the dock does nothing. The setting lives
+  in **Settings → Appearance**.
+- **Fullscreen Mode** is on by default and lives in **Settings → Appearance**. It hides the status
+  and navigation bars and reserves only the actual display-cutout path on API 33+; turning it off
+  restores both bars and `safeDrawing` insets. The setting is independent of the theme and Liquid
+  Glass.
 - **Readable floating surfaces.** Settings popups, the Home widget manager and the dock use
   content-appropriate glass opacity so labels and controls stay legible in every theme.
 
 ### Progress
 - Volume, estimated one-rep max, max reps, training days and a 12-month activity heatmap built from
   local calendar days, so daylight-saving changes cannot move a workout to the wrong square.
+- **Body Weight Timeline and Weigh-in Logs** now sit below the Activity heatmap in Progress. The
+  chart, units, history, editing and persistence are unchanged; the full weigh-in list still opens
+  in place.
+- **Exercise Progression** is a dedicated page opened from Progress. It keeps the existing selected-
+  exercise dropdown, statistics, graphs and AI Monthly Summary, and adds a muscle illustration that
+  updates with the selected exercise between the dropdown and the summary card.
+- **Session History starts collapsed** and loads five distinct logged days at a time. The section
+  expands with an animated arrow, shows every set from those days, and exposes **Load More** for the
+  next five days without duplicating entries.
 - Per-exercise analysis with an interactive graph you can tap to inspect any point.
-- Weigh-ins on the Profile tab, plotted over time, feeding every body-weight calculation in the app.
-  The full history opens in place with a slide and shares one card, with a divider between entries.
 - Units follow your preference everywhere; the storage unit never changes and no history is ever
   rewritten when you switch.
 - **A set keeps the body weight it was done at.** Weighing in today does not rewrite what last
@@ -216,6 +237,10 @@ stays small and an exercise you never open costs nothing.
 ### AI (optional, bring your own provider)
 The app is fully usable without AI. Choose Google, OpenAI, Anthropic, OpenRouter, xAI or your own
 OpenAI-compatible endpoint, add a key where the service needs one, and you get:
+- **Two AI Coach pages:** AI Coach Chat and Routine Generator. Saved Routines is no longer an AI
+  Coach sub-tab; it lives in the Routine tab. Provider, key and model configuration are under
+  **Settings → AI Tools → API Key Setup**, and data-access toggles are under
+  **Settings → AI Tools → AI Data Access**.
 - Paste any workout in any format and get a structured routine back.
 - Describe a goal and get a plan built from movements the app actually has.
 - **The AI plans a week.** The generated routine is scheduled onto the days of the week: a weekday
@@ -261,21 +286,22 @@ OpenAI-compatible endpoint, add a key where the service needs one, and you get:
   <img src="docs/screenshots/05-ai-coach.png" width="45%" alt="AI coach chat" />
 </p>
 
-### Profile & metrics
-Body-weight timeline with a target reference line, BMI, goal strategy, and three read-only
-benchmark records (push-ups, pull-ups, single-leg squat) with the load each was done at. Those are
-handed to the AI so a progression is based on what you actually lifted.
+### Athlete profile & metrics
+The **Athlete Profile** card sits at the top of Settings and keeps the existing name, weight,
+height, BMI, goal strategy, benchmark records (push-ups, pull-ups, single-leg squat), pen icon and
+editing flow. The Body Weight Timeline and Weigh-in Logs moved to Progress below the Activity
+heatmap, where they feed every body-weight calculation.
 
 **Profile picture:** tap the avatar and pick one from your gallery. The copy is kept in the app's own
 storage, so it keeps working even after you delete the original from your gallery.
 
 <p align="center">
-  <img src="docs/screenshots/04-profile-metrics.png" width="45%" alt="Profile and metrics" />
+  <img src="docs/screenshots/04-profile-metrics.png" width="45%" alt="Athlete profile and metrics" />
 </p>
 
 ### Updates and what's new
-- **Check for updates** is in Settings. It looks at the official releases of this repository on
-  GitHub and tells you whether the build you are running is the newest one.
+- **Check for updates** is in **Settings → About**. It looks at the official releases of this
+  repository on GitHub and tells you whether the build you are running is the newest one.
 - **Check for updates on app start** (on by default) does the same lookup quietly at launch. If a
   newer release exists, a short prompt shows its version and changes with a **Download** button.
   **Close** brings it back next start; **Close and do not show again** suppresses it until the app
@@ -349,7 +375,7 @@ storage, so it keeps working even after you delete the original from your galler
 |---|---|
 | **Language** | Kotlin (100%) |
 | **UI** | Jetpack Compose + Material 3, portrait-only (locked in the manifest) |
-| **Architecture** | MVVM — Compose screens → `MainViewModel` → `FitnessRepository` → Room DAOs |
+| **Architecture** | MVVM with eight feature state holders — Compose screens → `MainViewModel` facade → controllers / `FitnessRepository` → Room DAOs |
 | **Database** | Room (SQLite), schema v15, versioned migrations |
 | **Preferences** | DataStore |
 | **Backup format** | `.ironpulse` ZIP with manifest, independent format/data-schema versions, SHA-256 checksums and forward migrations |
@@ -359,6 +385,8 @@ storage, so it keeps working even after you delete the original from your galler
 | **AI** | Provider-independent layer in `data/ai` (Google, OpenAI, Anthropic, OpenRouter, xAI, custom OpenAI-compatible endpoint), bring your own key |
 | **Updates** | GitHub Releases REST API (`ReleaseApi`), no token, the official repository only |
 | **Min SDK** | 24 (Android 7.1) · **Target SDK** 36 |
+
+The controller split and data flow are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
@@ -388,14 +416,14 @@ storage, so it keeps working even after you delete the original from your galler
    ```
 
 ### AI provider (optional)
-The app works fully without one. To enable the AI features, open **Profile & Settings → AI Fitness
-Coach**, choose a provider and save its key (a local OpenAI-compatible endpoint may not need one).
+The app works fully without one. To enable the AI features, open **Settings → AI Tools → API Key
+Setup**, choose a provider and save its key (a local OpenAI-compatible endpoint may not need one).
 Keys are stored on the device and are never committed to the repository. A build-time Google key
 can still be supplied through `.env`; copy `.env.example`, fill it in, and keep `.env` gitignored.
 
 ### Running the tests
 ```bash
-./gradlew testDebugUnitTest      # 750 JVM unit tests across 89 classes
+./gradlew testDebugUnitTest      # 756 JVM unit tests across 93 classes
 ./gradlew recordRoborazziDebug   # regenerate reference screenshots
 ```
 
@@ -408,7 +436,8 @@ Prebuilt APKs are attached to the
 
 | Version | File |
 |---|---|
-| **v4.3.0** | [`IronPulse4.3.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.3.0/IronPulse4.3.0-release.apk) |
+| **v4.4.0** | [`IronPulse-4.4.0.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.4.0/IronPulse-4.4.0.apk) |
+| v4.3.0 | [`IronPulse4.3.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.3.0/IronPulse4.3.0-release.apk) |
 | v4.2.0 | [`IronPulse4.2.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.2.0/IronPulse4.2.0-release.apk) |
 | v4.1.0 | [`IronPulse4.1.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.1.0/IronPulse4.1.0-release.apk) |
 | v4.0.0 | [`IronPulse4.0.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.0.0/IronPulse4.0.0-release.apk) |
@@ -441,10 +470,10 @@ IronPulse/
 │   │   │   │   ├── components/       # Dialogs, editors, charts, sheets
 │   │   │   │   ├── screens/          # Home, the other tabs and onboarding
 │   │   │   │   ├── theme/            # Colours, type, Material 3 theme
-│   │   │   │   └── viewmodel/        # MainViewModel — the single source of truth
+│   │   │   │   └── viewmodel/        # MainViewModel facade + eight feature controllers
 │   │   │   └── util/                 # Coil loaders, media store, timers
 │   │   └── res/                      # Icons, strings, themes, backup rules
-│   └── src/test/                     # 750 JVM tests (Robolectric + JUnit)
+│   └── src/test/                     # 756 JVM tests (Robolectric + JUnit)
 ├── docs/screenshots/                 # Images used by this README
 ├── gradle/wrapper/                   # Pinned Gradle distribution
 ├── .github/                          # Issue & PR templates, CI workflows

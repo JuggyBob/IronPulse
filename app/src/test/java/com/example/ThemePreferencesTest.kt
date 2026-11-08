@@ -112,6 +112,29 @@ class ThemePreferencesTest {
     }
 
     @Test
+    fun `custom accents persist and material expressive is independent`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val repo = UserPreferencesRepository(context)
+
+        repo.saveCustomAccent("#E85D75")
+        repo.saveCustomAccent("#4F8CFF")
+        repo.saveCustomAccent("#E85D75")
+        val saved = repo.savedCustomAccentsFlow.first()
+        assertEquals(listOf("#E85D75", "#4F8CFF"), saved)
+
+        val reopened = UserPreferencesRepository(context)
+        assertEquals(listOf("#E85D75", "#4F8CFF"), reopened.savedCustomAccentsFlow.first())
+
+        repo.removeCustomAccent("#E85D75")
+        assertEquals(listOf("#4F8CFF"), repo.savedCustomAccentsFlow.first())
+
+        repo.setMaterialExpressive3(true)
+        assertTrue(repo.appSettingsFlow.first().materialExpressive3)
+        repo.setMaterialExpressive3(false)
+        assertFalse(repo.appSettingsFlow.first().materialExpressive3)
+    }
+
+    @Test
     fun `every theme keeps an empty heatmap cell visible against its card surface`() {
         ThemeMode.values().forEach { mode ->
             val palette = AppPalettes.forMode(mode)

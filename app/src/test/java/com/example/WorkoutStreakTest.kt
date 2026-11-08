@@ -333,16 +333,23 @@ class WorkoutStreakTest {
 
     @Test
     fun `future planned days are shown but not counted yet`() {
+        // The heatmap is twelve complete weeks ending on the last day of the current week. On a
+        // Sunday that leaves no future cells, so anchoring the scenario to a Wednesday keeps this
+        // test about future-day status rather than about which weekday the suite happens to run on.
+        val wednesday = LocalDateKey.timestampOf(LocalDateKey.keyOf(2026, 11, 4))
+        val thursday = ActivityHeatmap.addDays(wednesday, 1)
+        val friday = ActivityHeatmap.addDays(wednesday, 2)
         val summary = WorkoutStreak.calculate(
-            schedule = listOf(planned(today), planned(day(1)), planned(day(2))),
+            schedule = listOf(planned(wednesday), planned(thursday), planned(friday)),
             sessions = emptyList(),
-            today = today
+            today = wednesday
         )
 
         assertEquals(0, summary.currentStreak)
-        assertEquals(StreakDayStatus.PENDING, summary.days.first { it.dayStart == today }.status)
-        assertEquals(StreakDayStatus.FUTURE, summary.days.first { it.dayStart == day(1) }.status)
-        assertEquals(today, summary.nextPlannedDay)
+        assertEquals(StreakDayStatus.PENDING, summary.days.first { it.dayStart == wednesday }.status)
+        assertEquals(StreakDayStatus.FUTURE, summary.days.first { it.dayStart == thursday }.status)
+        assertEquals(StreakDayStatus.FUTURE, summary.days.first { it.dayStart == friday }.status)
+        assertEquals(wednesday, summary.nextPlannedDay)
     }
 
     @Test

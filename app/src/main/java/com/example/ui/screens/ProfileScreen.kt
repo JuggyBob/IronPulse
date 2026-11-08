@@ -114,7 +114,6 @@ import com.example.data.model.ProfileMetrics
 import com.example.data.model.WeightUnit
 import com.example.data.model.WeightConversion
 import com.example.data.model.UserProfile
-import com.example.ui.components.SupportProjectCard
 import com.example.ui.components.ProgressionLineChart
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
@@ -232,26 +231,12 @@ fun ProfileScreen(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "Body weight timeline and physical stats",
+                        text = "Your profile and physical stats",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted
                     )
                 }
-                Spacer(modifier = Modifier.width(8.dp))
-                IconButton(
-                    onClick = onOpenSettings,
-                    modifier = Modifier
-                        .size(44.dp)
-                        .background(ElectricCyan.copy(alpha = 0.12f), CircleShape)
-                        .testTag("open_settings_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "Settings",
-                        tint = ElectricCyan,
-                        modifier = Modifier.size(22.dp)
-                    )
-                }
+
             }
         }
 
@@ -403,147 +388,6 @@ fun ProfileScreen(
                     )
                 }
             }
-        }
-
-        // Body Weight Timeline Graph Section
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = "BODY WEIGHT TIMELINE",
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = TextWhite
-                    )
-                    Text(
-                        text = "Target reference line in green",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextMuted
-                    )
-                }
-
-                Button(
-                    onClick = {
-                        // Prefilled in the athlete's unit; the value is converted back on save
-                        newWeightInput = WeightConversion.format(
-                            userProfile.currentWeightKg,
-                            weightUnit,
-                            withUnit = false
-                        )
-                        weightNoteInput = "Morning weigh-in"
-                        showLogWeightDialog = true
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
-                    shape = RoundedCornerShape(10.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    modifier = Modifier.testTag("log_weight_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = null,
-                        tint = OnAccent,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "Log Today",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = OnAccent
-                    )
-                }
-            }
-        }
-
-        // Weight Progression Line Chart
-        item {
-            // The stored kilograms are converted for the athlete's unit before they are drawn
-            ProgressionLineChart(
-                points = remember(bodyWeightChartPoints, weightUnit) {
-                    bodyWeightChartPoints.map { point ->
-                        point.copy(value = WeightConversion.fromKg(point.value, weightUnit))
-                    }
-                },
-                yAxisUnit = weightUnit.suffix,
-                lineColor = MintGreen,
-                referenceLineValue = WeightConversion.fromKg(userProfile.targetWeightKg, weightUnit),
-                referenceLineLabel = "Target ${WeightConversion.format(userProfile.targetWeightKg, weightUnit)}"
-            )
-        }
-
-        // Weight Entries Log List. The heading carries the count and no longer carries the toggle:
-        // the "view all" affordance lives in the summary box below it, next to the explanation of
-        // what it does. It used to sit up here, next to a heading, which put the button for the thing
-        // the athlete was looking at in a different place from the thing itself.
-        item {
-            Row(
-                // The Hide all button is only there when the list is open, but its 48 dp touch
-                // target must not push the heading down when it appears: the row keeps that height
-                // in both states, so the gap between the heading and the panel never changes.
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "WEIGH-IN LOGS (${weightLogs.size})",
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    color = TextWhite,
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("weigh_in_logs_heading")
-                )
-                // The way back out. Only offered once the list is open, because the way in is the
-                // button inside the summary box below: one affordance per state rather than the same
-                // control doing both jobs from two places.
-                if (weighInsExpanded) {
-                    TextButton(
-                        onClick = { weighInsExpanded = false },
-                        modifier = Modifier.testTag("toggle_weigh_in_logs_button")
-                    ) {
-                        Text(
-                            text = "Hide all",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = ElectricCyan
-                        )
-                    }
-                }
-            }
-        }
-
-        // One panel in one slot. The collapsed summary and the expanded log list used to be two
-        // separate branches of this list: the list occupied the summary's place, and each entry
-        // brought its own card and its own gap. Now the panel stays in the same slot and animates
-        // open, so the spacing above and below it never changes and the entries share one card.
-        if (weightLogs.isEmpty()) {
-            item {
-                Text(
-                    text = "No weigh-in logs recorded yet. Tap 'Log Today' above to start tracking.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = TextMuted,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("weigh_in_logs_empty")
-                )
-            }
-        } else {
-            item(key = "weigh_in_logs_panel", contentType = "weigh_in_logs_panel") {
-                WeighInLogsPanel(
-                    expanded = weighInsExpanded,
-                    logs = sortedWeightLogs,
-                    weightUnit = weightUnit,
-                    dateFormat = weightDateFormat,
-                    onShowAll = { weighInsExpanded = true },
-                    onDelete = { viewModel.deleteWeightLog(it) }
-                )
-            }
-        }
-
-        // Creator YouTube subscription support card
-        item {
-            SupportProjectCard()
         }
 
         // The build stamp, at the very bottom of the profile.

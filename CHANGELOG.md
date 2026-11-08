@@ -7,6 +7,128 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [4.4.0] - 2026-11-08
+
+IronPulse 4.4.0 is the Settings, Progress and routine-navigation release. It reorganizes the
+Settings screen into a category hub, gives Saved Routines its own bottom-navigation tab, adds the
+Exercise Progression page and five-day Session History paging, and redraws the interactive muscle
+map. It also completes the MainViewModel decoupling that moved eight feature areas into dedicated
+state holders. The Room schema remains at v15, so there is no database migration to run.
+
+### Added
+
+- **Routine tab.** Saved Routines now has a dedicated bottom-navigation destination, using a
+  checklist icon and retaining the existing Saved Routines cards, expand/collapse behaviour,
+  routine creation, editing, copying, deletion, weekday picking and workout launch.
+- **Settings hub.** Settings is now organized around six categories: Appearance, User Preferences,
+  AI Tools, Data, About and Support. Each category opens a dedicated subscreen with a consistent
+  slide-and-fade transition and Android Back support.
+- **Athlete Profile card at the top of Settings.** The existing card keeps its layout, pen icon,
+  metrics and editing flow, now reachable without a Profile tab.
+- **Appearance settings.** Theme, accent color, Android home-screen widgets, Home tab widget
+  configuration, Liquid Glass and Fullscreen mode now live in one Appearance subscreen.
+- **Saved custom accent colors.** Custom colors can be previewed, applied and saved for reuse
+  alongside the existing preset swatches. Saved custom accents persist across restarts and theme
+  changes.
+- **Material Expressive 3 option.** An optional, persisted appearance setting shows an
+  accent-colored animated preview of countdown lines and the completed-set snake treatment. When it
+  is off, the existing animation behavior is unchanged.
+- **AI Tools subscreens.** AI Data Access and API Key Setup are separate destinations. The three
+  existing data-access toggles and the complete provider/key/model card retain their original
+  behaviour.
+- **Data subscreens.** Exercise Database Options and Data Management are separate destinations,
+  including the existing export, import and Delete App Data safeguards.
+- **Exercise Progression page.** The selected-exercise dropdown, statistics, graphs, progression
+  calculations and AI Monthly Summary now live on a dedicated page opened from Progress.
+- **Selected-exercise muscle illustration.** The Exercise Progression page shows the anatomical map
+  between the exercise selector and the AI Monthly Summary, highlighting the exercise's actual
+  primary muscles and showing secondary muscles where the database provides them.
+- **Collapsible Session History with five-day paging.** Session History starts collapsed, loads the
+  first five distinct logged days, and exposes **Load More** for the next five. Pagination is backed
+  by a DAO query rather than loading the full history into memory.
+- **Animated Session History expansion.** The section expands with a height/fade transition and a
+  rotating indicator, and new pages append with a smooth size transition.
+
+### Improved
+
+- **Settings navigation and interaction.** The crowded single-page Settings layout is replaced by a
+  coherent hierarchy with per-subpage scrolling, preserved hub scroll position and accent-colored
+  active controls.
+- **Home entry points.** The Home widget-configuration button is replaced by a Settings gear, and
+  widget configuration now lives in Appearance.
+- **Anatomical muscle map.** The body illustration now uses a human silhouette with separated arms,
+  hands and legs, correctly shaped pectorals, deltoids, arms, forearms, abdominals, obliques,
+  quadriceps, shins, trapezius, lats, erector spinae, glutes, hamstrings and calves. Muscle regions
+  are defined once per side and mirrored once, eliminating the overlapping doubled ovals.
+- **Muscle highlighting.** Resting muscles use the neutral theme palette; selected muscles use the
+  current accent, with an accent-derived outline that adapts to light and dark themes. Interactive
+  chest, back and leg filtering was re-tested.
+- **Progress layout.** Body Weight Timeline and Weigh-in Logs now sit below the Activity heatmap,
+  preserving the existing chart, units, history, editing and persistence.
+- **Profile cleanup.** The Profile tab is gone; the athlete profile card lives in Settings and body
+  weight/weigh-in history lives in Progress.
+- **AI Coach selector.** The selector now has exactly two evenly weighted, centered pages: AI Coach
+  Chat and Routine Generator. The existing animated underline and transitions are preserved.
+- **About ordering.** About IronPulse, Check for updates and the startup update toggle now appear in
+  the requested order inside the About subscreen.
+- **Home and Settings accessibility.** The Home gear and Settings category rows use the existing
+  IronPulse iconography, card styling and accent behavior in both Liquid Glass states.
+
+### Changed
+
+- **Profile is replaced by Routine in the bottom navigation.** The old Profile destination was
+  removed. Routine contains the complete existing Saved Routines interface as its primary content.
+- **Saved Routines moved out of AI Coach.** AI Coach now contains only AI Coach Chat and Routine
+  Generator; the Saved Routines tab and its obsolete tab-request state were removed.
+- **Home Saved Routines navigation.** The Home Saved Routines card and the Android widget
+  Saved Routines action now open the Routine tab.
+- **Profile widget action.** The Workout Profile launcher widget now opens Settings, where the
+  Athlete Profile card lives.
+- **AI generation completion.** Saving a generated routine now routes to the Routine tab through the
+  same callback instead of switching the AI Coach sub-tab.
+- **Docs and project metadata** now describe the Settings hierarchy, Routine tab, Progress
+  relocation and 4.4.0 release.
+
+### Fixed
+
+- **Doubled muscle-map shapes.** Abs, biceps and leg groups were being drawn twice because paths
+  already containing both sides were mirrored again. Each region now has one authoritative path per
+  side.
+- **Stale muscle-map tap callback.** The tap handler now observes the latest selection callback, so
+  selecting the same muscle twice reliably deselects it in editable callers.
+- **Date-dependent streak test.** The future-planned-day test no longer assumes tomorrow is always
+  inside the twelve-week heatmap; it uses a fixed midweek anchor and assert future days on every run
+  day. The streak calculation itself was unchanged.
+- **Legacy and future streak behavior** remains covered by the existing schedule, rest-day, missed-
+  day, timezone and daylight-saving tests.
+
+### Architectural Improvements
+
+- **MainViewModel decoupling.** Eight feature responsibilities were extracted from the 5,221-line
+  ViewModel into dedicated state holders: `RestTimerController`, `AppUpdateController`,
+  `DataTransferController`, `AiConfigurationController`, `HomeDashboardController`,
+  `ProgressAnalyticsController`, `QuickWorkoutSessionController` and
+  `RoutineWorkoutSessionController`.
+- **Compatibility facade.** `MainViewModel` remains the application-level facade and preserves the
+  existing UI-facing `StateFlow` types, sharing modes, initial values, coroutine scopes and observable
+  ordering. Screens continue to consume the same state and actions.
+- **Separation of concerns.** Rest timers, updates, backup/transfer, AI configuration, Home
+  derivation, progress derivation, quick workouts and routine workouts now have explicit owners
+  instead of sharing one implementation block.
+- **Database access.** Session History pagination adds read-only DAO/repository methods for distinct
+  logged days and does not alter stored history or persistence semantics.
+
+### Other Changes
+
+- `versionCode = 12`, `versionName = "4.4.0"`.
+- Room schema remains **v15**; no migration is required for this release.
+- No application ID, package name or signing configuration changes.
+- The unit suite now reports **756 tests across 93 classes**, all passing.
+- This release includes no weekly Schedule or Plan restructuring, no single-workout routine
+  migration and no workout-screen redesign.
+
+---
+
 ## [4.3.0] - 2026-11-06
 
 IronPulse 4.3.0 adds app-wide accent color customization and carries the 4.2.x workout, streak,
@@ -869,7 +991,8 @@ Entries are grouped under **Added**, **Changed**, **Deprecated**, **Removed**, *
 **Security**, each newest first. Versions follow [SemVer](https://semver.org/): bump the patch for a
 fix, the minor for a feature, the major for a breaking change.
 
-[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v4.3.0...HEAD
+[Unreleased]: https://github.com/JuggyBob/IronPulse/compare/v4.4.0...HEAD
+[4.4.0]: https://github.com/JuggyBob/IronPulse/compare/v4.3.0...v4.4.0
 [4.3.0]: https://github.com/JuggyBob/IronPulse/compare/v4.2.0...v4.3.0
 [4.2.0]: https://github.com/JuggyBob/IronPulse/compare/v4.1.0...v4.2.0
 [4.1.0]: https://github.com/JuggyBob/IronPulse/compare/v4.0.0...v4.1.0

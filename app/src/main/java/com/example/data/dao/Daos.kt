@@ -435,6 +435,39 @@ interface WorkoutDao {
     @Query("SELECT * FROM logged_sets WHERE exerciseName = :exerciseName ORDER BY timestamp ASC, id ASC")
     suspend fun getSetsForExerciseList(exerciseName: String): List<LoggedSet>
 
+    /**
+     * One page of history by distinct local calendar day. Each page returns every set of the
+     * selected days, ordered chronologically, instead of loading the entire exercise history.
+     */
+    @Query(
+        """
+        SELECT * FROM logged_sets
+        WHERE exerciseName = :exerciseName
+          AND date(timestamp / 1000, 'unixepoch', 'localtime') IN (
+              SELECT date(timestamp / 1000, 'unixepoch', 'localtime')
+              FROM logged_sets
+              WHERE exerciseName = :exerciseName
+              GROUP BY date(timestamp / 1000, 'unixepoch', 'localtime')
+              ORDER BY date(timestamp / 1000, 'unixepoch', 'localtime') ASC
+              LIMIT :limitDays OFFSET :offsetDays
+          )
+        ORDER BY timestamp ASC, id ASC
+        """
+    )
+    suspend fun getSetsForExerciseHistoryPage(
+        exerciseName: String,
+        limitDays: Int,
+        offsetDays: Int
+    ): List<LoggedSet>
+
+    @Query(
+        """
+        SELECT COUNT(DISTINCT date(timestamp / 1000, 'unixepoch', 'localtime'))
+        FROM logged_sets WHERE exerciseName = :exerciseName
+        """
+    )
+    suspend fun countExerciseHistoryDays(exerciseName: String): Int
+
     @Query("SELECT * FROM logged_sets ORDER BY timestamp DESC")
     fun getAllCompletedSets(): Flow<List<LoggedSet>>
 

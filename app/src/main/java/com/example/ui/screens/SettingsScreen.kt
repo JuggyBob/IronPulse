@@ -2,14 +2,26 @@ package com.example.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,6 +43,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,6 +52,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
@@ -96,7 +110,10 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
@@ -124,6 +141,10 @@ import com.example.data.ai.AiToolMode
 import com.example.data.model.UserProfile
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.ui.components.AccentColorPickerDialog
+import com.example.ui.components.AthleteProfileCard
+import com.example.ui.components.HomeWidget
+import com.example.ui.components.HomeWidgetManagerSheet
+import com.example.ui.components.SupportProjectCard
 import com.example.ui.components.ProgressionLineChart
 import com.example.ui.components.AboutDialog
 import com.example.ui.components.UpdateDialog
@@ -149,11 +170,28 @@ import com.example.ui.viewmodel.MainViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.PI
+import kotlin.math.sin
 
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
+
+/** The destinations in the reorganised Settings hub. */
+private enum class SettingsPage(val title: String, val subtitle: String, val depth: Int) {
+    HUB("Settings", "Your account, appearance, tools and data", 0),
+    APPEARANCE("Appearance", "Theme, accent colour, glass, widgets and animation", 1),
+    USER_PREFERENCES("User Preferences", "Units, week start, autosave, rest alerts and demos", 1),
+    AI_TOOLS("AI Tools", "Data access and provider credentials", 1),
+    AI_DATA_ACCESS("AI Data Access", "Choose what the AI Coach may read", 2),
+    API_KEY_SETUP("API Key Setup", "Provider, key, endpoint and model", 2),
+    DATA("Data", "Exercise database and app data", 1),
+    EXERCISE_DATABASE("Exercise Database Options", "Library maintenance", 2),
+    DATA_MANAGEMENT("Data Management", "Backup, restore and deletion", 2),
+    ABOUT("About", "Version, updates and release notes", 1),
+    SUPPORT("Support", "Ways to support IronPulse", 1)
+}
 
 /**
  * Settings page, opened from the gear icon in the top right corner of the profile tab.
@@ -176,6 +214,37 @@ fun SettingsScreen(
     val dataTransferState by viewModel.dataTransferState.collectAsStateWithLifecycle()
     val aiWorkoutDataAccess by viewModel.aiWorkoutDataAccess.collectAsStateWithLifecycle()
     val postWorkoutAiSummaries by viewModel.postWorkoutAiSummaries.collectAsStateWithLifecycle()
+    val savedCustomAccents by viewModel.savedCustomAccents.collectAsStateWithLifecycle()
+    val widgetConfig by viewModel.homeWidgetConfig.collectAsStateWithLifecycle()
+    val widgetPhotoPath by viewModel.homeWidgetPhotoPath.collectAsStateWithLifecycle()
+    val weeklyGoal by viewModel.homeWidgetWeeklyGoal.collectAsStateWithLifecycle()
+    val widgetPhotoError by viewModel.widgetPhotoError.collectAsStateWithLifecycle()
+    val activeRoutine by viewModel.activeRoutine.collectAsStateWithLifecycle()
+    val activeRoutineDays by viewModel.activeRoutineDays.collectAsStateWithLifecycle()
+    val fullscreenEnabled by viewModel.fullscreenEnabled.collectAsStateWithLifecycle()
+    var showWidgetManager by remember { mutableStateOf(false) }
+    val widgetPhotoPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri -> if (uri != null) viewModel.importWidgetPhoto(uri) }
+
+    var settingsPage by remember { mutableStateOf(SettingsPage.HUB) }
+    val hubListState = rememberLazyListState()
+    val subListState = rememberLazyListState()
+    LaunchedEffect(settingsPage) {
+        if (settingsPage != SettingsPage.HUB) subListState.scrollToItem(0)
+    }
+    val goBack: () -> Unit = {
+        settingsPage = when (settingsPage) {
+            SettingsPage.AI_DATA_ACCESS, SettingsPage.API_KEY_SETUP -> SettingsPage.AI_TOOLS
+            SettingsPage.EXERCISE_DATABASE, SettingsPage.DATA_MANAGEMENT -> SettingsPage.DATA
+            SettingsPage.HUB -> {
+                onBack()
+                SettingsPage.HUB
+            }
+            else -> SettingsPage.HUB
+        }
+    }
+    BackHandler(enabled = settingsPage != SettingsPage.HUB) { goBack() }
 
     var showAiAccessInfoDialog by remember { mutableStateOf(false) }
     var showClearDataDialog by remember { mutableStateOf(false) }
@@ -362,7 +431,24 @@ fun SettingsScreen(
     }
 
 
+    AnimatedContent(
+        targetState = settingsPage,
+        transitionSpec = {
+            val forward = targetState.depth >= initialState.depth
+            (
+                slideInHorizontally(animationSpec = tween(220)) { width ->
+                    if (forward) width / 6 else -width / 6
+                } + fadeIn(tween(180))
+                ) togetherWith (
+                slideOutHorizontally(animationSpec = tween(220)) { width ->
+                    if (forward) -width / 6 else width / 6
+                } + fadeOut(tween(160))
+                )
+        },
+        label = "settings_page_transition"
+    ) { page ->
     LazyColumn(
+        state = if (page == SettingsPage.HUB) hubListState else subListState,
         modifier = modifier
             .fillMaxSize()
             .background(DarkBg)
@@ -381,7 +467,7 @@ fun SettingsScreen(
                     modifier = Modifier
                         .size(42.dp)
                         .background(ElectricCyan.copy(alpha = 0.12f), CircleShape)
-                        .clickable { onBack() }
+                        .clickable { goBack() }
                         .testTag("settings_back_button"),
                     contentAlignment = Alignment.Center
                 ) {
@@ -395,12 +481,12 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Settings",
+                        text = page.title,
                         style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
                         color = TextWhite
                     )
                     Text(
-                        text = "Units, alerts, AI and your data",
+                        text = page.subtitle,
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted
                     )
@@ -408,278 +494,84 @@ fun SettingsScreen(
             }
         }
 
-        // ==================== PREFERENCES ====================
-        item {
-            val shareAthleteDataWithAi by viewModel.shareAthleteDataWithAi.collectAsStateWithLifecycle()
-    val autoplayExerciseDemos by viewModel.autoplayExerciseDemos.collectAsStateWithLifecycle()
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("preferences_card"),
-                colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                shape = RoundedCornerShape(16.dp),
-                border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Tune,
-                            contentDescription = null,
-                            tint = ElectricCyan,
-                            modifier = Modifier.size(20.dp)
+        if (page == SettingsPage.HUB) {
+            item {
+                AthleteProfileCard(viewModel = viewModel)
+            }
+            item {
+                SettingsCategoryHub(
+                    onOpen = { settingsPage = it }
+                )
+            }
+        } else if (page == SettingsPage.APPEARANCE) {
+            item {
+                AppearanceSettingsCard(
+                    viewModel = viewModel,
+                    appSettings = appSettings,
+                    savedCustomAccents = savedCustomAccents,
+                    onOpenCustom = { showAccentColorPicker = true }
+                )
+            }
+            item {
+                HomeTabWidgetConfigurationCard(
+                    onConfigure = { showWidgetManager = true }
+                )
+            }
+        } else if (page == SettingsPage.USER_PREFERENCES) {
+            item {
+                UserPreferencesSettingsCard(
+                    viewModel = viewModel,
+                    appSettings = appSettings
+                )
+            }
+        } else if (page == SettingsPage.AI_TOOLS) {
+            item {
+                SettingsCategoryHub(
+                    onOpen = { settingsPage = it },
+                    rows = listOf(
+                        SettingsCategory(
+                            title = "AI Data Access",
+                            subtitle = "What the coach may read and when it may write a summary",
+                            icon = Icons.Default.Key,
+                            page = SettingsPage.AI_DATA_ACCESS
+                        ),
+                        SettingsCategory(
+                            title = "API Key Setup",
+                            subtitle = "Provider, API key, endpoint and model",
+                            icon = Icons.Default.Code,
+                            page = SettingsPage.API_KEY_SETUP
                         )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Preferences",
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = TextWhite
+                    )
+                )
+            }
+        } else if (page == SettingsPage.DATA) {
+            item {
+                SettingsCategoryHub(
+                    onOpen = { settingsPage = it },
+                    rows = listOf(
+                        SettingsCategory(
+                            title = "Exercise Database Options",
+                            subtitle = "Revert the catalog without losing your own exercises",
+                            icon = Icons.Default.TrendingUp,
+                            page = SettingsPage.EXERCISE_DATABASE
+                        ),
+                        SettingsCategory(
+                            title = "Data Management",
+                            subtitle = "Export, restore and delete app data",
+                            icon = Icons.Default.FileDownload,
+                            page = SettingsPage.DATA_MANAGEMENT
                         )
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    ThemeSelector(
-                        selected = appSettings.themeMode,
-                        onSelect = { viewModel.setThemeMode(it) }
                     )
-
-                    Spacer(modifier = Modifier.height(14.dp))
-                    HorizontalDivider(color = DarkBorder)
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    AccentColorSelector(
-                        selectedHex = appSettings.accentColorHex,
-                        defaultColor = AppPalettes.forMode(appSettings.themeMode).accentPrimary,
-                        onSelectPreset = { preset ->
-                            // The default preset clears the override so the original per-theme
-                            // IronPulse blue is preserved exactly, including the light theme's
-                            // darker #0969DA default.
-                            viewModel.setAccentColor(
-                                if (preset.isDefault) null else preset.hex
-                            )
-                        },
-                        onOpenCustom = { showAccentColorPicker = true }
-                    )
-
-                    Spacer(modifier = Modifier.height(14.dp))
-                    HorizontalDivider(color = DarkBorder)
-                    Spacer(modifier = Modifier.height(2.dp))
-
-                    Text(
-                        text = "Weight unit",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = TextWhite
-                    )
-                    Text(
-                        text = "Used by every weight, chart and AI calculation.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextMuted
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(DarkBg, RoundedCornerShape(10.dp))
-                            .padding(3.dp),
-                        horizontalArrangement = Arrangement.spacedBy(3.dp)
-                    ) {
-                        listOf("kg", "lb").forEach { option ->
-                            val isSelected = appSettings.unit.equals(option, ignoreCase = true)
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .background(
-                                        if (isSelected) ElectricCyan else Color.Transparent,
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .clickable { viewModel.setWeightUnit(option) }
-                                    .padding(vertical = 10.dp)
-                                    .testTag("settings_unit_${option}"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = if (option == "kg") "Kilograms (kg)" else "Pounds (lb)",
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                    ),
-                                    color = if (isSelected) OnAccent else TextMuted
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-                    HorizontalDivider(color = DarkBorder)
-                    Spacer(modifier = Modifier.height(2.dp))
-
-                    // Where the week begins. It decides the order the seven days are shown in and
-                    // where a sequence of workouts with no day of its own starts. It never moves a
-                    // workout that already sits on a weekday.
-                    Text(
-                        text = "Week starts on",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = TextWhite
-                    )
-                    Text(
-                        text = "Used by the week planner, the weekly summaries and the Home schedule. " +
-                            "A workout already on a day stays on that day.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextMuted
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(DarkBg, RoundedCornerShape(10.dp))
-                            .padding(3.dp),
-                        horizontalArrangement = Arrangement.spacedBy(3.dp)
-                    ) {
-                        listOf(true to "Monday", false to "Sunday").forEach { (option, label) ->
-                            val isSelected = appSettings.weekStartsOnMonday == option
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .background(
-                                        if (isSelected) ElectricCyan else Color.Transparent,
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .clickable { viewModel.setWeekStartsOnMonday(option) }
-                                    .padding(vertical = 10.dp)
-                                    .testTag("settings_week_start_${label.lowercase()}"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = label,
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                    ),
-                                    color = if (isSelected) OnAccent else TextMuted
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-                    HorizontalDivider(color = DarkBorder)
-                    Spacer(modifier = Modifier.height(2.dp))
-
-                    // The workout in progress is written to disk on this cadence. A short interval
-                    // costs almost nothing and loses less work; a long one keeps a phone in a
-                    // pocket quieter. The athlete knows which matters more for their session.
-                    Text(
-                        text = "Autosave interval",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                        color = TextWhite
-                    )
-                    Text(
-                        text = "How often the workout in progress is saved. The timer in the workout " +
-                            "flashes its cloud on every save.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextMuted
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(DarkBg, RoundedCornerShape(10.dp))
-                            .padding(3.dp),
-                        horizontalArrangement = Arrangement.spacedBy(3.dp)
-                    ) {
-                        UserPreferencesRepository.AUTO_SAVE_INTERVAL_OPTIONS.forEach { seconds ->
-                            val isSelected = appSettings.autoSaveIntervalSeconds == seconds
-                            val label = if (seconds < 60) "${seconds}s" else "${seconds / 60}m"
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .background(
-                                        if (isSelected) MintGreen else Color.Transparent,
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .clickable { viewModel.setAutoSaveIntervalSeconds(seconds) }
-                                    .padding(vertical = 10.dp)
-                                    .testTag("settings_autosave_${seconds}s"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = label,
-                                    style = MaterialTheme.typography.bodyMedium.copy(
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                    ),
-                                    color = if (isSelected) OnAccent else TextMuted
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-                    HorizontalDivider(color = DarkBorder)
-                    Spacer(modifier = Modifier.height(2.dp))
-
-                    SettingSwitchRow(
-                        title = "Rest timer vibration",
-                        subtitle = "Vibrate when a rest period finishes.",
-                        checked = appSettings.restTimerVibration,
-                        onCheckedChange = { viewModel.setRestTimerVibration(it) },
-                        tag = "settings_rest_timer_vibration"
-                    )
-
-                    SettingSwitchRow(
-                        title = "Rest timer sound",
-                        subtitle = "Play a sound when a rest period finishes.",
-                        checked = appSettings.restTimerSound,
-                        onCheckedChange = { viewModel.setRestTimerSound(it) },
-                        tag = "settings_rest_timer_sound"
-                    )
-
-                    // Exercise demos are streamed, so autoplay is a data cost, not just a taste one.
-                    // Off means every animation waits for a tap.
-                    SettingSwitchRow(
-                        title = "Autoplay exercise demos",
-                        subtitle = if (autoplayExerciseDemos) {
-                            "Exercise animations start as soon as you open one."
-                        } else {
-                            "Exercise animations only play after you tap them."
-                        },
-                        checked = autoplayExerciseDemos,
-                        onCheckedChange = { viewModel.setAutoplayExerciseDemos(it) },
-                        tag = "settings_autoplay_exercise_demos"
-                    )
-
-                    // The visual finish. It also owns the bottom bar magnification lens: turning it
-                    // off removes the glass surfaces and the lens together, leaving navigation
-                    // exactly as it was.
-                    SettingSwitchRow(
-                        title = "Liquid Glass",
-                        subtitle = if (appSettings.liquidGlassEnabled) {
-                            "Translucent glass surfaces are on. Press and hold the navigation bar to magnify it."
-                        } else {
-                            "Glass surfaces and the navigation bar magnifier are off. The original look is restored."
-                        },
-                        checked = appSettings.liquidGlassEnabled,
-                        onCheckedChange = { viewModel.setLiquidGlassEnabled(it) },
-                        tag = "settings_liquid_glass"
-                    )
-
-                    // Optional because a punch-hole, notch or conventional three-button navigation
-                    // bar can make an always-immersive layout feel cramped. On by default.
-                    SettingSwitchRow(
-                        title = "Fullscreen Mode",
-                        subtitle = "Hide system status and navigation bars to maximize available screen space.",
-                        checked = appSettings.fullscreenEnabled,
-                        onCheckedChange = { viewModel.setFullscreenEnabled(it) },
-                        tag = "settings_fullscreen_mode"
-                    )
-
-                    Spacer(modifier = Modifier.height(14.dp))
-                    HorizontalDivider(color = DarkBorder)
-                    Spacer(modifier = Modifier.height(2.dp))
-
-                }
+                )
+            }
+        } else if (page == SettingsPage.SUPPORT) {
+            item {
+                SupportProjectCard()
             }
         }
 
         // AI data access and automatic summaries.
-        item {
+        if (page == SettingsPage.AI_DATA_ACCESS) item {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -772,7 +664,7 @@ fun SettingsScreen(
         }
 
         // AI provider settings card
-        item {
+        if (page == SettingsPage.API_KEY_SETUP) item {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1196,7 +1088,7 @@ fun SettingsScreen(
         }
 
         // The app itself: the version that is running, the update checker and the release notes.
-        item {
+        if (page == SettingsPage.ABOUT) item {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1228,6 +1120,42 @@ fun SettingsScreen(
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
+
+                    // About and what's new.
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showAboutDialog = true
+                                viewModel.loadAboutInfo()
+                            }
+                            .padding(vertical = 10.dp)
+                            .testTag("about_row"),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.NewReleases,
+                            contentDescription = null,
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "About IronPulse",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                                color = TextWhite
+                            )
+                            Text(
+                                text = "The version, and what is new in the official releases",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted
+                            )
+                        }
+                    }
+
+                    androidx.compose.material3.HorizontalDivider(color = DarkBorder)
+                    Spacer(modifier = Modifier.height(2.dp))
 
                     // Check for updates.
                     Row(
@@ -1262,6 +1190,7 @@ fun SettingsScreen(
                         }
                     }
 
+
                     // The startup half of the update checker. The manual entry above always works;
                     // this decides whether opening the app is enough to hear about a release.
                     SettingSwitchRow(
@@ -1276,48 +1205,14 @@ fun SettingsScreen(
                         tag = "settings_auto_check_updates"
                     )
 
-                    Spacer(modifier = Modifier.height(6.dp))
-                    androidx.compose.material3.HorizontalDivider(color = DarkBorder)
-                    Spacer(modifier = Modifier.height(6.dp))
 
-                    // About and what's new.
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                showAboutDialog = true
-                                viewModel.loadAboutInfo()
-                            }
-                            .padding(vertical = 10.dp)
-                            .testTag("about_row"),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.NewReleases,
-                            contentDescription = null,
-                            tint = ElectricCyan,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "About IronPulse",
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                                color = TextWhite
-                            )
-                            Text(
-                                text = "The version, and what is new in the official releases",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextMuted
-                            )
-                        }
-                    }
+
                 }
             }
         }
 
         // Revert the exercise catalog Card
-        item {
+        if (page == SettingsPage.EXERCISE_DATABASE) item {
             RevertCatalogCard(
                 onRevert = { keepUser, keepAi -> viewModel.revertCatalogToDatabase(keepUser, keepAi) }
             )
@@ -1325,7 +1220,7 @@ fun SettingsScreen(
 
         // Home widget layout. This is configuration, not user data: resetting it restores the
         // stock dashboard and leaves every workout, weigh-in, routine and profile row alone.
-        item {
+        if (page == SettingsPage.APPEARANCE) item {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1410,7 +1305,7 @@ fun SettingsScreen(
         }
 
         // Native launcher widgets have their own independent appearance settings.
-        item {
+        if (page == SettingsPage.APPEARANCE) item {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1457,7 +1352,7 @@ fun SettingsScreen(
         }
 
         // Data Management: portable backup/restore plus the destructive reset.
-        item {
+        if (page == SettingsPage.DATA_MANAGEMENT) item {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1730,6 +1625,7 @@ fun SettingsScreen(
                 }
             }
         }
+    }
     }
 
     if (showAiAccessInfoDialog) {
@@ -2658,16 +2554,645 @@ fun SettingsScreen(
         )
     }
 
+    if (showWidgetManager) {
+        var orderedWidgets by remember(widgetConfig) {
+            mutableStateOf(HomeWidget.resolve(widgetConfig.order, widgetConfig.hiddenIds))
+        }
+        var hiddenWidgetIds by remember(widgetConfig) {
+            mutableStateOf(widgetConfig.hiddenIds ?: HomeWidget.defaultHiddenIds)
+        }
+        HomeWidgetManagerSheet(
+            enabled = orderedWidgets,
+            hasWeekRoutine = activeRoutine != null && activeRoutineDays.isNotEmpty(),
+            photoPath = widgetPhotoPath,
+            weeklyGoal = weeklyGoal,
+            photoError = widgetPhotoError,
+            onDismiss = {
+                showWidgetManager = false
+                viewModel.clearWidgetPhotoError()
+            },
+            onAdd = { widget ->
+                val next = HomeWidget.add(orderedWidgets, widget)
+                if (next != orderedWidgets) {
+                    val nextHidden = hiddenWidgetIds - widget.id
+                    orderedWidgets = next
+                    hiddenWidgetIds = nextHidden
+                    viewModel.setHomeWidgetConfig(next.map { it.id }, nextHidden)
+                }
+            },
+            onRemove = { widget ->
+                val next = HomeWidget.remove(orderedWidgets, widget)
+                if (next != orderedWidgets) {
+                    val nextHidden = hiddenWidgetIds + widget.id
+                    orderedWidgets = next
+                    hiddenWidgetIds = nextHidden
+                    viewModel.setHomeWidgetConfig(next.map { it.id }, nextHidden)
+                }
+            },
+            onMove = { widget, offset ->
+                val next = HomeWidget.move(orderedWidgets, widget, offset)
+                if (next != orderedWidgets) {
+                    orderedWidgets = next
+                    viewModel.setHomeWidgetOrder(next.map { it.id })
+                }
+            },
+            onChoosePhoto = {
+                widgetPhotoPicker.launch(
+                    androidx.activity.result.PickVisualMediaRequest(
+                        ActivityResultContracts.PickVisualMedia.ImageOnly
+                    )
+                )
+            },
+            onRemovePhoto = { viewModel.clearWidgetPhoto() },
+            onGoalChange = { viewModel.setHomeWidgetWeeklyGoal(it) },
+            fullscreenEnabled = fullscreenEnabled
+        )
+    }
+
     if (showAccentColorPicker) {
         AccentColorPickerDialog(
             initialColor = AccentColors.parseHex(appSettings.accentColorHex)
                 ?: AppPalettes.forMode(appSettings.themeMode).accentPrimary,
             onDismiss = { showAccentColorPicker = false },
             onApply = { color ->
-                viewModel.setAccentColor(AccentColors.toHex(color))
+                val hex = AccentColors.toHex(color)
+                viewModel.saveCustomAccent(hex)
+                viewModel.setAccentColor(hex)
                 showAccentColorPicker = false
             }
         )
+    }
+}
+
+@Composable
+private fun HomeTabWidgetConfigurationCard(onConfigure: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("home_tab_widget_configuration_card"),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(16.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Widgets,
+                    contentDescription = null,
+                    tint = ElectricCyan,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Home Tab Widgets",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = TextWhite
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Choose which cards appear on Home, reorder them, restore removed cards, " +
+                    "set the weekly goal and personalize the motivation photo.",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextMuted
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = onConfigure,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("configure_home_tab_widgets"),
+                shape = RoundedCornerShape(10.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.65f)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = ElectricCyan)
+            ) {
+                Text("Configure Home widgets", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+private data class SettingsCategory(
+    val title: String,
+    val subtitle: String,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+    val page: SettingsPage
+)
+
+@Composable
+private fun SettingsCategoryHub(
+    onOpen: (SettingsPage) -> Unit,
+    rows: List<SettingsCategory> = listOf(
+        SettingsCategory(
+            title = "Appearance",
+            subtitle = "Theme, accent colour, Liquid Glass, widgets and animation",
+            icon = Icons.Default.Palette,
+            page = SettingsPage.APPEARANCE
+        ),
+        SettingsCategory(
+            title = "User Preferences",
+            subtitle = "Units, week start, autosave, rest alerts and demos",
+            icon = Icons.Default.Tune,
+            page = SettingsPage.USER_PREFERENCES
+        ),
+        SettingsCategory(
+            title = "AI Tools",
+            subtitle = "Data access and provider credentials",
+            icon = Icons.Default.Code,
+            page = SettingsPage.AI_TOOLS
+        ),
+        SettingsCategory(
+            title = "Data",
+            subtitle = "Exercise database, backup and deletion",
+            icon = Icons.Default.FileDownload,
+            page = SettingsPage.DATA
+        ),
+        SettingsCategory(
+            title = "About",
+            subtitle = "Version, updates and release notes",
+            icon = Icons.Default.Info,
+            page = SettingsPage.ABOUT
+        ),
+        SettingsCategory(
+            title = "Support",
+            subtitle = "Ways to support the project",
+            icon = Icons.Default.Subscriptions,
+            page = SettingsPage.SUPPORT
+        )
+    )
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("settings_category_hub"),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(16.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+    ) {
+        Column {
+            rows.forEachIndexed { index, row ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpen(row.page) }
+                        .padding(horizontal = 16.dp, vertical = 15.dp)
+                        .testTag(
+                            "settings_category_${row.title.lowercase(Locale.US).replace(" ", "_")}"
+                        ),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .background(ElectricCyan.copy(alpha = 0.12f), RoundedCornerShape(11.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = row.icon,
+                            contentDescription = null,
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(13.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = row.title,
+                            style = MaterialTheme.typography.bodyLarge.copy(
+                                fontWeight = FontWeight.SemiBold
+                            ),
+                            color = TextWhite
+                        )
+                        Text(
+                            text = row.subtitle,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = TextMuted,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                if (index != rows.lastIndex) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(start = 67.dp),
+                        color = DarkBorder
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppearanceSettingsCard(
+    viewModel: MainViewModel,
+    appSettings: UserPreferencesRepository.AppSettings,
+    savedCustomAccents: List<String>,
+    onOpenCustom: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("appearance_settings_card"),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(16.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Palette,
+                    contentDescription = null,
+                    tint = ElectricCyan,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Look & Feel",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = TextWhite
+                )
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            ThemeSelector(
+                selected = appSettings.themeMode,
+                onSelect = { viewModel.setThemeMode(it) }
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+            HorizontalDivider(color = DarkBorder)
+            Spacer(modifier = Modifier.height(12.dp))
+
+            AccentColorSelector(
+                selectedHex = appSettings.accentColorHex,
+                defaultColor = AppPalettes.forMode(appSettings.themeMode).accentPrimary,
+                onSelectPreset = { preset ->
+                    viewModel.setAccentColor(if (preset.isDefault) null else preset.hex)
+                },
+                onOpenCustom = onOpenCustom
+            )
+
+            if (savedCustomAccents.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "SAVED CUSTOM COLORS",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = TextMuted
+                )
+                Spacer(modifier = Modifier.height(7.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(9.dp)
+                ) {
+                    savedCustomAccents.forEach { hex ->
+                        val color = AccentColors.parseHex(hex) ?: ElectricCyan
+                        val selected = AccentColors.normalizeHex(appSettings.accentColorHex) == hex
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .clickable { viewModel.setAccentColor(hex) }
+                                .border(
+                                    width = if (selected) 2.dp else 1.dp,
+                                    color = if (selected) TextWhite else DarkBorder,
+                                    shape = CircleShape
+                                )
+                                .padding(3.dp)
+                                .testTag("saved_accent_${hex.removePrefix("#").lowercase(Locale.US)}"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(Modifier.fillMaxSize().background(color, CircleShape))
+                            if (selected) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = "Selected saved accent",
+                                    tint = AccentColors.contrastTextColor(color),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Tap a saved color to use it again.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted
+                )
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            HorizontalDivider(color = DarkBorder)
+            Spacer(modifier = Modifier.height(2.dp))
+
+            SettingSwitchRow(
+                title = "Liquid Glass",
+                subtitle = if (appSettings.liquidGlassEnabled) {
+                    "Translucent glass surfaces are on. Press and hold the navigation bar to magnify it."
+                } else {
+                    "Glass surfaces and the navigation bar magnifier are off. The original look is restored."
+                },
+                checked = appSettings.liquidGlassEnabled,
+                onCheckedChange = { viewModel.setLiquidGlassEnabled(it) },
+                tag = "settings_liquid_glass"
+            )
+
+            SettingSwitchRow(
+                title = "Fullscreen Mode",
+                subtitle = "Hide system status and navigation bars to maximize available screen space.",
+                checked = appSettings.fullscreenEnabled,
+                onCheckedChange = { viewModel.setFullscreenEnabled(it) },
+                tag = "settings_fullscreen_mode"
+            )
+
+            SettingSwitchRow(
+                title = "Material Expressive 3",
+                subtitle = if (appSettings.materialExpressive3) {
+                    "Continuous accent-coloured snake and line animations show set and timer progress."
+                } else {
+                    "Standard set indicators and timer display."
+                },
+                checked = appSettings.materialExpressive3,
+                onCheckedChange = { viewModel.setMaterialExpressive3(it) },
+                tag = "settings_material_expressive_3"
+            )
+
+            if (appSettings.materialExpressive3) {
+                Spacer(modifier = Modifier.height(6.dp))
+                MaterialExpressivePreview()
+            }
+        }
+    }
+}
+
+@Composable
+private fun MaterialExpressivePreview() {
+    val transition = rememberInfiniteTransition(label = "material_expressive_preview")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1800, easing = LinearEasing), RepeatMode.Restart),
+        label = "material_expressive_phase"
+    )
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(DarkBg, RoundedCornerShape(10.dp))
+            .border(1.dp, DarkBorder, RoundedCornerShape(10.dp))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            "COUNTDOWN LINES",
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+            color = TextMuted
+        )
+        Canvas(modifier = Modifier.fillMaxWidth().height(22.dp)) {
+            repeat(3) { index ->
+                var x = 0f
+                val base = size.height * (0.22f + index * 0.28f)
+                while (x <= size.width) {
+                    val y = base + sin(
+                        (x / size.width * 2.4f * PI.toFloat()) +
+                            phase * 2f * PI.toFloat() + index
+                    ) * 3.5f
+                    drawCircle(
+                        color = ElectricCyan.copy(alpha = 0.45f + index * 0.18f),
+                        radius = 1.5f,
+                        center = Offset(x, y)
+                    )
+                    x += 4f
+                }
+            }
+        }
+        Text(
+            "SET PROGRESS SNAKE",
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+            color = TextMuted
+        )
+        Canvas(modifier = Modifier.fillMaxWidth().height(18.dp)) {
+            val baseY = size.height / 2f
+            var x = 0f
+            while (x <= size.width) {
+                val y = baseY + sin(
+                    (x / size.width * 5f * PI.toFloat()) +
+                        phase * 2f * PI.toFloat()
+                ) * (size.height * 0.38f)
+                drawCircle(color = ElectricCyan, radius = 2.2f, center = Offset(x, y))
+                x += 5f
+            }
+        }
+    }
+}
+
+@Composable
+private fun UserPreferencesSettingsCard(
+    viewModel: MainViewModel,
+    appSettings: UserPreferencesRepository.AppSettings
+) {
+    val autoplayExerciseDemos by viewModel.autoplayExerciseDemos.collectAsStateWithLifecycle()
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("user_preferences_card"),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(16.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Tune,
+                    contentDescription = null,
+                    tint = ElectricCyan,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Training Preferences",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = TextWhite
+                )
+            }
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Text(
+                text = "Weight unit",
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = TextWhite
+            )
+            Text(
+                text = "Used by every weight, chart and AI calculation.",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DarkBg, RoundedCornerShape(10.dp))
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                listOf("kg", "lb").forEach { option ->
+                    val isSelected = appSettings.unit.equals(option, ignoreCase = true)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .background(
+                                if (isSelected) ElectricCyan else Color.Transparent,
+                                RoundedCornerShape(8.dp)
+                            )
+                            .clickable { viewModel.setWeightUnit(option) }
+                            .padding(vertical = 10.dp)
+                            .testTag("settings_unit_$option"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (option == "kg") "Kilograms (kg)" else "Pounds (lb)",
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            ),
+                            color = if (isSelected) OnAccent else TextMuted
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            HorizontalDivider(color = DarkBorder)
+            Spacer(modifier = Modifier.height(2.dp))
+
+            Text(
+                text = "Week starts on",
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = TextWhite
+            )
+            Text(
+                text = "Used by the week planner, the weekly summaries and the Home schedule. " +
+                    "A workout already on a day stays on that day.",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DarkBg, RoundedCornerShape(10.dp))
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                listOf(true to "Monday", false to "Sunday").forEach { (option, label) ->
+                    val isSelected = appSettings.weekStartsOnMonday == option
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .background(
+                                if (isSelected) ElectricCyan else Color.Transparent,
+                                RoundedCornerShape(8.dp)
+                            )
+                            .clickable { viewModel.setWeekStartsOnMonday(option) }
+                            .padding(vertical = 10.dp)
+                            .testTag("settings_week_start_${label.lowercase(Locale.US)}"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            ),
+                            color = if (isSelected) OnAccent else TextMuted
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            HorizontalDivider(color = DarkBorder)
+            Spacer(modifier = Modifier.height(2.dp))
+
+            Text(
+                text = "Autosave interval",
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = TextWhite
+            )
+            Text(
+                text = "How often the workout in progress is saved. The timer in the workout " +
+                    "flashes its cloud on every save.",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DarkBg, RoundedCornerShape(10.dp))
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                UserPreferencesRepository.AUTO_SAVE_INTERVAL_OPTIONS.forEach { seconds ->
+                    val isSelected = appSettings.autoSaveIntervalSeconds == seconds
+                    val label = if (seconds < 60) "${seconds}s" else "${seconds / 60}m"
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .background(
+                                if (isSelected) ElectricCyan else Color.Transparent,
+                                RoundedCornerShape(8.dp)
+                            )
+                            .clickable { viewModel.setAutoSaveIntervalSeconds(seconds) }
+                            .padding(vertical = 10.dp)
+                            .testTag("settings_autosave_${seconds}s"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            ),
+                            color = if (isSelected) OnAccent else TextMuted
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            HorizontalDivider(color = DarkBorder)
+            Spacer(modifier = Modifier.height(2.dp))
+
+            SettingSwitchRow(
+                title = "Rest timer vibration",
+                subtitle = "Vibrate when a rest period finishes.",
+                checked = appSettings.restTimerVibration,
+                onCheckedChange = { viewModel.setRestTimerVibration(it) },
+                tag = "settings_rest_timer_vibration"
+            )
+            SettingSwitchRow(
+                title = "Rest timer sound",
+                subtitle = "Play a sound when a rest period finishes.",
+                checked = appSettings.restTimerSound,
+                onCheckedChange = { viewModel.setRestTimerSound(it) },
+                tag = "settings_rest_timer_sound"
+            )
+            SettingSwitchRow(
+                title = "Autoplay exercise demos",
+                subtitle = if (autoplayExerciseDemos) {
+                    "Exercise animations start as soon as you open one."
+                } else {
+                    "Exercise animations only play after you tap them."
+                },
+                checked = autoplayExerciseDemos,
+                onCheckedChange = { viewModel.setAutoplayExerciseDemos(it) },
+                tag = "settings_autoplay_exercise_demos"
+            )
+        }
     }
 }
 
@@ -3150,7 +3675,7 @@ private fun SettingSwitchRow(
             onCheckedChange = onCheckedChange,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = OnAccent,
-                checkedTrackColor = MintGreen,
+                checkedTrackColor = ElectricCyan,
                 uncheckedThumbColor = TextMuted,
                 uncheckedTrackColor = DarkSurfaceVariant,
                 uncheckedBorderColor = DarkBorder

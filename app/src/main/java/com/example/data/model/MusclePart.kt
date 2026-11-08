@@ -41,6 +41,16 @@ object MusclePartResolver {
         description = exercise.description
     )
 
+    /** Synergist muscle strings resolved to the broad regions the body map draws. */
+    fun resolveSecondary(exercise: Exercise): Set<MusclePart> {
+        val primary = resolve(exercise)
+        return exercise.secondaryMuscleList.mapNotNull { raw ->
+            fromTerms(raw) ?: MusclePart.selectable.firstOrNull { part ->
+                part.searchTerms.any { term -> raw.contains(term, ignoreCase = true) }
+            }
+        }.filterNot { it == primary }.toSet()
+    }
+
     fun resolve(category: String, equipment: String, name: String, description: String = ""): MusclePart? {
         fromTerms(category)?.let { return it }
         fromTerms(name)?.let { return it }

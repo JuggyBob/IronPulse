@@ -151,17 +151,11 @@ import com.example.ui.viewmodel.MainViewModel
 fun AiCoachScreen(
     viewModel: MainViewModel,
     onNavigateToLogWorkout: () -> Unit,
+    onNavigateToSavedRoutines: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var selectedSubTab by remember { mutableIntStateOf(0) }
-    val subTabs = listOf("AI Coach Chat", "Routine Generator", "Saved Routines")
-
-    // A request from elsewhere in the app, e.g. the Saved Routines shortcut on the Home screen.
-    // The counter is what is watched, so asking twice opens the tab twice.
-    val savedRoutinesTabRequest by viewModel.savedRoutinesTabRequest.collectAsStateWithLifecycle()
-    LaunchedEffect(savedRoutinesTabRequest) {
-        if (savedRoutinesTabRequest > 0) selectedSubTab = 2
-    }
+    val subTabs = listOf("AI Coach Chat", "Routine Generator")
 
     Column(
         modifier = modifier
@@ -245,16 +239,7 @@ fun AiCoachScreen(
                     onStartRoutine = {
                         onNavigateToLogWorkout()
                     },
-                    onNavigateToSavedRoutines = {
-                        selectedSubTab = 2
-                    }
-                )
-                2 -> SavedRoutinesView(
-                    viewModel = viewModel,
-                    onLaunchRoutine = { _ ->
-                        // Dedicated routine workout runs in RoutineWorkoutScreen full-screen
-                        onNavigateToLogWorkout()
-                    }
+                    onNavigateToSavedRoutines = onNavigateToSavedRoutines
                 )
             }
         }
@@ -1322,10 +1307,10 @@ fun AiRoutineGeneratorView(
                                     )
                                     .testTag("days_chip_$d"),
                                 shape = RoundedCornerShape(10.dp),
-                                color = if (selected) MintGreen else DarkSurfaceVariant,
+                                color = if (selected) ElectricCyan.copy(alpha = 0.18f) else DarkSurfaceVariant,
                                 border = BorderStroke(
                                     width = 1.dp,
-                                    color = if (selected) MintGreen else DarkBorder
+                                    color = if (selected) ElectricCyan else DarkBorder
                                 )
                             ) {
                                 // Two centred lines rather than a padded chip label: "3 Days" in a

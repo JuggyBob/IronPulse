@@ -1,10 +1,16 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.ui.draw.rotate
 import androidx.compose.animation.expandVertically
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -26,12 +32,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -75,9 +83,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import com.example.ui.components.AppVersionFooter
@@ -98,13 +110,18 @@ import com.example.data.model.BodyWeightTimeline
 import com.example.data.model.ExerciseType
 import com.example.data.model.WorkoutMetrics
 import com.example.data.model.GeminiSummary
+import com.example.data.model.LoggedSet
 import com.example.data.model.LoggedSetNumbering
 import com.example.data.model.MonthlyExerciseAnalyzer
+import kotlinx.coroutines.launch
+import com.example.data.model.MusclePart
+import com.example.data.model.MusclePartResolver
 import com.example.data.model.describeCardioSet
 import com.example.data.model.describeLoggedSetEffort
 import com.example.ui.components.ActivityHeatmapCard
 import com.example.ui.components.AiUnavailableDialog
 import com.example.ui.components.MarkdownView
+import com.example.ui.components.MuscleBodyMap
 import com.example.ui.components.WorkoutHistoryDialog
 import com.example.ui.components.ProgressionLineChart
 import com.example.ui.theme.CoralOrange
@@ -179,6 +196,43 @@ fun ProgressScreen(
     var isExerciseSelectorExpanded by remember { mutableStateOf(false) }
     var showHistoryDialog by remember { mutableStateOf(false) }
     var exerciseSearchQuery by remember { mutableStateOf("") }
+    var showExerciseProgression by remember { mutableStateOf(false) }
+    var historyExpanded by remember { mutableStateOf(false) }
+    var historySets by remember(selectedExercise) { mutableStateOf<List<LoggedSet>>(emptyList()) }
+    var historyLoaded by remember(selectedExercise) { mutableStateOf(false) }
+    var historyLoading by remember(selectedExercise) { mutableStateOf(false) }
+    var loadedHistoryDays by remember(selectedExercise) { mutableIntStateOf(0) }
+    var totalHistoryDays by remember(selectedExercise) { mutableIntStateOf(0) }
+    var historyHasMore by remember(selectedExercise) { mutableStateOf(false) }
+    val historyScope = rememberCoroutineScope()
+    val allExercises by viewModel.allExercises.collectAsStateWithLifecycle()
+
+    // Pagination belongs to one exercise. Changing it clears the loaded page immediately.
+    LaunchedEffect(selectedExercise) {
+        historyExpanded = false
+    }
+    LaunchedEffect(selectedExercise, historyExpanded) {
+        if (historyExpanded && !historyLoaded && !historyLoading && selectedExercise.isNotBlank()) {
+            historyLoading = true
+            val page = viewModel.loadExerciseHistoryPage(selectedExercise, offsetDays = 0)
+            historySets = page.sets
+            loadedHistoryDays = page.loadedDays
+            totalHistoryDays = page.totalDays
+            historyHasMore = page.hasMore
+            historyLoaded = true
+            historyLoading = false
+        }
+    }
+
+    val selectedExerciseEntity = remember(allExercises, selectedExercise) {
+        allExercises.firstOrNull { it.name.equals(selectedExercise, ignoreCase = true) }
+    }
+    val primaryMuscle = remember(selectedExerciseEntity) {
+        selectedExerciseEntity?.let { MusclePartResolver.resolve(it) }
+    }
+    val secondaryMuscles = remember(selectedExerciseEntity) {
+        selectedExerciseEntity?.let { MusclePartResolver.resolveSecondary(it) }.orEmpty()
+    }
 
     // A summary belongs to the exercise it was generated for: drop it when the selection changes
     LaunchedEffect(selectedExercise) {
@@ -199,31 +253,20 @@ fun ProgressScreen(
         exerciseHistorySets.any { it.addedWeight > 0.0 || (it.exerciseType == ExerciseType.ADDED_WEIGHT && it.addedWeight == 0.0) }
     }
 
-    // The tag is unwrapped before it is compared: a Double compared against a Double? is boxed on
-    // both sides, and a boxed Double is compared by reference rather than by value.
-    val displayedHistorySets = remember(exerciseHistorySets, selectedAddedWeightFilter, userProfile.currentWeightKg) {
+    val historyDateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
+    val pagedHistorySets = remember(historySets, selectedAddedWeightFilter, userProfile.currentWeightKg) {
         selectedAddedWeightFilter?.let { tag ->
-            // The same rule the chart uses: a set belongs to the tag when its external load, its
-            // added load or the body weight it was done at is the one that was picked.
-            //
-            // The body weight has to be the one the set carries, not the one the athlete has
-            // today. A set done at 80 kg and a set done at 84 kg are two different bodyweight
-            // entries, and the "BW: 80 kg" tag has to show only the first one. Only bodyweight
-            // exercise types qualify: a zero-load barbell set is an empty bar.
-            exerciseHistorySets.filter { set ->
+            historySets.filter { set ->
                 BodyWeightTimeline.matchesIsolatedWeight(
                     set = set,
                     tag = tag,
                     bodyWeightKg = BodyWeightTimeline.bodyWeightForSet(set, userProfile.currentWeightKg)
                 )
             }
-        } ?: exerciseHistorySets
+        } ?: historySets
     }
-
-    val historyDateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
-    val groupedHistory = remember(displayedHistorySets) {
-        // Sets are always listed chronologically inside their training day
-        displayedHistorySets
+    val groupedHistory = remember(pagedHistorySets) {
+        pagedHistorySets
             .sortedWith(compareBy({ it.timestamp }, { it.id }))
             .groupBy { historyDateFormat.format(Date(it.timestamp)) }
     }
@@ -236,7 +279,23 @@ fun ProgressScreen(
         LoggedSetNumbering.positionsBySetId(exerciseHistorySets)
     }
 
+    val progressListState = rememberLazyListState()
+    var mainScrollPosition by remember { mutableStateOf(0 to 0) }
+    LaunchedEffect(showExerciseProgression) {
+        if (showExerciseProgression) {
+            mainScrollPosition = progressListState.firstVisibleItemIndex to
+                progressListState.firstVisibleItemScrollOffset
+            progressListState.scrollToItem(0)
+        } else {
+            progressListState.scrollToItem(
+                mainScrollPosition.first,
+                mainScrollPosition.second
+            )
+        }
+    }
+
     LazyColumn(
+        state = progressListState,
         modifier = modifier
             .fillMaxSize()
             .background(DarkBg)
@@ -252,9 +311,26 @@ fun ProgressScreen(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (showExerciseProgression) {
+                        IconButton(
+                            onClick = { showExerciseProgression = false },
+                            modifier = Modifier.size(40.dp).testTag("progression_back_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.ArrowBack,
+                                contentDescription = "Back to Progress",
+                                tint = ElectricCyan
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Analytics & Progress",
+                            text = if (showExerciseProgression) {
+                                "Exercise Progression"
+                            } else {
+                                "Analytics & Progress"
+                            },
                             style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
                             color = TextWhite,
                             maxLines = 1,
@@ -262,7 +338,11 @@ fun ProgressScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "Isolated metric curves preventing skewed bodyweight data",
+                            text = if (showExerciseProgression) {
+                                "Selected exercise analytics, history and AI summary"
+                            } else {
+                                "Training, body weight and exercise progression"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = TextMuted,
                             maxLines = 2,
@@ -286,11 +366,42 @@ fun ProgressScreen(
             }
         }
 
-        // Activity heat map: one year of training, one square per day
-        item {
-            ActivityHeatmapCard(days = activityDays)
+        if (!showExerciseProgression) {
+            // Activity heat map: one year of training, one square per day
+            item {
+                ActivityHeatmapCard(days = activityDays)
+            }
+            item {
+                BodyWeightProgressSection(viewModel = viewModel)
+            }
+            item {
+                Button(
+                    onClick = { showExerciseProgression = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 54.dp)
+                        .testTag("exercise_progression_button"),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ElectricCyan,
+                        contentColor = OnAccent
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ShowChart,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        "Exercise Progression",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+            }
         }
 
+        if (showExerciseProgression) {
         // Exercise Selector Dropdown Card (Searchable within completed exercises)
         item {
             Card(
@@ -512,6 +623,54 @@ fun ProgressScreen(
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // The selected exercise's body map sits between the selector and the AI summary card.
+        item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("selected_exercise_muscle_card"),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(
+                        text = "MUSCLES TRAINED",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = TextMuted
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    if (selectedExerciseEntity == null) {
+                        Text(
+                            text = "Select an exercise to see its anatomy.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextMuted
+                        )
+                    } else {
+                        MuscleBodyMap(
+                            highlighted = primaryMuscle,
+                            activeParts = setOfNotNull(primaryMuscle),
+                            pendingParts = secondaryMuscles,
+                            onSelect = null,
+                            maxFigureHeight = 250.dp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = buildString {
+                                append(primaryMuscle?.label ?: "Muscle group not classified")
+                                if (secondaryMuscles.isNotEmpty()) {
+                                    append(" • Secondary: ")
+                                    append(secondaryMuscles.joinToString { it.label })
+                                }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextMuted
+                        )
                     }
                 }
             }
@@ -858,158 +1017,167 @@ fun ProgressScreen(
             }
         }
 
-        // Chronological Log History for Exercise
+        // Chronological Log History: collapsed by default, five distinct days per page.
         item {
-            Text(
-                text = "SESSION HISTORY",
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                color = TextWhite
+            val arrowRotation by animateFloatAsState(
+                targetValue = if (historyExpanded) 180f else 0f,
+                animationSpec = tween(220),
+                label = "session_history_arrow"
             )
-        }
-
-        if (exerciseHistorySets.isEmpty()) {
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                    shape = RoundedCornerShape(12.dp)
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { historyExpanded = !historyExpanded }
+                    .testTag("session_history_toggle"),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                shape = RoundedCornerShape(14.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = if (distinctExercises.isEmpty()) {
-                            "No exercises logged. Log a workout and tick the sets you completed to see them here."
-                        } else {
-                            "No history sets found for this exercise."
-                        },
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = TextMuted,
-                        modifier = Modifier.padding(16.dp)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "SESSION HISTORY",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = TextWhite
+                        )
+                        Text(
+                            text = when {
+                                historyLoading -> "Loading history..."
+                                historyLoaded -> "${totalHistoryDays} logged day${if (totalHistoryDays == 1) "" else "s"}"
+                                else -> "Tap to expand"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Default.ArrowDropDown,
+                        contentDescription = if (historyExpanded) "Collapse" else "Expand",
+                        tint = ElectricCyan,
+                        modifier = Modifier.rotate(arrowRotation)
                     )
                 }
             }
-        } else {
-            items(items = groupedDates, key = { it }, contentType = { "history_date_group" }) { dateStr ->
-                val setsOnDate = groupedHistory[dateStr].orEmpty()
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("session_history_card_${dateStr.replace(" ", "_")}"),
-                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                    shape = RoundedCornerShape(12.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = dateStr,
-                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = TextWhite
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "• ${setsOnDate.size} sets",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = TextMuted
-                                )
-                            }
+        }
 
-                            // 3-dot date action menu
-                            Box {
-                                var showDateMenu by remember { mutableStateOf(false) }
-                                IconButton(
-                                    onClick = { showDateMenu = true },
-                                    modifier = Modifier
-                                        .size(28.dp)
-                                        .testTag("date_menu_${dateStr.replace(" ", "_")}")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.MoreVert,
-                                        contentDescription = "Session options",
-                                        tint = TextMuted,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-
-                                DropdownMenu(
-                                    expanded = showDateMenu,
-                                    onDismissRequest = { showDateMenu = false },
-                                    modifier = Modifier.background(DarkSurfaceVariant)
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("Delete All ${setsOnDate.size} Sets for This Date", color = FireRed, fontSize = 13.sp) },
-                                        onClick = {
-                                            showDateMenu = false
-                                            viewModel.deleteSets(setsOnDate)
-                                        },
-                                        leadingIcon = {
-                                            Icon(
-                                                imageVector = Icons.Default.Delete,
-                                                contentDescription = null,
-                                                tint = FireRed,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    )
-                                }
+        item(key = "session_history_content") {
+            AnimatedVisibility(
+                visible = historyExpanded,
+                enter = expandVertically(tween(260), Alignment.Top) + fadeIn(tween(180)),
+                exit = shrinkVertically(tween(220), Alignment.Top) + fadeOut(tween(150))
+            ) {
+                Column(modifier = Modifier.animateContentSize(tween(220)), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    when {
+                        selectedExercise.isBlank() -> {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(
+                                    "No exercises logged. Log a workout and tick the sets you completed to see them here.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = TextMuted,
+                                    modifier = Modifier.padding(16.dp)
+                                )
                             }
                         }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        setsOnDate.forEach { set ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                        historyLoading && !historyLoaded -> {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(20.dp),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.weight(1f)
+                                CircularProgressIndicator(color = ElectricCyan)
+                            }
+                        }
+                        historyLoaded && totalHistoryDays == 0 -> {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(
+                                    text = if (distinctExercises.isEmpty()) {
+                                        "No exercises logged. Log a workout and tick the sets you completed to see them here."
+                                    } else {
+                                        "No history sets found for this exercise."
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = TextMuted,
+                                    modifier = Modifier.padding(16.dp)
+                                )
+                            }
+                        }
+                        historyLoaded && groupedDates.isEmpty() -> {
+                            Text(
+                                "No loaded sets match the selected weight filter.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextMuted,
+                                modifier = Modifier.padding(12.dp)
+                            )
+                        }
+                        else -> {
+                            groupedDates.forEach { dateStr ->
+                                SessionHistoryDayCard(
+                                    dateStr = dateStr,
+                                    setsOnDate = groupedHistory[dateStr].orEmpty(),
+                                    setPositionById = setPositionById,
+                                    userProfile = userProfile,
+                                    weightUnit = weightUnit,
+                                    onDeleteSets = { sets ->
+                                        viewModel.deleteSets(sets)
+                                        historyLoaded = false
+                                        historySets = emptyList()
+                                        historyExpanded = false
+                                    },
+                                    onDeleteSet = { set ->
+                                        viewModel.deleteLoggedSet(set)
+                                        historyLoaded = false
+                                        historySets = emptyList()
+                                        historyExpanded = false
+                                    }
+                                )
+                            }
+                            if (historyHasMore) {
+                                OutlinedButton(
+                                    onClick = {
+                                        if (historyLoading) return@OutlinedButton
+                                        historyLoading = true
+                                        historyScope.launch {
+                                            val page = viewModel.loadExerciseHistoryPage(
+                                                selectedExercise,
+                                                offsetDays = loadedHistoryDays
+                                            )
+                                            historySets = (historySets + page.sets)
+                                                .distinctBy { it.id }
+                                            loadedHistoryDays += page.loadedDays
+                                            totalHistoryDays = page.totalDays
+                                            historyHasMore = page.hasMore
+                                            historyLoading = false
+                                        }
+                                    },
+                                    enabled = !historyLoading,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("session_history_load_more"),
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.6f)),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ElectricCyan)
                                 ) {
-                                    Text(
-                                        text = "Set ${setPositionById[set.id] ?: set.setNumber}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = TextMuted,
-                                        modifier = Modifier.width(48.dp)
-                                    )
-
-                                    // The load the set actually moved, and the work done with it.
-                                    //
-                                    // The load is the same text the workout history shows, so the
-                                    // same set is never described two different ways. A bodyweight
-                                    // set says the body weight it was done at: an empty weight field
-                                    // used to read as "+0 kg", which is the opposite of what the
-                                    // athlete did.
-                                    val bodyweightAtSet =
-                                        BodyWeightTimeline.bodyWeightForSet(set, userProfile.currentWeightKg)
-                                    val descriptor = when (set.exerciseType) {
-                                        ExerciseType.CARDIO -> describeCardioSet(set, weightUnit)
-                                        else -> "${WorkoutMetrics.loadLabel(set, bodyweightAtSet, weightUnit)} x ${describeLoggedSetEffort(set)}"
+                                    if (historyLoading) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp,
+                                            color = ElectricCyan
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
                                     }
                                     Text(
-                                        text = descriptor,
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                                        color = ElectricCyan
-                                    )
-                                }
-
-                                IconButton(
-                                    onClick = { viewModel.deleteLoggedSet(set) },
-                                    modifier = Modifier
-                                        .size(24.dp)
-                                        .testTag("delete_set_${set.id}")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Close,
-                                        contentDescription = "Delete Set",
-                                        tint = TextMuted.copy(alpha = 0.7f),
-                                        modifier = Modifier.size(15.dp)
+                                        if (historyLoading) "Loading..." else "Load More",
+                                        fontWeight = FontWeight.Bold
                                     )
                                 }
                             }
@@ -1017,6 +1185,8 @@ fun ProgressScreen(
                     }
                 }
             }
+        }
+
         }
 
         // The build stamp, at the very bottom of the analytics.
@@ -1491,6 +1661,146 @@ private fun SavedSummariesDialog(
                                 fontWeight = FontWeight.Bold
                             )
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun SessionHistoryDayCard(
+    dateStr: String,
+    setsOnDate: List<LoggedSet>,
+    setPositionById: Map<Long, Int>,
+    userProfile: com.example.data.model.UserProfile,
+    weightUnit: WeightUnit,
+    onDeleteSets: (List<LoggedSet>) -> Unit,
+    onDeleteSet: (LoggedSet) -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("session_history_card_${dateStr.replace(" ", "_")}"),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = dateStr,
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = TextWhite
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "• ${setsOnDate.size} sets",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted
+                    )
+                }
+
+                // 3-dot date action menu
+                Box {
+                    var showDateMenu by remember { mutableStateOf(false) }
+                    IconButton(
+                        onClick = { showDateMenu = true },
+                        modifier = Modifier
+                            .size(28.dp)
+                            .testTag("date_menu_${dateStr.replace(" ", "_")}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MoreVert,
+                            contentDescription = "Session options",
+                            tint = TextMuted,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = showDateMenu,
+                        onDismissRequest = { showDateMenu = false },
+                        modifier = Modifier.background(DarkSurfaceVariant)
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Delete All ${setsOnDate.size} Sets for This Date", color = FireRed, fontSize = 13.sp) },
+                            onClick = {
+                                showDateMenu = false
+                                onDeleteSets(setsOnDate)
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = null,
+                                    tint = FireRed,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            setsOnDate.forEach { set ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            text = "Set ${setPositionById[set.id] ?: set.setNumber}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextMuted,
+                            modifier = Modifier.width(48.dp)
+                        )
+
+                        // The load the set actually moved, and the work done with it.
+                        //
+                        // The load is the same text the workout history shows, so the
+                        // same set is never described two different ways. A bodyweight
+                        // set says the body weight it was done at: an empty weight field
+                        // used to read as "+0 kg", which is the opposite of what the
+                        // athlete did.
+                        val bodyweightAtSet =
+                            BodyWeightTimeline.bodyWeightForSet(set, userProfile.currentWeightKg)
+                        val descriptor = when (set.exerciseType) {
+                            ExerciseType.CARDIO -> describeCardioSet(set, weightUnit)
+                            else -> "${WorkoutMetrics.loadLabel(set, bodyweightAtSet, weightUnit)} x ${describeLoggedSetEffort(set)}"
+                        }
+                        Text(
+                            text = descriptor,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                            color = ElectricCyan
+                        )
+                    }
+
+                    IconButton(
+                        onClick = { onDeleteSet(set) },
+                        modifier = Modifier
+                            .size(24.dp)
+                            .testTag("delete_set_${set.id}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Delete Set",
+                            tint = TextMuted.copy(alpha = 0.7f),
+                            modifier = Modifier.size(15.dp)
+                        )
                     }
                 }
             }

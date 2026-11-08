@@ -193,6 +193,19 @@ class FitnessRepository(
     fun getSetsForExercise(exerciseName: String): Flow<List<LoggedSet>> = workoutDao.getSetsForExercise(exerciseName)
     suspend fun getSetsForExerciseList(exerciseName: String): List<LoggedSet> = workoutDao.getSetsForExerciseList(exerciseName)
 
+    suspend fun getSetsForExerciseHistoryPage(
+        exerciseName: String,
+        limitDays: Int,
+        offsetDays: Int
+    ): List<LoggedSet> = workoutDao.getSetsForExerciseHistoryPage(
+        exerciseName = exerciseName,
+        limitDays = limitDays,
+        offsetDays = offsetDays
+    )
+
+    suspend fun countExerciseHistoryDays(exerciseName: String): Int =
+        workoutDao.countExerciseHistoryDays(exerciseName)
+
     /** Every set ever logged, used to recompute the athlete's benchmark personal records. */
     suspend fun getAllLoggedSets(): List<LoggedSet> = workoutDao.getAllSets()
     fun getAllCompletedSets(): Flow<List<LoggedSet>> = workoutDao.getAllCompletedSets()

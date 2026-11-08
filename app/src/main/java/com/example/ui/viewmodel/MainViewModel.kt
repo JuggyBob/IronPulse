@@ -112,7 +112,6 @@ import com.example.util.ApkInstaller
 import com.example.util.VibrationHelper
 import com.example.util.SoundHelper
 import com.example.util.RestTimerScheduler
-import com.example.util.RestTimerEventManager
 import com.example.util.RestTimerAlertCoordinator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -191,13 +190,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val backupPreferencesStore = BackupPreferencesStore(application)
     private val backupManager = UserDataBackupManager(application, db, backupPreferencesStore)
 
-    private val _dataTransferState = MutableStateFlow<DataTransferState>(DataTransferState.Idle)
+    private val appUpdateController = AppUpdateController(
+        application = getApplication(),
+        preferences = userPreferencesRepo,
+        scope = viewModelScope
+    )
 
-    /** Export/import progress and results shown by Settings. */
-    val dataTransferState: StateFlow<DataTransferState> = _dataTransferState.asStateFlow()
-
-    private var dataTransferJob: Job? = null
-    private var preparedImport: PreparedImport? = null
+    private val dataTransferController = DataTransferController(
+        application = getApplication(),
+        backupManager = backupManager,
+        scope = viewModelScope,
+        onBeforeImportApply = { resetTransientStateForReplacement() },
+        onImportSettled = {
+            resetTransientStateForReplacement()
+            reloadPendingWorkoutDraftLater()
+        },
+        onWidgetsChanged = { refreshAndroidWidgets() }
+    )
 
     val geminiApiKey: StateFlow<String> = userPreferencesRepo.geminiApiKeyFlow
         .flowOn(Dispatchers.IO)
@@ -222,225 +231,57 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
     private val workoutSummaryGenerator = WorkoutSummaryGenerator(repository, aiService)
 
-    val activeAiProvider: StateFlow<AiProviderId> = aiService.activeProviderFlow
-        .flowOn(Dispatchers.IO)
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.Eagerly,
-            initialValue = AiProviderId.GOOGLE
-        )
-
-    val aiConfiguration: StateFlow<AiProviderConfiguration> =
-        aiConfigurationRepository.activeConfigurationFlow
-            .flowOn(Dispatchers.IO)
-            .stateIn(
-                scope = viewModelScope,
-                started = SharingStarted.Eagerly,
-                initialValue = AiProviderConfiguration(provider = AiProviderId.GOOGLE)
-            )
-
-    private val _availableModels = MutableStateFlow(
-        aiService.knownModels(AiProviderId.GOOGLE)
+    private val aiConfigurationController = AiConfigurationController(
+        aiService = aiService,
+        configurationRepository = aiConfigurationRepository,
+        repository = repository,
+        scope = viewModelScope,
+        geminiApiKeyProvider = { geminiApiKey.value },
+        legacyProfileProvider = { userProfile.value },
+        aiErrorMessageProvider = { error, featureName -> aiErrorMessage(error, featureName) }
     )
-    val availableModels: StateFlow<List<AiModelDescriptor>> = _availableModels.asStateFlow()
 
-    private val _isLoadingModels = MutableStateFlow(false)
-    val isLoadingModels: StateFlow<Boolean> = _isLoadingModels.asStateFlow()
+    val activeAiProvider: StateFlow<AiProviderId> get() = aiConfigurationController.activeAiProvider
+    val aiConfiguration: StateFlow<AiProviderConfiguration> get() = aiConfigurationController.aiConfiguration
+    val availableModels: StateFlow<List<AiModelDescriptor>> get() = aiConfigurationController.availableModels
+    val isLoadingModels: StateFlow<Boolean> get() = aiConfigurationController.isLoadingModels
+    val modelDiscoveryError: StateFlow<String?> get() = aiConfigurationController.modelDiscoveryError
 
-    private val _modelDiscoveryError = MutableStateFlow<String?>(null)
-    val modelDiscoveryError: StateFlow<String?> = _modelDiscoveryError.asStateFlow()
+    fun loadAvailableModels() = aiConfigurationController.loadAvailableModels()
 
-    /** Models to show for a provider: its known fallback plus the model already saved. */
-    private fun modelsFor(configuration: AiProviderConfiguration): List<AiModelDescriptor> {
-        val saved = configuration.model.trim().takeIf { it.isNotBlank() }?.let {
-            AiModelDescriptor(id = it, displayName = it)
-        }
-        return (aiService.knownModels(configuration.provider) + listOfNotNull(saved))
-            .distinctBy { it.id }
-    }
+    fun selectAiProvider(provider: AiProviderId) = aiConfigurationController.selectProvider(provider)
 
-    /**
-     * Fetches the active provider's live catalog.
-     *
-     * A failure never wipes a working selection: the saved model and the provider's known models
-     * stay selectable, and the error is shown next to the refresh button. An empty successful
-     * catalog is reported as empty, not replaced with invented entries.
-     */
-    fun loadAvailableModels() {
-        viewModelScope.launch(Dispatchers.IO) {
-            _isLoadingModels.value = true
-            _modelDiscoveryError.value = null
-            val provider = aiService.activeProviderFlow.first()
-            val stored = aiService.configuration(provider)
-            val config = stored.copy(
-                apiKey = stored.apiKey.ifBlank { fallbackApiKey(provider) }
-            )
-            if (config.apiKey.isBlank() && !provider.isCustomEndpoint) {
-                _availableModels.value = modelsFor(config)
-                _modelDiscoveryError.value =
-                    "Add and save an API key for ${provider.displayName} to load its model list."
-                _isLoadingModels.value = false
-                return@launch
-            }
+    fun saveAiApiKey(apiKey: String) = aiConfigurationController.saveApiKey(apiKey)
 
-            aiService.discoverModels(provider, config).fold(
-                onSuccess = { models ->
-                    _availableModels.value = (models + modelsFor(config)).distinctBy { it.id }
-                    if (models.isEmpty()) {
-                        _modelDiscoveryError.value =
-                            "${provider.displayName} returned an empty model list. You can still " +
-                                "type a model id manually."
-                    }
-                },
-                onFailure = { error ->
-                    _availableModels.value = modelsFor(config)
-                    _modelDiscoveryError.value = aiErrorMessage(error, "The model list")
-                }
-            )
-            _isLoadingModels.value = false
-        }
-    }
+    fun saveAiModel(modelName: String) = aiConfigurationController.saveModel(modelName)
 
-    fun selectAiProvider(provider: AiProviderId) {
-        viewModelScope.launch(Dispatchers.IO) {
-            aiService.setActiveProvider(provider)
-            val config = aiService.configuration(provider)
-            _availableModels.value = modelsFor(config)
-            _modelDiscoveryError.value = null
-            loadAvailableModels()
-        }
-    }
+    suspend fun validateAndSaveAiModel(modelName: String): Result<Unit> =
+        aiConfigurationController.validateAndSaveModel(modelName)
 
-    fun saveAiApiKey(apiKey: String) {
-        val cleanKey = apiKey.trim()
-        val provider = activeAiProvider.value
-        viewModelScope.launch(Dispatchers.IO) {
-            aiService.saveApiKey(provider, cleanKey)
-            // The profile copy is the legacy location the old Gemini build read. It is only kept in
-            // sync for Google; another provider's key must never overwrite it.
-            if (provider == AiProviderId.GOOGLE) {
-                val current = repository.getUserProfile().firstOrNull() ?: userProfile.value
-                repository.saveUserProfile(current.copy(customApiKey = cleanKey))
-            }
-        }
-    }
+    suspend fun testAiConnection(): Result<Unit> = aiConfigurationController.testConnection()
 
-    fun saveAiModel(modelName: String) {
-        val cleanModel = modelName.trim().removePrefix("models/")
-        val provider = activeAiProvider.value
-        viewModelScope.launch(Dispatchers.IO) {
-            aiService.saveModel(provider, cleanModel)
-            if (cleanModel.isNotBlank()) {
-                val saved = AiModelDescriptor(id = cleanModel, displayName = cleanModel)
-                _availableModels.value = (_availableModels.value + saved).distinctBy { it.id }
-            }
-        }
-    }
-
-    /**
-     * Tests the model with a real generation request before saving it.
-     *
-     * Manual model ids are essential for custom endpoints, so this is a separate action: the
-     * settings screen can save an id without a network round trip, and the athlete can ask for a
-     * live check whenever the endpoint is reachable.
-     */
-    suspend fun validateAndSaveAiModel(modelName: String): Result<Unit> = withContext(Dispatchers.IO) {
-        val provider = activeAiProvider.value
-        val cleanModel = modelName.trim().removePrefix("models/")
-        if (cleanModel.isBlank()) {
-            aiService.saveModel(provider, "")
-            return@withContext Result.success(Unit)
-        }
-
-        val stored = aiService.configuration(provider)
-        val config = stored.copy(
-            model = cleanModel,
-            apiKey = stored.apiKey.ifBlank { fallbackApiKey(provider) }
-        )
-        aiService.testConnection(provider, config).fold(
-            onSuccess = {
-                aiService.saveModel(provider, cleanModel)
-                val saved = AiModelDescriptor(id = cleanModel, displayName = cleanModel)
-                _availableModels.value = (_availableModels.value + saved).distinctBy { it.id }
-                Result.success(Unit)
-            },
-            onFailure = { Result.failure(it) }
-        )
-    }
-
-    suspend fun testAiConnection(): Result<Unit> = withContext(Dispatchers.IO) {
-        val provider = activeAiProvider.value
-        val stored = aiService.configuration(provider)
-        aiService.testConnection(
-            provider,
-            stored.copy(apiKey = stored.apiKey.ifBlank { fallbackApiKey(provider) })
-        )
-    }
-
-    /**
-     * Saves the key (and a custom endpoint, when one was typed) and immediately tests it.
-     *
-     * The test uses exactly what was just persisted, so the athlete never sees a stale result from
-     * an older key or an unacknowledged endpoint.
-     */
     suspend fun saveAndTestAiConnection(
         apiKey: String,
         baseUrl: String? = null,
         acknowledgeEndpoint: Boolean = false
-    ): Result<Unit> = withContext(Dispatchers.IO) {
-        val provider = activeAiProvider.value
-        aiService.saveApiKey(provider, apiKey)
-        if (provider.isCustomEndpoint && baseUrl != null) {
-            aiService.saveBaseUrl(baseUrl)
-            if (acknowledgeEndpoint) {
-                aiService.acknowledgeCustomEndpoint(baseUrl)
-            }
-        }
-        val stored = aiService.configuration(provider)
-        aiService.testConnection(
-            provider,
-            stored.copy(apiKey = stored.apiKey.ifBlank { fallbackApiKey(provider) })
-        )
-    }
+    ): Result<Unit> = aiConfigurationController.saveAndTestConnection(
+        apiKey,
+        baseUrl,
+        acknowledgeEndpoint
+    )
 
-    fun saveAiBaseUrl(baseUrl: String, acknowledge: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) {
-            aiService.saveBaseUrl(baseUrl)
-            if (acknowledge) {
-                aiService.acknowledgeCustomEndpoint(baseUrl)
-            } else {
-                aiService.clearCustomEndpointAcknowledgement()
-            }
-        }
-    }
+    fun saveAiBaseUrl(baseUrl: String, acknowledge: Boolean) =
+        aiConfigurationController.saveBaseUrl(baseUrl, acknowledge)
 
-    fun acknowledgeAiCustomEndpoint(baseUrl: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            aiService.acknowledgeCustomEndpoint(baseUrl)
-        }
-    }
+    fun acknowledgeAiCustomEndpoint(baseUrl: String) =
+        aiConfigurationController.acknowledgeCustomEndpoint(baseUrl)
 
-    fun saveAiToolMode(mode: AiToolMode) {
-        val provider = activeAiProvider.value
-        viewModelScope.launch(Dispatchers.IO) {
-            aiService.saveToolMode(provider, mode)
-        }
-    }
+    fun saveAiToolMode(mode: AiToolMode) = aiConfigurationController.saveToolMode(mode)
 
-    /** Key available for the active provider, including the legacy Google fallbacks. */
-    private fun fallbackApiKey(provider: AiProviderId): String {
-        if (provider != AiProviderId.GOOGLE) return ""
-        return geminiApiKey.value.trim()
-            .ifBlank { userProfile.value.customApiKey.trim() }
-            .ifBlank {
-                BuildConfig.GEMINI_API_KEY.takeIf {
-                    it.isNotBlank() && it != "MY_GEMINI_API_KEY"
-                }.orEmpty()
-            }
-    }
+    private fun fallbackApiKey(provider: AiProviderId): String =
+        aiConfigurationController.fallbackApiKey(provider)
 
-    // Legacy names kept so existing call sites and installations keep working. They now route to
-    // the active provider instead of assuming Google.
+    // Legacy names kept so existing call sites and installations keep working.
     fun saveGeminiApiKey(apiKey: String) = saveAiApiKey(apiKey)
 
     fun saveGeminiModel(modelName: String) = saveAiModel(modelName)
@@ -1379,136 +1220,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // === REST TIMERS ===
-    val savedRestTimers: StateFlow<List<CustomRestTimer>> = userPreferencesRepo.savedRestTimersFlow
-        .stateIn(viewModelScope, SharingStarted.Lazily, userPreferencesRepo.defaultRestTimers)
 
-    private val _activeRestTimer = MutableStateFlow(ActiveRestTimerState())
-    val activeRestTimer: StateFlow<ActiveRestTimerState> = _activeRestTimer.asStateFlow()
+    private val restTimerController = RestTimerController(
+        application = getApplication(),
+        preferences = userPreferencesRepo,
+        scope = viewModelScope
+    )
 
-    private var restTimerJob: Job? = null
+    val savedRestTimers: StateFlow<List<CustomRestTimer>> get() = restTimerController.savedRestTimers
+    val activeRestTimer: StateFlow<ActiveRestTimerState> get() = restTimerController.activeRestTimer
 
-    /**
-     * Plays the finished-timer alert (vibration + "beep beep beep ... beeeeeep").
-     * Shared with the exact alarm broadcast so the alert plays exactly once per rest period,
-     * no matter whether the app is open, backgrounded or completely closed.
-     */
-    private fun playRestFinishedAlert(context: android.content.Context, endTimeMillis: Long) {
-        val key = if (endTimeMillis > 0L) endTimeMillis.toString() else "inapp_${System.currentTimeMillis()}"
-        RestTimerAlertCoordinator.playFinishedAlert(context, key)
-    }
+    fun startRestTimer(seconds: Int, name: String = "Rest Timer") =
+        restTimerController.start(seconds, name)
 
-    fun startRestTimer(seconds: Int, name: String = "Rest Timer") {
-        val total = seconds.coerceAtLeast(1)
-        val endTime = System.currentTimeMillis() + (total * 1000L)
-        restTimerJob?.cancel()
-        _activeRestTimer.value = ActiveRestTimerState(
-            isRunning = true,
-            isPaused = false,
-            totalSeconds = total,
-            remainingSeconds = total,
-            timerName = name,
-            hasFinished = false,
-            endTimeMillis = endTime
-        )
+    fun pauseRestTimer() = restTimerController.pause()
 
-        // Schedule system exact alarm to fire even if phone is turned off / screen locked / app backgrounded
-        RestTimerScheduler.scheduleRestTimer(getApplication(), total, name, endTime)
+    fun resumeRestTimer() = restTimerController.resume()
 
-        restTimerJob = viewModelScope.launch(Dispatchers.Default) {
-            while (isActive) {
-                delay(1000L)
-                val current = _activeRestTimer.value
-                if (!current.isRunning || current.isPaused) continue
+    fun resetRestTimer() = restTimerController.reset()
 
-                val nextRemaining = ((current.endTimeMillis - System.currentTimeMillis()) / 1000L).toInt().coerceAtLeast(0)
-                if (nextRemaining <= 0) {
-                    _activeRestTimer.value = current.copy(
-                        remainingSeconds = 0,
-                        isRunning = false,
-                        isPaused = false,
-                        hasFinished = true
-                    )
-                    // Vibration & alert sound. The alert key makes sure the alarm broadcast and this
-                    // loop never double up on the same timer.
-                    playRestFinishedAlert(getApplication(), current.endTimeMillis)
-                    break
-                } else {
-                    _activeRestTimer.value = current.copy(remainingSeconds = nextRemaining)
-                }
-            }
-        }
-    }
+    fun stopRestTimer() = restTimerController.stop()
 
-    fun pauseRestTimer() {
-        val current = _activeRestTimer.value
-        if (current.isRunning && !current.isPaused) {
-            RestTimerScheduler.cancelRestTimer(getApplication())
-            val remaining = ((current.endTimeMillis - System.currentTimeMillis()) / 1000L).toInt().coerceAtLeast(0)
-            _activeRestTimer.value = current.copy(isPaused = true, remainingSeconds = remaining)
-        }
-    }
+    fun addSecondsToRestTimer(secondsToAdd: Int) = restTimerController.addSeconds(secondsToAdd)
 
-    fun resumeRestTimer() {
-        val current = _activeRestTimer.value
-        if (current.isRunning && current.isPaused && current.remainingSeconds > 0) {
-            startRestTimer(current.remainingSeconds, current.timerName)
-        }
-    }
+    fun saveCustomRestTimer(name: String, totalSeconds: Int) =
+        restTimerController.saveCustomTimer(name, totalSeconds)
 
-    fun resetRestTimer() {
-        val current = _activeRestTimer.value
-        if (current.totalSeconds > 0) {
-            startRestTimer(current.totalSeconds, current.timerName)
-        }
-    }
-
-    fun stopRestTimer() {
-        restTimerJob?.cancel()
-        RestTimerScheduler.cancelRestTimer(getApplication())
-        _activeRestTimer.value = ActiveRestTimerState()
-    }
-
-    fun addSecondsToRestTimer(secondsToAdd: Int) {
-        val current = _activeRestTimer.value
-        if (current.isRunning && current.remainingSeconds > 0) {
-            val newTotal = (current.totalSeconds + secondsToAdd).coerceAtLeast(1)
-            val newEndTime = current.endTimeMillis + (secondsToAdd * 1000L)
-            val newRemaining = ((newEndTime - System.currentTimeMillis()) / 1000L).toInt().coerceAtLeast(1)
-            _activeRestTimer.value = current.copy(
-                totalSeconds = newTotal,
-                remainingSeconds = newRemaining,
-                endTimeMillis = newEndTime
-            )
-            // Re-schedule alarm with updated remaining time
-            RestTimerScheduler.cancelRestTimer(getApplication())
-            RestTimerScheduler.scheduleRestTimer(getApplication(), newRemaining, current.timerName, newEndTime)
-        } else if (current.hasFinished || !current.isRunning) {
-            startRestTimer(secondsToAdd.coerceAtLeast(1), if (current.timerName.isNotBlank()) current.timerName else "Rest Timer")
-        }
-    }
-
-    fun saveCustomRestTimer(name: String, totalSeconds: Int) {
-        val cleanName = name.trim().ifBlank { "Rest Timer" }
-        val cleanSeconds = totalSeconds.coerceAtLeast(5)
-        viewModelScope.launch {
-            val currentList = savedRestTimers.value.toMutableList()
-            val existingIndex = currentList.indexOfFirst { it.name.equals(cleanName, ignoreCase = true) }
-            val newTimer = CustomRestTimer(name = cleanName, totalSeconds = cleanSeconds)
-            if (existingIndex >= 0) {
-                currentList[existingIndex] = newTimer
-            } else {
-                currentList.add(newTimer)
-            }
-            userPreferencesRepo.saveRestTimers(currentList)
-        }
-    }
-
-    fun deleteCustomRestTimer(id: String) {
-        viewModelScope.launch {
-            val currentList = savedRestTimers.value.filter { it.id != id }
-            userPreferencesRepo.saveRestTimers(currentList)
-        }
-    }
+    fun deleteCustomRestTimer(id: String) = restTimerController.deleteCustomTimer(id)
 
     // === WORKOUT SESSIONS & ACTIVE LOGGING ===
     val allSessions: StateFlow<List<WorkoutSession>> = repository.getAllSessions()
@@ -1516,172 +1254,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun getSetsForSession(sessionId: Long): Flow<List<LoggedSet>> = repository.getSetsForSession(sessionId)
 
-    private val _activeSession = MutableStateFlow<WorkoutSession?>(null)
-    val activeSession: StateFlow<WorkoutSession?> = _activeSession.asStateFlow()
+    data class ExerciseHistoryPage(
+        val sets: List<LoggedSet>,
+        val loadedDays: Int,
+        val totalDays: Int,
+        val hasMore: Boolean
+    )
 
-    private val _activeSets = MutableStateFlow<List<LoggedSet>>(emptyList())
-    val activeSets: StateFlow<List<LoggedSet>> = _activeSets.asStateFlow()
-
-    private val _activeSessionExercises = MutableStateFlow<List<Exercise>>(emptyList())
-    val activeSessionExercises: StateFlow<List<Exercise>> = _activeSessionExercises.asStateFlow()
-
-    fun startNewSession(title: String = "Quick Workout") {
-        // A brand new workout always starts with a clean rest timer.
-        stopRestTimer()
-        val now = System.currentTimeMillis()
-        _activeSession.value = WorkoutSession(
-            title = title,
-            startTime = now,
-            endTime = now
+    /** Loads Session History five distinct logged days at a time, straight from the database. */
+    suspend fun loadExerciseHistoryPage(
+        exerciseName: String,
+        offsetDays: Int,
+        limitDays: Int = 5
+    ): ExerciseHistoryPage {
+        val safeOffset = offsetDays.coerceAtLeast(0)
+        val totalDays = repository.countExerciseHistoryDays(exerciseName)
+        val sets = repository.getSetsForExerciseHistoryPage(
+            exerciseName = exerciseName,
+            limitDays = limitDays,
+            offsetDays = safeOffset
         )
-        _activeSets.value = emptyList()
-        _activeSessionExercises.value = emptyList()
-    }
-
-    fun addExerciseToActiveSession(exercise: Exercise) {
-        val currentSession = _activeSession.value ?: run {
-            startNewSession("Quick Workout")
-            _activeSession.value!!
-        }
-
-        if (_activeSessionExercises.value.none { it.id == exercise.id }) {
-            _activeSessionExercises.value = _activeSessionExercises.value + exercise
-        }
-
-        val currentList = _activeSets.value.toMutableList()
-        val existingSetsOfThisExercise = currentList.filter { it.exerciseId == exercise.id }
-        val nextSetNumber = existingSetsOfThisExercise.size + 1
-        val lastSet = existingSetsOfThisExercise.lastOrNull()
-
-        val newSet = LoggedSet(
-            sessionId = currentSession.id,
-            exerciseId = exercise.id,
-            exerciseName = exercise.name,
-            exerciseType = exercise.exerciseType,
-            setNumber = nextSetNumber,
-            weight = lastSet?.weight ?: if (exercise.exerciseType == ExerciseType.STANDARD_WEIGHT) 60.0 else 0.0,
-            addedWeight = lastSet?.addedWeight ?: 0.0,
-            reps = lastSet?.reps ?: if (exercise.exerciseType == ExerciseType.PURE_BODYWEIGHT) 10 else 8,
-            holdDurationSeconds = lastSet?.holdDurationSeconds ?: 0,
-            isCompleted = false,
-            timestamp = System.currentTimeMillis(),
-            // The body weight that applies to this set, taken now so a later weigh-in does not
-            // rewrite it. The set is done at the body weight of the day it was logged.
-            bodyWeightKg = currentBodyWeightKg()
+        val loadedDays = sets.map { LocalDateKey.keyOf(it.timestamp) }.distinct().size
+        return ExerciseHistoryPage(
+            sets = sets,
+            loadedDays = loadedDays,
+            totalDays = totalDays,
+            hasMore = safeOffset + loadedDays < totalDays
         )
-        currentList.add(newSet)
-        _activeSets.value = currentList
     }
 
-    fun addSetToActiveSession(exercise: Exercise) {
-        addExerciseToActiveSession(exercise)
-    }
+    private val quickWorkoutController = QuickWorkoutSessionController(
+        repository = repository,
+        scope = viewModelScope,
+        currentBodyWeightKg = { currentBodyWeightKg() },
+        resolveBodyWeightKg = { resolveBodyWeightKg() },
+        stopRestTimer = { stopRestTimer() },
+        refreshBenchmarks = { refreshBenchmarkRecords() },
+        clearWorkoutDraft = { clearWorkoutDraft() },
+        refreshWidgets = { refreshAndroidWidgets() },
+        onSessionSaved = { maybeGenerateWorkoutSummary(it) }
+    )
 
-    fun updateActiveSet(index: Int, updated: LoggedSet) {
-        val currentList = _activeSets.value.toMutableList()
-        if (index in currentList.indices) {
-            currentList[index] = updated
-            _activeSets.value = currentList
-        }
-    }
+    val activeSession: StateFlow<WorkoutSession?> get() = quickWorkoutController.activeSession
+    val activeSets: StateFlow<List<LoggedSet>> get() = quickWorkoutController.activeSets
+    val activeSessionExercises: StateFlow<List<Exercise>>
+        get() = quickWorkoutController.activeSessionExercises
 
-    fun updateActiveSet(updated: LoggedSet) {
-        val currentList = _activeSets.value.toMutableList()
-        val idx = currentList.indexOfFirst {
-            (it.id != 0L && it.id == updated.id) || (it.exerciseId == updated.exerciseId && it.setNumber == updated.setNumber)
-        }
-        if (idx != -1) {
-            currentList[idx] = updated
-            _activeSets.value = currentList
-        }
-    }
+    fun startNewSession(title: String = "Quick Workout") =
+        quickWorkoutController.startNewSession(title)
 
-    fun deleteActiveSet(index: Int) {
-        val currentList = _activeSets.value.toMutableList()
-        if (index in currentList.indices) {
-            val removed = currentList.removeAt(index)
-            // Re-index remaining sets for this exercise
-            var currentSetNum = 1
-            val reindexed = currentList.map { set ->
-                if (set.exerciseId == removed.exerciseId) {
-                    set.copy(setNumber = currentSetNum++)
-                } else {
-                    set
-                }
-            }
-            _activeSets.value = reindexed
-            if (reindexed.none { it.exerciseId == removed.exerciseId }) {
-                _activeSessionExercises.value = _activeSessionExercises.value.filter { it.id != removed.exerciseId }
-            }
-        }
-    }
+    fun addExerciseToActiveSession(exercise: Exercise) = quickWorkoutController.addExercise(exercise)
 
-    fun deleteActiveSet(setToDel: LoggedSet) {
-        val currentList = _activeSets.value.toMutableList()
-        val idx = currentList.indexOfFirst {
-            (it.id != 0L && it.id == setToDel.id) || (it.exerciseId == setToDel.exerciseId && it.setNumber == setToDel.setNumber)
-        }
-        if (idx != -1) {
-            deleteActiveSet(idx)
-        }
-    }
+    fun addSetToActiveSession(exercise: Exercise) = quickWorkoutController.addExercise(exercise)
 
-    fun finishAndSaveActiveSession(notes: String = "") {
-        val currentSession = _activeSession.value ?: return
-        val currentSets = _activeSets.value
-        // The workout is over: a running rest timer must not survive it, otherwise it would keep
-        // counting down (and ring later on) during the next session.
-        stopRestTimer()
-        // Only sets the user explicitly ticked as "done" are saved. Default rep/weight/hold values
-        // are just placeholders, so saving them would pollute history, volume and progress analytics.
-        viewModelScope.launch(Dispatchers.IO) {
-            val savedAt = System.currentTimeMillis()
-            // The body weight is frozen at the moment the workout is finished and copied onto every
-            // saved set. Sets made earlier in the same session may have been stamped with an older
-            // profile weight if the athlete updated it mid workout; the finished workout must read as
-            // one body weight, and that weight must never follow a later profile edit.
-            val finalBodyWeightKg = resolveBodyWeightKg()
-            val setsToSave = currentSets
-                .filter { it.isCompleted }
-                .mapIndexed { index, set ->
-                    set.copy(
-                        timestamp = savedAt + index,
-                        bodyWeightKg = finalBodyWeightKg.takeIf { it > 0.0 } ?: set.bodyWeightKg
-                    )
-                }
+    fun updateActiveSet(index: Int, updated: LoggedSet) = quickWorkoutController.updateSet(index, updated)
 
-            var savedSessionId: Long? = null
-            if (setsToSave.isNotEmpty()) {
-                val finalSession = currentSession.copy(
-                    endTime = System.currentTimeMillis(),
-                    notes = notes
-                )
-                val sessionId = repository.insertSession(finalSession)
-                val setsWithSessionId = setsToSave.map { it.copy(sessionId = sessionId) }
-                repository.insertSets(setsWithSessionId)
-                savedSessionId = sessionId
-                // A new bodyweight record may have just been set
-                refreshBenchmarkRecords()
-            }
-            withContext(Dispatchers.Main) {
-                _activeSession.value = null
-                _activeSets.value = emptyList()
-                _activeSessionExercises.value = emptyList()
-            }
-            // The workout is saved, so there is nothing left to offer back on the next launch.
-            clearWorkoutDraft()
-            refreshAndroidWidgets()
-            savedSessionId?.let { maybeGenerateWorkoutSummary(it) }
-        }
-    }
+    fun updateActiveSet(updated: LoggedSet) = quickWorkoutController.updateSet(updated)
 
-    fun discardActiveSession() {
-        stopRestTimer()
-        _activeSession.value = null
-        _activeSets.value = emptyList()
-        _activeSessionExercises.value = emptyList()
-        clearWorkoutDraft()
-    }
+    fun deleteActiveSet(index: Int) = quickWorkoutController.deleteSet(index)
+
+    fun deleteActiveSet(setToDel: LoggedSet) = quickWorkoutController.deleteSet(setToDel)
+
+    fun finishAndSaveActiveSession(notes: String = "") =
+        quickWorkoutController.finishAndSave(notes)
+
+    fun discardActiveSession() = quickWorkoutController.discard()
 
     // === AUTO SAVE OF THE WORKOUT IN PROGRESS ===
     //
@@ -1725,10 +1362,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun saveActiveWorkoutDraftNow() {
         // A replacement import owns the preference file while it is applying. The autosave loop
         // must not write a stale draft over the draft that was just restored.
-        val transfer = _dataTransferState.value
-        if (transfer is DataTransferState.Running && transfer.operation == BackupOperation.IMPORT) return
-        val routine = _activeRoutineWorkout.value
-        val session = _activeSession.value
+        if (dataTransferController.isImportApplying()) return
+        val routine = routineWorkoutController.activeRoutineWorkout.value
+        val session = quickWorkoutController.activeSession.value
         if (routine == null && session == null) return
 
         val draft = if (routine != null) {
@@ -1752,8 +1388,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 kind = WorkoutDraft.KIND_QUICK,
                 title = session?.title.orEmpty(),
                 startTime = session?.startTime ?: System.currentTimeMillis(),
-                exerciseIds = _activeSessionExercises.value.map { it.id },
-                sets = _activeSets.value
+                exerciseIds = quickWorkoutController.activeSessionExercises.value.map { it.id },
+                sets = quickWorkoutController.activeSets.value
             )
         }
 
@@ -1807,19 +1443,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     resolve(id, fromSets?.exerciseName.orEmpty(), fromSets?.exerciseType ?: ExerciseType.STANDARD_WEIGHT)
                 }
             }
-            _activeRoutineWorkout.value = ActiveRoutineWorkoutState(
-                routineId = draft.routineId,
-                routineName = draft.title,
-                routineGoal = draft.routineGoal,
-                startTime = draft.startTime,
-                exercises = exercises,
-                routineItems = draft.routineItems,
-                sets = draft.sets,
-                weekday = draft.weekday,
-                dayTitle = draft.dayTitle,
-                dayNote = draft.dayNote,
-                plannedDate = draft.plannedDate,
-                plannedDateKey = draft.plannedDateKey
+            routineWorkoutController.restore(
+                ActiveRoutineWorkoutState(
+                    routineId = draft.routineId,
+                    routineName = draft.title,
+                    routineGoal = draft.routineGoal,
+                    startTime = draft.startTime,
+                    exercises = exercises,
+                    routineItems = draft.routineItems,
+                    sets = draft.sets,
+                    weekday = draft.weekday,
+                    dayTitle = draft.dayTitle,
+                    dayNote = draft.dayNote,
+                    plannedDate = draft.plannedDate,
+                    plannedDateKey = draft.plannedDateKey
+                )
             )
         } else {
             val exercises = draft.exerciseIds.mapTo(mutableListOf()) { id ->
@@ -1834,14 +1472,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     exercises.add(resolve(id, fromSets?.exerciseName.orEmpty(), fromSets?.exerciseType ?: ExerciseType.STANDARD_WEIGHT))
                 }
             }
-            _activeSession.value = WorkoutSession(
-                id = 0L,
-                title = draft.title.ifBlank { "Quick Workout" },
-                startTime = draft.startTime,
-                endTime = draft.startTime
+            quickWorkoutController.restore(
+                session = WorkoutSession(
+                    id = 0L,
+                    title = draft.title.ifBlank { "Quick Workout" },
+                    startTime = draft.startTime,
+                    endTime = draft.startTime
+                ),
+                exercises = exercises,
+                sets = draft.sets
             )
-            _activeSessionExercises.value = exercises
-            _activeSets.value = draft.sets
         }
     }
 
@@ -1861,12 +1501,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val clean = title.trim().take(MAX_WORKOUT_NAME_LENGTH)
         if (clean.isBlank()) return
 
-        _activeSession.value?.let { session ->
-            _activeSession.value = session.copy(title = clean)
-        }
-        _activeRoutineWorkout.value?.let { routine ->
-            _activeRoutineWorkout.value = routine.copy(routineName = clean)
-        }
+        quickWorkoutController.rename(clean)
+        routineWorkoutController.rename(clean)
     }
 
     fun deleteSession(session: WorkoutSession) {
@@ -1879,136 +1515,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // === PROGRESS & DETAILED ANALYTICS ===
-    val distinctLoggedExercises: StateFlow<List<String>> = repository.getDistinctLoggedExerciseNames()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val selectedExerciseForProgress = MutableStateFlow<String>("")
-    val selectedMetric = MutableStateFlow<ProgressMetric>(ProgressMetric.ESTIMATED_1RM)
-    val selectedAddedWeightFilter = MutableStateFlow<Double?>(null) // null = All, or specific value like 0.0, 10.0, 15.0
+    private val progressAnalyticsController = ProgressAnalyticsController(
+        repository = repository,
+        userProfile = userProfile,
+        scope = viewModelScope
+    )
 
-    // Historical sets for selected exercise
-    val exerciseHistorySets: StateFlow<List<LoggedSet>> = selectedExerciseForProgress
-        .flatMapLatest { exerciseName ->
-            if (exerciseName.isBlank()) flowOf(emptyList())
-            else repository.getSetsForExercise(exerciseName)
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    /**
-     * Available weights dynamically populated from the historical sets of the selected exercise.
-     *
-     * A body weight set is isolated by the body weight it was done at, which is the snapshot the
-     * set carries (see [BodyWeightTimeline]). Never by a weigh-in: weigh-ins are optional, and
-     * deleting them must not make every body weight exercise lose its weight.
-     */
-    val availableAddedWeights: StateFlow<List<Double>> = combine(
-        exerciseHistorySets,
-        userProfile
-    ) { sets, profile ->
-        if (sets.isEmpty()) return@combine emptyList()
-
-        val weights = sortedSetOf<Double>()
-
-        // 1. Explicit external loads (both weight and added weight), always > 0
-        for (set in sets) {
-            if (set.addedWeight > 0.0) weights.add(set.addedWeight)
-            if (set.weight > 0.0) weights.add(set.weight)
-        }
-
-        // 2. Body weight sets: tagged with the body weight that applied when they were logged.
-        //    Each set carries its own, so a set from last month keeps its own tag after a weigh-in
-        //    today, and two sets done at different body weights are two different tags. Only the
-        //    bodyweight types qualify: a zero-load barbell set is an empty bar, and giving it the
-        //    athlete's weight used to add a ghost "BW: 80 kg" chip. A plain 0.0 entry is never
-        //    added either, it used to appear as a misleading "BW: 0 kg".
-        for (set in sets) {
-            if (BodyWeightTimeline.isBodyweightTagCandidate(set)) {
-                BodyWeightTimeline.bodyWeightForSet(set, profile.currentWeightKg)?.let { weights.add(it) }
-            }
-        }
-
-        weights.toList()
-    }
-        .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    // Computed chart points for progression line graph
-    val progressChartPoints: StateFlow<List<ChartPoint>> = combine(
-        exerciseHistorySets,
-        selectedMetric,
-        selectedAddedWeightFilter,
-        userProfile
-    ) { sets, metric, addedWeightFilter, profile ->
-        if (sets.isEmpty()) return@combine emptyList()
-
-        // Group sets by workout session / timestamp date
-        val dateFormat = DATE_FORMAT_CHART.get() ?: SimpleDateFormat("MMM d", Locale.getDefault())
-        val dayFormat = DATE_FORMAT_DAY.get() ?: SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-
-        // The body weight each set was done at, not today's. A set from last month keeps its own
-        // weight after a weigh-in today, which is the whole point of the snapshot.
-        fun bodyWeightOf(set: LoggedSet): Double? =
-            BodyWeightTimeline.bodyWeightForSet(set, profile.currentWeightKg)
-
-        /** Load actually lifted, or null when there is no usable body weight for the set. */
-        fun effectiveWeightOrNull(set: LoggedSet): Double? =
-            WorkoutMetrics.effectiveWeightKg(set, bodyWeightOf(set))
-
-        // Filter by isolated weight tag if specified.
-        //
-        // The tag is a plain number inside the block, not a nullable one. A Double compared
-        // against a Double? is boxed on both sides, and a boxed Double is compared by reference
-        // rather than by value, so the tag is unwrapped before it is compared.
-        val filteredSets = addedWeightFilter?.let { tag ->
-            sets.filter { set ->
-                BodyWeightTimeline.matchesIsolatedWeight(set, tag, bodyWeightOf(set))
-            }
-        } ?: sets
-
-        if (filteredSets.isEmpty()) return@combine emptyList()
-
-        // Group by day/session
-        val groupedByDate = filteredSets.groupBy {
-            dayFormat.format(Date(it.timestamp))
-        }
-
-        groupedByDate.mapNotNull { (_, daySets) ->
-            val sampleSet = daySets.first()
-            val timestamp = sampleSet.timestamp
-            val label = dateFormat.format(Date(timestamp))
-
-            val value = when (metric) {
-                ProgressMetric.MAX_REPS -> {
-                    // Reps need no weight at all, so every set counts
-                    daySets.maxOfOrNull { it.reps.toDouble() } ?: 0.0
-                }
-                ProgressMetric.ESTIMATED_1RM -> {
-                    // 1RM Calculation: a body weight set without a known body weight cannot be
-                    // expressed in kg, so it is left out instead of guessing a number
-                    val measurable = daySets.filter { effectiveWeightOrNull(it) != null }
-                    measurable.maxOfOrNull { set ->
-                        val effectiveWeight = effectiveWeightOrNull(set) ?: 0.0
-                        WorkoutMetrics.estimateOneRepMax(effectiveWeight, set.reps)
-                    } ?: return@mapNotNull null
-                }
-                ProgressMetric.TOTAL_VOLUME -> {
-                    val measurable = daySets.filter { effectiveWeightOrNull(it) != null }
-                    if (measurable.isEmpty()) return@mapNotNull null
-                    measurable.sumOf { set -> (effectiveWeightOrNull(set) ?: 0.0) * set.reps }
-                }
-            }
-
-            val detail = "${daySets.size} sets (${daySets.joinToString { "${it.reps}r" }})"
-            ChartPoint(
-                timestamp = timestamp,
-                value = value,
-                label = label,
-                detailText = detail
-            )
-        }.sortedBy { it.timestamp }
-    }
-        .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val distinctLoggedExercises: StateFlow<List<String>>
+        get() = progressAnalyticsController.distinctLoggedExercises
+    val selectedExerciseForProgress: MutableStateFlow<String>
+        get() = progressAnalyticsController.selectedExerciseForProgress
+    val selectedMetric: MutableStateFlow<ProgressMetric>
+        get() = progressAnalyticsController.selectedMetric
+    val selectedAddedWeightFilter: MutableStateFlow<Double?>
+        get() = progressAnalyticsController.selectedAddedWeightFilter
+    val exerciseHistorySets: StateFlow<List<LoggedSet>>
+        get() = progressAnalyticsController.exerciseHistorySets
+    val availableAddedWeights: StateFlow<List<Double>>
+        get() = progressAnalyticsController.availableAddedWeights
+    val progressChartPoints: StateFlow<List<ChartPoint>>
+        get() = progressAnalyticsController.progressChartPoints
 
     // Auto-select first exercise if none selected
     init {
@@ -2055,53 +1582,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         // The update check at startup is deliberately quiet: it never reports a network failure,
         // and it only surfaces a dialog when there is actually a newer release to offer.
-        viewModelScope.launch { maybeCheckForUpdatesOnStart() }
-
-        viewModelScope.launch {
-            RestTimerEventManager.timerFinishedFlow.collect {
-                val current = _activeRestTimer.value
-                if (current.isRunning) {
-                    _activeRestTimer.value = current.copy(
-                        remainingSeconds = 0,
-                        isRunning = false,
-                        isPaused = false,
-                        hasFinished = true
-                    )
-                }
-            }
-        }
-
-        viewModelScope.launch {
-            distinctLoggedExercises.collect { list ->
-                val currentSelection = selectedExerciseForProgress.value
-                when {
-                    // Nothing logged anymore (e.g. all app data was deleted) -> show the empty state
-                    list.isEmpty() -> {
-                        selectedExerciseForProgress.value = ""
-                        selectedAddedWeightFilter.value = null
-                    }
-                    currentSelection.isBlank() -> {
-                        selectedExerciseForProgress.value = list.first()
-                    }
-                    // The selected exercise no longer has any logged set -> fall back to a valid one
-                    list.none { it == currentSelection } -> {
-                        selectedExerciseForProgress.value = list.first()
-                        selectedAddedWeightFilter.value = null
-                    }
-                }
-            }
-        }
-
-        // A weight tag that no longer exists (e.g. after the historical body weight fix) must not
-        // silently keep filtering the chart: there would be no chip left to switch it off.
-        viewModelScope.launch {
-            availableAddedWeights.collect { available ->
-                val selected = selectedAddedWeightFilter.value
-                if (selected != null && available.isNotEmpty() && available.none { it == selected }) {
-                    selectedAddedWeightFilter.value = null
-                }
-            }
-        }
+        viewModelScope.launch { appUpdateController.maybeCheckForUpdatesOnStart() }
 
         viewModelScope.launch(Dispatchers.IO) {
             repository.getAllChatSessions().collect { sessions ->
@@ -2245,16 +1726,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Immediate, in-memory cleanup so no stale session / timer survives the wipe.
         stopRestTimer()
         discardActiveSession()
-        _activeRoutineWorkout.value = null
+        routineWorkoutController.clearLiveState()
         _isChatLoading.value = false
-        selectedExerciseForProgress.value = ""
-        selectedAddedWeightFilter.value = null
+        progressAnalyticsController.resetSelection()
         currentChatSession.value = null
         generatedRoutine.value = ""
         _unstructuredParseState.value = UnstructuredParseState.Idle
         _customRoutinePromptState.value = CustomRoutinePromptState.Idle
-        _availableModels.value = aiService.knownModels(activeAiProvider.value)
-        _modelDiscoveryError.value = null
+        aiConfigurationController.resetModelDiscovery()
 
         viewModelScope.launch(Dispatchers.IO) {
             repository.clearAllUserData()
@@ -2281,225 +1760,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // === USER DATA EXPORT / IMPORT ===
 
-    /**
-     * Writes a verified `.ironpulse` archive to the document the athlete chose with the system
-     * picker. The archive is built and verified in the app's cache first; only then is it copied to
-     * the provider, so a failed provider write can never be reported as a successful backup.
-     */
-    fun exportUserData(uri: Uri, suggestedName: String? = null) {
-        if (_dataTransferState.value is DataTransferState.Running) return
-        preparedImport?.cleanup()
-        preparedImport = null
-        dataTransferJob = viewModelScope.launch(Dispatchers.IO) {
-            var temp: File? = null
-            var destinationWritten = false
-            try {
-                _dataTransferState.value = DataTransferState.Running(
-                    BackupOperation.EXPORT,
-                    BackupProgress(BackupPhase.PREPARING, 0, 8)
-                )
-                val app = getApplication<Application>()
-                temp = File.createTempFile("ironpulse-export-", ".${BackupFormat.EXTENSION}", app.cacheDir)
-                val summary = backupManager.exportToFile(temp) { progress ->
-                    _dataTransferState.value = DataTransferState.Running(BackupOperation.EXPORT, progress)
-                }
-                val displayName = queryDocumentName(uri)
-                    ?: suggestedName
-                    ?: summary.fileName
-                val output = app.contentResolver.openOutputStream(uri, "wt")
-                    ?: throw BackupException(
-                        "The selected destination could not be opened for writing.",
-                        com.example.data.backup.BackupErrorCode.IO_ERROR
-                    )
-                output.use { stream ->
-                    temp.inputStream().use { input ->
-                        copyWithLimit(input, stream, BackupArchiveLimits().maxArchiveBytes)
-                    }
-                    stream.flush()
-                }
-                destinationWritten = true
-                val reportedSize = queryDocumentSize(uri)
-                if (reportedSize != null && reportedSize != summary.sizeBytes) {
-                    destinationWritten = false
-                    deleteDestinationDocument(uri)
-                    throw BackupException(
-                        "The backup file was not fully written to the selected destination.",
-                        com.example.data.backup.BackupErrorCode.IO_ERROR
-                    )
-                }
-                _dataTransferState.value = DataTransferState.Success(
-                    operation = BackupOperation.EXPORT,
-                    title = "Backup saved",
-                    detail = "$displayName • ${formatBytes(summary.sizeBytes)}"
-                )
-            } catch (e: CancellationException) {
-                _dataTransferState.value = DataTransferState.Cancelled(
-                    "Export cancelled. No completed backup was left in IronPulse."
-                )
-                throw e
-            } catch (e: Exception) {
-                if (!destinationWritten) deleteDestinationDocument(uri)
-                _dataTransferState.value = DataTransferState.Error(
-                    message = friendlyBackupError(e, importOperation = false),
-                    destinationPreserved = true
-                )
-            } finally {
-                temp?.delete()
-            }
-        }
-    }
+    val dataTransferState: StateFlow<DataTransferState> get() = dataTransferController.dataTransferState
 
-    /**
-     * Copies the selected archive into app-private cache and fully validates it, without touching
-     * any database, preference or file. Success only moves the UI to the destructive confirmation.
-     */
-    fun inspectUserDataImport(uri: Uri) {
-        if (_dataTransferState.value is DataTransferState.Running ||
-            _dataTransferState.value is DataTransferState.ReadyToImport
-        ) {
-            return
-        }
-        dataTransferJob = viewModelScope.launch(Dispatchers.IO) {
-            var temp: File? = null
-            try {
-                _dataTransferState.value = DataTransferState.Running(
-                    BackupOperation.IMPORT,
-                    BackupProgress(BackupPhase.VALIDATING, 0, 5)
-                )
-                val app = getApplication<Application>()
-                temp = File.createTempFile("ironpulse-import-", ".${BackupFormat.EXTENSION}", app.cacheDir)
-                val input = app.contentResolver.openInputStream(uri)
-                    ?: throw BackupException(
-                        "The selected backup could not be opened.",
-                        com.example.data.backup.BackupErrorCode.IO_ERROR
-                    )
-                input.use { stream ->
-                    temp.outputStream().use { output ->
-                        copyWithLimit(stream, output, BackupArchiveLimits().maxArchiveBytes)
-                    }
-                }
-                val prepared = backupManager.inspectFile(
-                    archive = temp,
-                    displayName = queryDocumentName(uri)
-                ) { progress ->
-                    _dataTransferState.value = DataTransferState.Running(BackupOperation.IMPORT, progress)
-                }
-                preparedImport?.cleanup()
-                preparedImport = prepared
-                _dataTransferState.value = DataTransferState.ReadyToImport(prepared.preview)
-            } catch (e: CancellationException) {
-                temp?.delete()
-                _dataTransferState.value = DataTransferState.Cancelled(
-                    "Import cancelled before anything was changed."
-                )
-                throw e
-            } catch (e: Exception) {
-                temp?.delete()
-                _dataTransferState.value = DataTransferState.Error(
-                    message = friendlyBackupError(e, importOperation = true),
-                    destinationPreserved = true
-                )
-            }
-        }
-    }
+    fun exportUserData(uri: Uri, suggestedName: String? = null) =
+        dataTransferController.exportUserData(uri, suggestedName)
 
-    /** Applies the already-validated archive after the athlete confirms the replacement. */
-    fun confirmUserDataImport() {
-        val prepared = preparedImport ?: return
-        if (_dataTransferState.value is DataTransferState.Running) return
-        preparedImport = null
-        dataTransferJob = viewModelScope.launch(Dispatchers.IO) {
-            try {
-                withContext(Dispatchers.Main.immediate) {
-                    resetTransientStateForReplacement()
-                }
-                _dataTransferState.value = DataTransferState.Running(
-                    BackupOperation.IMPORT,
-                    BackupProgress(BackupPhase.STAGING, 0, 9)
-                )
-                val summary = backupManager.applyImport(prepared) { progress ->
-                    _dataTransferState.value = DataTransferState.Running(BackupOperation.IMPORT, progress)
-                }
-                withContext(Dispatchers.Main.immediate) {
-                    resetTransientStateForReplacement()
-                    reloadPendingWorkoutDraftLater()
-                }
-                refreshAndroidWidgets()
-                _dataTransferState.value = DataTransferState.Success(
-                    operation = BackupOperation.IMPORT,
-                    title = "Backup restored",
-                    detail = "Restored the backup created by IronPulse ${summary.preview.appVersionName} " +
-                        "on ${summary.preview.exportedAt}. API keys and your profile picture were kept on this device."
-                )
-            } catch (e: CancellationException) {
-                withContext(Dispatchers.Main.immediate) {
-                    resetTransientStateForReplacement()
-                    reloadPendingWorkoutDraftLater()
-                }
-                _dataTransferState.value = DataTransferState.Cancelled(
-                    "Import cancelled. Your previous data was restored."
-                )
-                throw e
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main.immediate) {
-                    resetTransientStateForReplacement()
-                    reloadPendingWorkoutDraftLater()
-                }
-                _dataTransferState.value = DataTransferState.Error(
-                    message = friendlyBackupError(e, importOperation = true),
-                    destinationPreserved = (e as? BackupException)?.dataPreserved ?: false
-                )
-            } finally {
-                prepared.cleanup()
-            }
-        }
-    }
+    fun inspectUserDataImport(uri: Uri) = dataTransferController.inspectUserDataImport(uri)
 
-    /** Drops a validated archive that has not been applied yet. */
-    fun cancelPendingUserDataImport() {
-        preparedImport?.cleanup()
-        preparedImport = null
-        if (_dataTransferState.value is DataTransferState.ReadyToImport) {
-            _dataTransferState.value = DataTransferState.Idle
-        }
-    }
+    fun confirmUserDataImport() = dataTransferController.confirmUserDataImport()
 
-    /** Stops an export (or a pre-apply validation) without touching existing user data. */
-    fun cancelDataTransfer() {
-        val running = _dataTransferState.value as? DataTransferState.Running ?: return
-        val canCancel = running.operation == BackupOperation.EXPORT ||
-            running.progress.phase == BackupPhase.PREPARING ||
-            running.progress.phase == BackupPhase.VALIDATING
-        if (!canCancel) return
-        dataTransferJob?.cancel()
-    }
+    fun cancelPendingUserDataImport() = dataTransferController.cancelPendingUserDataImport()
 
-    /** Clears a completed/failed message so the Settings card returns to its normal state. */
-    fun dismissDataTransferMessage() {
-        if (_dataTransferState.value !is DataTransferState.Running &&
-            _dataTransferState.value !is DataTransferState.ReadyToImport
-        ) {
-            _dataTransferState.value = DataTransferState.Idle
-        }
-    }
+    fun cancelDataTransfer() = dataTransferController.cancelDataTransfer()
+
+    fun dismissDataTransferMessage() = dataTransferController.dismissDataTransferMessage()
 
     private suspend fun resetTransientStateForReplacement() {
         stopRestTimer()
-        _activeSession.value = null
-        _activeSets.value = emptyList()
-        _activeSessionExercises.value = emptyList()
-        _activeRoutineWorkout.value = null
+        quickWorkoutController.clearLiveState()
+        routineWorkoutController.clearLiveState()
         _pendingWorkoutDraft.value = null
         currentChatSession.value = null
         _isChatLoading.value = false
-        selectedExerciseForProgress.value = ""
-        selectedAddedWeightFilter.value = null
+        progressAnalyticsController.resetSelection()
         generatedRoutine.value = ""
         _unstructuredParseState.value = UnstructuredParseState.Idle
         _customRoutinePromptState.value = CustomRoutinePromptState.Idle
         _monthlySummaryState.value = MonthlySummaryState.Idle
-        _availableModels.value = aiService.knownModels(activeAiProvider.value)
-        _modelDiscoveryError.value = null
+        aiConfigurationController.resetModelDiscovery()
     }
 
     private fun reloadPendingWorkoutDraftLater() {
@@ -2511,55 +1799,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             _pendingWorkoutDraft.value = draft
         }
-    }
-
-    private fun queryDocumentName(uri: Uri): String? = runCatching {
-        getApplication<Application>().contentResolver.query(
-            uri,
-            arrayOf(OpenableColumns.DISPLAY_NAME),
-            null,
-            null,
-            null
-        )?.use { cursor ->
-            if (cursor.moveToFirst()) cursor.getString(0)?.takeIf { it.isNotBlank() } else null
-        }
-    }.getOrNull()
-
-    private fun queryDocumentSize(uri: Uri): Long? = runCatching {
-        getApplication<Application>().contentResolver.query(
-            uri,
-            arrayOf(OpenableColumns.SIZE),
-            null,
-            null,
-            null
-        )?.use { cursor ->
-            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0).takeIf { it > 0L } else null
-        }
-    }.getOrNull()
-
-    private fun deleteDestinationDocument(uri: Uri) {
-        runCatching {
-            val app = getApplication<Application>()
-            if (DocumentsContract.isDocumentUri(app, uri)) {
-                DocumentsContract.deleteDocument(app.contentResolver, uri)
-            }
-        }
-    }
-
-    private fun friendlyBackupError(error: Throwable, importOperation: Boolean): String {
-        if (error is BackupException) return error.message ?: "The backup operation failed."
-        return if (importOperation) {
-            "The import failed unexpectedly. Your existing data was not replaced."
-        } else {
-            "The export failed unexpectedly. Your existing IronPulse data was not changed."
-        }
-    }
-
-    private fun formatBytes(bytes: Long): String {
-        if (bytes < 1024L) return "$bytes B"
-        val kb = bytes / 1024.0
-        if (kb < 1024.0) return String.format(Locale.US, "%.1f KB", kb)
-        return String.format(Locale.US, "%.1f MB", kb / 1024.0)
     }
 
     // === POST-WORKOUT AI SUMMARIES ===
@@ -3036,6 +2275,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    val savedCustomAccents: StateFlow<List<String>> = userPreferencesRepo.savedCustomAccentsFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun saveCustomAccent(hex: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.saveCustomAccent(hex)
+        }
+    }
+
+    fun removeCustomAccent(hex: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.removeCustomAccent(hex)
+        }
+    }
+
+    fun setMaterialExpressive3(enabled: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.setMaterialExpressive3(enabled)
+        }
+    }
+
     /**
      * Whether the athlete's week starts on Monday.
      *
@@ -3354,75 +2614,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // === ACTIVITY HEATMAP (progress page) ===
-
-    /**
-     * Training time and lifted volume per day, for the last year.
-     *
-     * The duration of a session is not reliable on its own: a workout saved a few seconds after it
-     * started has an almost zero end-start difference, which used to leave the day of the map
-     * completely empty even though the athlete had trained. The span between the first and the last
-     * logged set is used as a second source, and a day with logged sets always keeps a visible
-     * floor of colour (see [ActivityHeatmap.intensity]).
-     */
-    val activityDays: StateFlow<List<ActivityDay>> = combine(
-        repository.getAllSessionsWithSets(),
-        userProfile
-    ) { sessions, profile -> buildActivityDays(sessions, profile.currentWeightKg) }
-        .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    private fun buildActivityDays(
-        sessions: List<SessionWithSets>,
-        profileWeightKg: Double
-    ): List<ActivityDay> {
-        val oneYearAgo = ActivityHeatmap.startOfDay(
-            java.util.Calendar.getInstance().apply { add(java.util.Calendar.MONTH, -12) }.timeInMillis
-        )
-
-        val minutesByDay = HashMap<Long, Int>()
-        val volumeByDay = HashMap<Long, Double>()
-        val setsByDay = HashMap<Long, Int>()
-
-        sessions.forEach { wrapper ->
-            val day = ActivityHeatmap.startOfDay(wrapper.session.startTime)
-            if (day < oneYearAgo) return@forEach
-
-            // The same duration and the same volume the Progress chart uses, so the two screens
-            // never tell the athlete two different things about the same week.
-            val minutes = WorkoutMetrics.minutes(wrapper.session, wrapper.sets)
-            val volume = WorkoutMetrics.sessionVolume(wrapper.sets) { set ->
-                BodyWeightTimeline.bodyWeightForSet(set, profileWeightKg)
-            }
-
-            minutesByDay[day] = (minutesByDay[day] ?: 0) + minutes
-            volumeByDay[day] = (volumeByDay[day] ?: 0.0) + volume
-            setsByDay[day] = (setsByDay[day] ?: 0) + wrapper.sets.size
-        }
-
-        return setsByDay.keys.sorted().map { day ->
-            ActivityDay(
-                epochDayStart = day,
-                minutes = minutesByDay[day] ?: 0,
-                volume = volumeByDay[day] ?: 0.0,
-                setCount = setsByDay[day] ?: 0
-            )
-        }
-    }
-
     // === SAVED ROUTINES ===
     val savedRoutines: StateFlow<List<SavedRoutine>> = repository.getAllSavedRoutines()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    /**
-     * Asks the AI Coach screen to open on its Saved Routines tab.
-     *
-     * The saved routines are a tab of the coach screen rather than a destination of their own, so
-     * a request from elsewhere in the app has to travel through here. The counter is what the
-     * coach screen watches: a repeat request is a new number, not the same one again.
-     */
-    private val _savedRoutinesTabRequest = MutableStateFlow(0)
-    val savedRoutinesTabRequest: StateFlow<Int> = _savedRoutinesTabRequest.asStateFlow()
 
     private val _homeStreakFocusRequest = MutableStateFlow(0)
     val homeStreakFocusRequest: StateFlow<Int> = _homeStreakFocusRequest.asStateFlow()
@@ -3453,177 +2647,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun requestSavedRoutinesTab() {
-        _savedRoutinesTabRequest.value = _savedRoutinesTabRequest.value + 1
-    }
-
     // === HOME DASHBOARD ===
 
-    /**
-     * Every finished workout with its sets.
-     *
-     * One read of the history feeds every number on the Home screen, so the dashboard never
-     * shows two different versions of the same week.
-     */
-    val workoutHistory: StateFlow<List<SessionWithSets>> = repository.getAllSessionsWithSets()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private val homeDashboardController = HomeDashboardController(
+        repository = repository,
+        preferences = userPreferencesRepo,
+        scope = viewModelScope,
+        userProfile = userProfile,
+        allExercises = allExercises,
+        savedRoutines = savedRoutines,
+        weekStartFlow = weekStartFlow,
+        refreshWidgets = { refreshAndroidWidgets() }
+    )
 
-    /** The body weight that applied to a set, taken from the snapshot the set carries. */
-    private fun bodyWeightForSet(profileWeightKg: Double): (LoggedSet) -> Double? = { set ->
-        BodyWeightTimeline.bodyWeightForSet(set, profileWeightKg)
-    }
-
-    /**
-     * The last seven calendar dates, today included, with the volume and the time trained on each.
-     */
-    val homeHeatmap: StateFlow<List<HomeDashboard.DayCell>> = combine(
-        workoutHistory,
-        userProfile
-    ) { sessions, profile ->
-        HomeDashboard.rollingHeatmap(
-            sessions = sessions,
-            today = System.currentTimeMillis(),
-            bodyWeightForSet = bodyWeightForSet(profile.currentWeightKg)
-        )
-    }
-        .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    /**
-     * The number of days on which the athlete completed a qualifying workout.
-     *
-     * It is the number of distinct calendar days, not a streak, so it never resets.
-     */
-    val lifetimeTrainingDays: StateFlow<Int> = workoutHistory
-        .map { sessions -> HomeDashboard.qualifyingDayCount(sessions) }
-        .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
-
-    /** The totals of the calendar week the athlete is in. */
-    val weekTotals: StateFlow<HomeDashboard.WeekTotals> = combine(
-        workoutHistory,
-        userProfile,
-        weekStartFlow
-    ) { sessions, profile, weekStartsOnMonday ->
-        HomeDashboard.weekTotals(
-            sessions = sessions,
-            today = System.currentTimeMillis(),
-            weekStartsOnMonday = weekStartsOnMonday,
-            bodyWeightForSet = bodyWeightForSet(profile.currentWeightKg)
-        )
-    }
-        .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), HomeDashboard.WeekTotals(0, 0, 0.0))
-
-    /** The last workout the athlete finished. */
-    val recentWorkout: StateFlow<SessionWithSets?> = workoutHistory
-        .map { sessions -> HomeDashboard.mostRecentWorkout(sessions) }
-        .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
-
-    /** The routine the athlete has scheduled their week with. */
-    val activeRoutineId: StateFlow<Long> = userPreferencesRepo.activeRoutineIdFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
-
-    /**
-     * The routine the athlete has scheduled their week with.
-     *
-     * Null when none has been picked, or when the routine it named has been deleted. The Home
-     * screen then asks the athlete to choose one rather than picking one for them.
-     */
-    val activeRoutine: StateFlow<SavedRoutine?> = combine(
-        savedRoutines,
-        activeRoutineId
-    ) { routines, id ->
-        if (id <= 0L) null else routines.firstOrNull { it.id == id }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+    val activityDays: StateFlow<List<ActivityDay>> get() = homeDashboardController.activityDays
+    val workoutHistory: StateFlow<List<SessionWithSets>> get() = homeDashboardController.workoutHistory
+    val homeHeatmap: StateFlow<List<HomeDashboard.DayCell>> get() = homeDashboardController.homeHeatmap
+    val lifetimeTrainingDays: StateFlow<Int> get() = homeDashboardController.lifetimeTrainingDays
+    val weekTotals: StateFlow<HomeDashboard.WeekTotals> get() = homeDashboardController.weekTotals
+    val recentWorkout: StateFlow<SessionWithSets?> get() = homeDashboardController.recentWorkout
+    val activeRoutineId: StateFlow<Long> get() = homeDashboardController.activeRoutineId
+    val activeRoutine: StateFlow<SavedRoutine?> get() = homeDashboardController.activeRoutine
+    val activeRoutineDays: StateFlow<List<RoutineDay>> get() = homeDashboardController.activeRoutineDays
+    val scheduleDays: StateFlow<List<ScheduledWorkoutDay>> get() = homeDashboardController.scheduleDays
+    val streakSummary: StateFlow<StreakSummary> get() = homeDashboardController.streakSummary
 
     /** Schedules a routine as the athlete's week, or clears it with 0. */
     fun setActiveRoutine(routineId: Long) {
         viewModelScope.launch(Dispatchers.IO) {
             userPreferencesRepo.setActiveRoutineId(routineId)
             refreshAndroidWidgets()
-        }
-    }
-
-    /**
-     * The seven days of the scheduled routine, one per weekday.
-     *
-     * A day with no exercises in it is a rest day.
-     */
-    val activeRoutineDays: StateFlow<List<RoutineDay>> = combine(
-        activeRoutine,
-        allExercises,
-        weekStartFlow
-    ) { routine, exercises, weekStartsOnMonday ->
-        if (routine == null) {
-            emptyList()
-        } else {
-            RoutineParser.parseWeek(routine.exercisesJson, exercises, weekStartsOnMonday)
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    /**
-     * The materialized per-date schedule.
-     *
-     * Past rows are history. Only today and the future are regenerated when the active routine
-     * changes, so an edit cannot silently turn last month's completed day into a missed one.
-     */
-    val scheduleDays: StateFlow<List<ScheduledWorkoutDay>> = repository.getScheduleDays()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    /** Emits once a minute so a pending today becomes missed at the next local midnight. */
-    private val currentDayTicker: Flow<Long> = flow {
-        while (true) {
-            emit(ActivityHeatmap.startOfDay(System.currentTimeMillis()))
-            delay(60_000L)
-        }
-    }.distinctUntilChanged()
-
-    /**
-     * The current/best streak and the twelve-week adherence heat map.
-     *
-     * Derived from the persisted schedule and the finished sessions, never from a counter that is
-     * incremented when the app opens.
-     */
-    val streakSummary: StateFlow<StreakSummary> = combine(
-        scheduleDays,
-        workoutHistory,
-        weekStartFlow,
-        currentDayTicker
-    ) { schedule, sessions, weekStartsOnMonday, today ->
-        WorkoutStreak.calculate(
-            schedule = schedule,
-            sessions = sessions,
-            today = today,
-            weekStartsOnMonday = weekStartsOnMonday
-        )
-    }
-        .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), StreakSummary())
-
-    init {
-        // This block is deliberately after activeRoutine, activeRoutineDays and weekStartFlow:
-        // Kotlin initializes properties in declaration order, and collecting them earlier would
-        // observe their default values rather than the athlete's active routine.
-        viewModelScope.launch(Dispatchers.IO) {
-            allExercises.first { it.isNotEmpty() }
-            combine(activeRoutine, activeRoutineDays, weekStartFlow) { routine, days, _ ->
-                routine to days
-            }.collectLatest { (routine, days) ->
-                val today = ActivityHeatmap.startOfDay(System.currentTimeMillis())
-                val rows = if (routine == null) {
-                    emptyList()
-                } else {
-                    WorkoutStreak.buildScheduleRows(
-                        routineId = routine.id,
-                        days = days,
-                        fromDate = today
-                    )
-                }
-                repository.replaceFutureSchedule(fromDate = today, rows = rows)
-                refreshAndroidWidgets()
-            }
         }
     }
 
@@ -3741,276 +2794,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // === DEDICATED ROUTINE WORKOUT SESSION ===
-    private val _activeRoutineWorkout = MutableStateFlow<ActiveRoutineWorkoutState?>(null)
-    val activeRoutineWorkout: StateFlow<ActiveRoutineWorkoutState?> = _activeRoutineWorkout.asStateFlow()
 
-    /**
-     * Applies the routine item's default added weight to the exercise.
-     *
-     * An added weight is a property of the routine, not of the movement: the same single leg squat
-     * can be done at +20 kg in one split and at bodyweight in another. The exercise is therefore
-     * turned into an added weight exercise, which is the type that makes the app ask for the added
-     * weight and add it to the body weight in the volume maths.
-     *
-     * The catalog row is left alone. This is a copy, and only for the session.
-     */
-    private fun withRoutineAddedWeight(exercise: Exercise, item: RoutineExerciseItem): Exercise {
-        if (item.targetAddedWeightKg <= 0.0) return exercise
-        return exercise.copy(exerciseType = ExerciseType.ADDED_WEIGHT)
-    }
+    private val routineWorkoutController = RoutineWorkoutSessionController(
+        repository = repository,
+        scope = viewModelScope,
+        allExercises = { allExercises.value },
+        weekStartsOnMonday = { weekStartsOnMonday() },
+        currentBodyWeightKg = { currentBodyWeightKg() },
+        resolveBodyWeightKg = { resolveBodyWeightKg() },
+        stopRestTimer = { stopRestTimer() },
+        clearQuickWorkout = { quickWorkoutController.clearLiveState() },
+        clearWorkoutDraft = { clearWorkoutDraft() },
+        refreshWidgets = { refreshAndroidWidgets() },
+        onSessionSaved = { maybeGenerateWorkoutSummary(it) }
+    )
 
-    /**
-     * Starts a routine workout.
-     *
-     * @param targetWeekday the weekday to train, 1 = Monday ... 7 = Sunday. When it is null the
-     *        first day of the routine is used.
-     */
-    fun startRoutineWorkout(routine: SavedRoutine, targetWeekday: Int? = null) {
-        // Dismiss any lingering quick workout tray so only the dedicated routine workout runs
-        _activeSession.value = null
-        _activeSets.value = emptyList()
-        _activeSessionExercises.value = emptyList()
+    val activeRoutineWorkout: StateFlow<ActiveRoutineWorkoutState?>
+        get() = routineWorkoutController.activeRoutineWorkout
 
-        val allEx = allExercises.value
-        val days = RoutineParser.parseDays(routine.exercisesJson, allEx, weekStartsOnMonday())
+    fun startRoutineWorkout(routine: SavedRoutine, targetWeekday: Int? = null) =
+        routineWorkoutController.start(routine, targetWeekday)
 
-        // The day the athlete asked for, or the first day of the routine. A rest day is never
-        // started: an empty routine must not launch an empty session.
-        val targetDay = if (targetWeekday != null && days.isNotEmpty()) {
-            days.firstOrNull { it.weekday == targetWeekday && it.exercises.isNotEmpty() }
-                ?: days.firstOrNull { it.exercises.isNotEmpty() }
-        } else if (days.isNotEmpty()) {
-            days.firstOrNull { it.exercises.isNotEmpty() }
-        } else {
-            null
-        }
+    fun addSetToRoutineWorkout(exercise: Exercise) = routineWorkoutController.addSet(exercise)
 
-        val routineItems = targetDay?.exercises
-            ?: RoutineParser.parseExercises(routine.exercisesJson, allEx, weekStartsOnMonday())
-        val weekday = targetDay?.weekday ?: Weekday.MONDAY
-        val dayTitle = targetDay?.dayTitle.orEmpty()
-        val dayNote = targetDay?.note.orEmpty()
+    fun updateRoutineWorkoutSet(index: Int, updated: LoggedSet) =
+        routineWorkoutController.updateSet(index, updated)
 
-        val exMap = allEx.associateBy { it.id }
-        val exByName = allEx.associateBy { it.name.trim().lowercase() }
+    fun deleteRoutineWorkoutSet(index: Int) = routineWorkoutController.deleteSet(index)
 
-        // Resolve exact exercises in the specified order for this day
-        val resolvedExercises = mutableListOf<Exercise>()
-        for (item in routineItems) {
-            // A coach note must never become a workout exercise, even from older saved routines
-            if (RoutineParser.isCoachNoteLine(item.exerciseName)) continue
-            val byId = exMap[item.exerciseId]
-            val byName = exByName[item.exerciseName.trim().lowercase()]
-            val found = byId ?: byName ?: RoutineParser.findMatchingExercise(item.exerciseName, exByName.values)
-            if (found != null && !resolvedExercises.contains(found)) {
-                resolvedExercises.add(withRoutineAddedWeight(found, item))
-            } else if (found == null && item.exerciseName.isNotBlank()) {
-                val tempEx = Exercise(
-                    id = if (item.exerciseId > 0) item.exerciseId else ((System.currentTimeMillis() % 1000000) + resolvedExercises.size),
-                    name = item.exerciseName,
-                    category = item.category.ifBlank { "Calisthenics" },
-                    exerciseType = item.exerciseType,
-                    equipment = item.equipment.ifBlank { "Bodyweight" },
-                    description = "Prescribed routine exercise"
-                )
-                resolvedExercises.add(withRoutineAddedWeight(tempEx, item))
-            }
-        }
+    fun stopRoutineWorkout() = routineWorkoutController.stop()
 
-        // Fallback for unstructured legacy text if needed
-        if (resolvedExercises.isEmpty() && routine.exercisesJson.isNotBlank()) {
-            for (line in routine.exercisesJson.lines()) {
-                val clean = line.substringBefore("(").replace("*", "").removePrefix("-").trim().lowercase()
-                val matched = exByName[clean]
-                if (matched != null && !resolvedExercises.contains(matched)) {
-                    resolvedExercises.add(matched)
-                }
-            }
-        }
-
-        // Pre-populate initial sets for each exercise so the workout has immediate ready-to-log rows
-        val initialSets = mutableListOf<LoggedSet>()
-        val now = System.currentTimeMillis()
-        resolvedExercises.forEachIndexed { exIndex, ex ->
-            val item = routineItems.getOrNull(exIndex)
-            val numSets = item?.targetSets?.coerceIn(1, 10) ?: 3
-            val reps = item?.targetReps ?: 8
-            val hold = item?.targetHoldSeconds ?: 0
-            val weight = item?.targetWeight ?: 0.0
-            // The default added weight the routine prescribes for this exercise, 0 for none.
-            val addedTarget = item?.targetAddedWeightKg ?: 0.0
-
-            for (setNum in 1..numSets) {
-                initialSets.add(
-                    LoggedSet(
-                        sessionId = 0L,
-                        exerciseId = ex.id,
-                        exerciseName = ex.name,
-                        exerciseType = ex.exerciseType,
-                        setNumber = setNum,
-                        weight = if (ex.exerciseType == ExerciseType.STANDARD_WEIGHT) weight else 0.0,
-                        // The added weight the routine prescribes, when it prescribes one. The
-                        // exercise has already been turned into an added weight exercise by
-                        // withRoutineAddedWeight, so this is the number the athlete lifts on top
-                        // of their own body weight.
-                        addedWeight = if (ex.exerciseType == ExerciseType.ADDED_WEIGHT) {
-                            if (addedTarget > 0.0) addedTarget else weight
-                        } else 0.0,
-                        // Reps and hold seconds are independent: a prescribed hold never erases the prescribed
-                        // reps (an explosive pull-up is 3 reps, a plank is 30 seconds).
-                        reps = reps,
-                        holdDurationSeconds = hold,
-                        isCompleted = false,
-                        timestamp = now,
-                        // The body weight that applies to this day, taken now so a later weigh-in
-                        // does not rewrite what these sets weighed.
-                        bodyWeightKg = currentBodyWeightKg()
-                    )
-                )
-            }
-        }
-
-        _activeRoutineWorkout.value = ActiveRoutineWorkoutState(
-            routineId = routine.id,
-            routineName = routine.name,
-            routineGoal = routine.goal,
-            startTime = now,
-            exercises = resolvedExercises,
-            routineItems = routineItems,
-            sets = initialSets,
-            weekday = weekday,
-            dayTitle = dayTitle,
-            dayNote = dayNote,
-            // The day this session fulfils, not necessarily the day it is started. A Monday
-            // session done on Wednesday still belongs to Monday's plan.
-            plannedDate = WorkoutStreak.dateForWeekdayInWeek(
-                weekday = weekday,
-                reference = now,
-                weekStartsOnMonday = weekStartsOnMonday()
-            )
-        ).let { state ->
-            state.copy(plannedDateKey = LocalDateKey.keyOf(state.plannedDate))
-        }
-    }
-
-    fun addSetToRoutineWorkout(exercise: Exercise) {
-        val current = _activeRoutineWorkout.value ?: return
-        val existingForEx = current.sets.filter { it.exerciseId == exercise.id }
-        val nextSetNum = existingForEx.size + 1
-        val lastSet = existingForEx.lastOrNull()
-        val newSet = LoggedSet(
-            sessionId = 0L,
-            exerciseId = exercise.id,
-            exerciseName = exercise.name,
-            exerciseType = exercise.exerciseType,
-            setNumber = nextSetNum,
-            weight = lastSet?.weight ?: 0.0,
-            addedWeight = lastSet?.addedWeight ?: 0.0,
-            reps = lastSet?.reps ?: 8,
-            holdDurationSeconds = lastSet?.holdDurationSeconds ?: 0,
-            isCompleted = false,
-            timestamp = System.currentTimeMillis(),
-            // The body weight that applies to this set, taken now so a later weigh-in does not
-            // rewrite it.
-            bodyWeightKg = currentBodyWeightKg()
-        )
-        _activeRoutineWorkout.value = current.copy(sets = current.sets + newSet)
-    }
-
-    fun updateRoutineWorkoutSet(index: Int, updated: LoggedSet) {
-        val current = _activeRoutineWorkout.value ?: return
-        if (index !in current.sets.indices) return
-        val mutableList = current.sets.toMutableList()
-        mutableList[index] = updated
-        _activeRoutineWorkout.value = current.copy(sets = mutableList)
-    }
-
-    fun deleteRoutineWorkoutSet(index: Int) {
-        val current = _activeRoutineWorkout.value ?: return
-        if (index !in current.sets.indices) return
-        val mutableList = current.sets.toMutableList()
-        val deletedSet = mutableList.removeAt(index)
-        // Re-index remaining sets for this exercise
-        var currentSetNum = 1
-        val reindexed = mutableList.map { set ->
-            if (set.exerciseId == deletedSet.exerciseId) {
-                set.copy(setNumber = currentSetNum++)
-            } else {
-                set
-            }
-        }
-        _activeRoutineWorkout.value = current.copy(sets = reindexed)
-    }
-
-    fun stopRoutineWorkout() {
-        // Ending a routine workout also ends any rest timer that was running.
-        stopRestTimer()
-        _activeRoutineWorkout.value = null
-        // Ensure no active workout tray remains open on the log workout screen
-        _activeSession.value = null
-        _activeSets.value = emptyList()
-        _activeSessionExercises.value = emptyList()
-        // The athlete left the workout on purpose, so it must not be offered back on the next launch.
-        clearWorkoutDraft()
-    }
-
-    fun finishRoutineWorkout(notes: String) {
-        val current = _activeRoutineWorkout.value ?: return
-        // The workout is over: stop the rest timer so it cannot keep running or ring later.
-        stopRestTimer()
-        viewModelScope.launch(Dispatchers.IO) {
-            // Only the sets the user ticked as "done" are saved. Prescribed target values
-            // (reps / weight / hold) are only defaults and must never be counted as logged work.
-            val savedAt = System.currentTimeMillis()
-            // One body weight for the whole finished workout, taken at the moment it is saved.
-            // See finishAndSaveActiveSession: a later profile edit must not rewrite history.
-            val finalBodyWeightKg = resolveBodyWeightKg()
-            val setsToSave = current.sets
-                .filter { it.isCompleted }
-                .mapIndexed { index, set ->
-                    set.copy(
-                        timestamp = savedAt + index,
-                        bodyWeightKg = finalBodyWeightKg.takeIf { it > 0.0 } ?: set.bodyWeightKg
-                    )
-                }
-
-            // A workout without any logged set is not a workout, so nothing is persisted.
-            var savedSessionId: Long? = null
-            if (setsToSave.isNotEmpty()) {
-                val sessionTitle = if (!current.dayTitle.isNullOrBlank() && !current.routineName.contains(current.dayTitle, ignoreCase = true)) {
-                    "${current.routineName} (${current.dayTitle})"
-                } else {
-                    current.routineName
-                }
-                val session = WorkoutSession(
-                    title = sessionTitle,
-                    startTime = current.startTime,
-                    endTime = System.currentTimeMillis(),
-                    notes = notes.trim(),
-                    routineId = current.routineId,
-                    routineWeekday = current.weekday ?: 0,
-                    plannedDate = current.plannedDate,
-                    plannedDateKey = current.plannedDateKey.takeIf { it > 0L }
-                        ?: LocalDateKey.keyOf(current.plannedDate)
-                )
-                val sessionId = repository.insertSession(session)
-                repository.insertSets(setsToSave.map { it.copy(sessionId = sessionId) })
-                savedSessionId = sessionId
-            }
-
-            withContext(Dispatchers.Main) {
-                _activeRoutineWorkout.value = null
-                // Ensure no active workout tray remains open on the log workout screen
-                _activeSession.value = null
-                _activeSets.value = emptyList()
-                _activeSessionExercises.value = emptyList()
-            }
-            // The workout is saved, so there is nothing left to offer back on the next launch.
-            clearWorkoutDraft()
-            refreshAndroidWidgets()
-            savedSessionId?.let { maybeGenerateWorkoutSummary(it) }
-        }
-    }
+    fun finishRoutineWorkout(notes: String) = routineWorkoutController.finish(notes)
 
     // === AI FITNESS ASSISTANT (GEMINI) ===
     val chatSessions: StateFlow<List<ChatSession>> = repository.getAllChatSessions()
@@ -5420,277 +4234,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
     // === APP UPDATES AND ABOUT ===
 
-    /**
-     * The service that reads the official releases of this repository.
-     *
-     * It is created once and reused, so the connections are pooled and the release metadata is
-     * read from the same place every time.
-     */
-    private val releaseApi = ReleaseApi()
+    val updateState: StateFlow<UpdateState> get() = appUpdateController.updateState
+    val startupUpdate: StateFlow<GithubRelease?> get() = appUpdateController.startupUpdate
+    val aboutState: StateFlow<AboutState> get() = appUpdateController.aboutState
 
-    private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
-    val updateState: StateFlow<UpdateState> = _updateState.asStateFlow()
+    fun closeStartupUpdatePrompt(dontShowAgain: Boolean = false) =
+        appUpdateController.closeStartupUpdatePrompt(dontShowAgain)
 
-    /**
-     * The release the startup check found, while its prompt is on screen.
-     *
-     * Kept apart from [updateState] so the prompt only ever appears for an automatic check, never
-     * when the athlete pressed "Check for updates" in the settings themselves.
-     */
-    private val _startupUpdate = MutableStateFlow<GithubRelease?>(null)
-    val startupUpdate: StateFlow<GithubRelease?> = _startupUpdate.asStateFlow()
+    fun checkForUpdates() = appUpdateController.checkForUpdates()
 
-    /**
-     * Looks for a newer release when the app starts, unless the athlete turned that off or already
-     * asked not to be reminded for this installed version.
-     *
-     * A failure is swallowed on purpose: a workout app must not open on an error about GitHub.
-     */
-    private suspend fun maybeCheckForUpdatesOnStart() {
-        if (!userPreferencesRepo.autoCheckUpdatesOnStartFlow.first()) return
-        val dismissedFor = userPreferencesRepo.dismissedUpdatePromptVersionFlow.first()
-        if (dismissedFor == BuildConfig.VERSION_NAME) return
+    fun cancelUpdate() = appUpdateController.cancelUpdate()
 
-        releaseApi.fetchLatestRelease()
-            .onSuccess { release ->
-                cacheRelease(release)
-                val state = evaluateRelease(release)
-                // Only a real, newer release opens the prompt. Up to date and unreadable versions
-                // stay silent at startup.
-                if (state is UpdateState.Available) {
-                    if (_updateState.value is UpdateState.Idle) {
-                        _updateState.value = state
-                    }
-                    _startupUpdate.value = release
-                }
-            }
-    }
+    fun dismissUpdate() = appUpdateController.dismissUpdate()
 
-    /**
-     * Closes the startup update prompt.
-     *
-     * Closing without [dontShowAgain] is not remembered: the prompt is meant to come back on the
-     * next start until the athlete either updates or asks it to stop. The "do not show again"
-     * suppression is stored against the running version, so it lapses by itself after an update.
-     */
-    fun closeStartupUpdatePrompt(dontShowAgain: Boolean = false) {
-        if (dontShowAgain) {
-            viewModelScope.launch(Dispatchers.IO) {
-                userPreferencesRepo.dismissUpdatePromptForVersion(BuildConfig.VERSION_NAME)
-            }
-        }
-        _startupUpdate.value = null
-    }
+    fun downloadUpdate() = appUpdateController.downloadUpdate()
 
-    /**
-     * The release information the About screen shows.
-     *
-     * It starts from the cached copy, so the screen has something to say before the network has
-     * answered, and it is refreshed whenever the screen is opened.
-     */
-    private val _aboutState = MutableStateFlow(
-        AboutState(installedVersion = BuildConfig.VERSION_NAME)
-    )
-    val aboutState: StateFlow<AboutState> = _aboutState.asStateFlow()
+    fun loadAboutInfo() = appUpdateController.loadAboutInfo()
 
-    /** The running check or download, so it can be cancelled. */
-    private var updateJob: Job? = null
-
-    /**
-     * Looks the newest published release up and works out whether it is newer than the build that
-     * is running.
-     */
-    fun checkForUpdates() {
-        updateJob?.cancel()
-        updateJob = viewModelScope.launch {
-            _updateState.value = UpdateState.Checking
-            releaseApi.fetchLatestRelease()
-                .onSuccess { release ->
-                    cacheRelease(release)
-                    _updateState.value = evaluateRelease(release)
-                }
-                .onFailure { error ->
-                    _updateState.value = UpdateState.Failed(
-                        error.message ?: "The update could not be checked."
-                    )
-                }
-        }
-    }
-
-    /** Stops a running check or download and puts the interface back where it started. */
-    fun cancelUpdate() {
-        updateJob?.cancel()
-        updateJob = null
-        _updateState.value = UpdateState.Cancelled
-    }
-
-    /** Puts the update interface back to its starting state. */
-    fun dismissUpdate() {
-        updateJob?.cancel()
-        updateJob = null
-        _updateState.value = UpdateState.Idle
-    }
-
-    /**
-     * Downloads the release APK the update dialog is offering.
-     *
-     * The download is only started when the athlete asked for it, and it is written into the app's
-     * own storage, where nothing else on the device can read it.
-     */
-    fun downloadUpdate() {
-        // A retry from the startup prompt can happen after a failed download, when the shared
-        // state is no longer Available. The release the prompt is showing is still the target.
-        val available = _updateState.value as? UpdateState.Available
-            ?: _startupUpdate.value?.let { release ->
-                release.installableApk()?.let { UpdateState.Available(release, it) }
-            }
-            ?: return
-        val asset = available.asset ?: return
-        updateJob?.cancel()
-        updateJob = viewModelScope.launch {
-            _updateState.value = UpdateState.Downloading(available.release, asset, 0L, asset.size)
-            val target = ApkInstaller.updateFile(getApplication(), asset.name)
-            val lastPercent = intArrayOf(-1)
-            releaseApi.downloadAsset(asset, target) { read, total ->
-                // Only tell the interface when the percentage moved, so a fast download does not
-                // flood it with updates.
-                val percent = if (total > 0L) ((read * 100L) / total).toInt() else -1
-                if (percent != lastPercent[0]) {
-                    lastPercent[0] = percent
-                    _updateState.value = UpdateState.Downloading(available.release, asset, read, total)
-                }
-            }.onSuccess { file ->
-                // The check returns null when the file is good, and the reason it is not when it
-                // is not. A good file is ready to install; a bad one is deleted and the athlete
-                // is told what was wrong with it.
-                val problem = verifyDownload(asset, file)
-                if (problem == null) {
-                    _updateState.value = UpdateState.ReadyToInstall(available.release, file)
-                } else {
-                    file.delete()
-                    _updateState.value = UpdateState.Failed(problem)
-                }
-            }.onFailure { error ->                _updateState.value = UpdateState.Failed(
-                    error.message ?: "The download did not finish."
-                )
-            }
-        }
-    }
-
-    /**
-     * Checks a downloaded file before it is handed to Android.
-     *
-     * The digest GitHub publishes is checked when there is one. The package is always checked, so
-     * a file that is not an update of this app is never handed to the installer, and so is the key
-     * it is signed with.
-     *
-     * @return null when the file is good, or the reason it is not.
-     */
-    private fun verifyDownload(asset: ReleaseAsset, file: java.io.File): String? {
-        val packageProblem = ApkInstaller.verify(getApplication(), file)
-            .exceptionOrNull()
-            ?.message
-        return UpdateVerification.problem(
-            expectedDigest = asset.sha256,
-            actualDigest = sha256Of(file),
-            packageProblem = packageProblem
-        )
-    }
-
-    /**
-     * The SHA-256 of a file, as a hex string.
-     *
-     * @return the digest, or null when the file could not be read.
-     */
-    private fun sha256Of(file: java.io.File): String? = try {
-        val digest = java.security.MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-            while (true) {
-                val read = input.read(buffer)
-                if (read <= 0) break
-                digest.update(buffer, 0, read)
-            }
-        }
-        digest.digest().joinToString("") { byte -> "%02x".format(byte) }
-    } catch (_: Exception) {
-        null
-    }
-
-    /**
-     * Works out what the release means for the build that is running.
-     *
-     * A release that is not newer is never offered: an installed build that is ahead of the
-     * published one is up to date as far as the athlete is concerned, and offering it a "newer"
-     * release would be offering a downgrade.
-     */
-    private fun evaluateRelease(release: GithubRelease): UpdateState {
-        val latest = release.version
-        if (latest == null) {
-            return UpdateState.Failed(
-                "The release ${release.tagName} does not carry a version the app can read.",
-                canRetry = false
-            )
-        }
-        val installed = AppVersion.parse(BuildConfig.VERSION_NAME)
-        if (installed == null) {
-            return UpdateState.Failed(
-                "The installed version could not be read, so no update was offered.",
-                canRetry = false
-            )
-        }
-        if (!latest.isNewerThan(installed)) {
-            return UpdateState.UpToDate(release)
-        }
-        return UpdateState.Available(release, release.installableApk())
-    }
-
-    /**
-     * Reads the release information for the About screen.
-     *
-     * The cached copy is shown first, so the screen is never empty, and the network answer replaces
-     * it when it arrives.
-     */
-    fun loadAboutInfo() {
-        viewModelScope.launch {
-            userPreferencesRepo.cachedReleaseFlow.first()?.let { cached ->
-                val release = ReleaseApi.parseRelease(cached)
-                if (release != null) {
-                    _aboutState.value = _aboutState.value.copy(
-                        latestRelease = release,
-                        isFromCache = true
-                    )
-                }
-            }
-            _aboutState.value = _aboutState.value.copy(isLoading = true, error = null)
-            releaseApi.fetchLatestRelease()
-                .onSuccess { release ->
-                    cacheRelease(release)
-                    _aboutState.value = _aboutState.value.copy(
-                        latestRelease = release,
-                        isLoading = false,
-                        error = null,
-                        isFromCache = false
-                    )
-                }
-                .onFailure { error ->
-                    _aboutState.value = _aboutState.value.copy(
-                        isLoading = false,
-                        error = error.message ?: "The release information could not be read."
-                    )
-                }
-        }
-    }
-
-    /** Keeps a copy of the release information, so the About screen works without a network. */
-    private fun cacheRelease(release: GithubRelease) {
-        viewModelScope.launch(Dispatchers.IO) {
-            userPreferencesRepo.saveCachedRelease(release)
-        }
-    }
-
-    /** The page the official releases are on. */
-    fun releasesPageUrl(): String = releaseApi.releasesPageUrl()
+    fun releasesPageUrl(): String = appUpdateController.releasesPageUrl()
 
     companion object {
         /** A monthly summary needs more than this many logged sets to read a trend from. */

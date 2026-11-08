@@ -13,9 +13,9 @@ import org.junit.Test
 class NavigationSelectionTest {
 
     @Test
-    fun `settings keeps profile selected`() {
+    fun `settings keeps home selected`() {
         assertEquals(
-            Screen.Profile.route,
+            Screen.Home.route,
             Screen.selectedTabRoute(Screen.Settings.route)
         )
     }
@@ -25,7 +25,7 @@ class NavigationSelectionTest {
         listOf(
             Screen.Home,
             Screen.Progress,
-            Screen.Profile,
+            Screen.Routine,
             Screen.LogWorkout,
             Screen.AiCoach
         ).forEach { screen ->
