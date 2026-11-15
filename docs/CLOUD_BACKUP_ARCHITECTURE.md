@@ -21,6 +21,21 @@ athlete chooses.
 
 There is no Google Drive API, no OAuth client, and no OAuth token in the current build.
 
+## Restoring from the chosen folder
+
+Selecting, changing or connecting a folder is also a restore point. After the folder permission is
+saved, IronPulse lists complete `.ironpulse` files in it, including manual exports and cloud backups,
+and picks the newest by the provider's modified timestamp. If an archive is found:
+
+1. Automatic backups are paused and no new file is written.
+2. The archive is inspected through the same validated import path as a manual file.
+3. The standard replacement dialog shows the backup version, time, size and record counts.
+4. Confirming restores it; canceling keeps local data and resumes the requested backup setting.
+
+A cloud backup is never created before this decision. Automatic and manual cloud backups also wait
+until a profile exists, so connecting a folder during onboarding cannot create an empty archive
+before the athlete finishes setup or restores an existing one.
+
 ## The false "Google Drive is not installed" message
 
 The earlier UI called:
@@ -89,6 +104,10 @@ That is why the shipped architecture remains SAF.
   verification, retention, disconnect and failure handling were tested on an Android 16 emulator.
 - The 5.0.0 release build was validated end to end: a folder was connected, automatic backups were
   enabled, Back up now produced a verified timestamped archive, and the last-backup row updated.
+- The 5.0.1 build was validated against a folder containing several backups. The newest archive was
+  offered before any write, the folder's file count stayed unchanged while the prompt was open, and
+  confirming restored it. A manual `.ironpulse` file was also selectable from a nested folder in the
+  system picker.
 - Real Google Drive synchronization was not tested because Drive is not installed on the
   emulator. The picker and write path are the same for any document provider; a real-device
   check is still required.

@@ -223,6 +223,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
     private val cloudBackupRuntime = MutableStateFlow(CloudBackupRuntimeState())
 
+    /**
+     * A folder that already contains an archive pauses automatic backups until the athlete decides
+     * whether to restore it. These values apply the choice they made when they connected the folder.
+     */
+    private var pendingCloudAutoAfterRestore: Boolean? = null
+    private var pendingCloudScheduleInitialAfterRestore = false
+
     private val automaticCloudWorkState = flow {
         emitAll(cloudBackupScheduler.observeAutomaticWorkState())
     }.catch { emit(CloudBackupWorkState.IDLE) }
@@ -262,8 +269,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         onImportSettled = {
             resetTransientStateForReplacement()
             reloadPendingWorkoutDraftLater()
+            applyPendingCloudAutoAfterRestore()
         },
-        onImportCompleted = { cloudBackupScheduler.scheduleAfterImport() },
+        onImportCompleted = {
+            viewModelScope.launch(Dispatchers.IO) {
+                // A 4.4 archive may have a profile but no onboarding flag. Restoring it during
+                // setup must finish onboarding instead of dropping the athlete on the metrics form.
+                val hasProfile = userPreferencesRepo.storedProfileWeightKg() != null ||
+                    repository.getUserProfile().firstOrNull()?.currentWeightKg?.let { it > 0.0 } == true
+                if (hasProfile && !userPreferencesRepo.onboardingCompletedFlow.first()) {
+                    userPreferencesRepo.setOnboardingCompleted()
+                }
+                cloudBackupScheduler.scheduleAfterImport()
+            }
+        },
         onWidgetsChanged = { refreshAndroidWidgets() }
     )
 
@@ -1922,7 +1941,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun confirmUserDataImport() = dataTransferController.confirmUserDataImport()
 
-    fun cancelPendingUserDataImport() = dataTransferController.cancelPendingUserDataImport()
+    fun cancelPendingUserDataImport() {
+        dataTransferController.cancelPendingUserDataImport()
+        applyPendingCloudAutoAfterRestore()
+    }
 
     fun cancelDataTransfer() = dataTransferController.cancelDataTransfer()
 
@@ -1934,6 +1956,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val uri = cloudBackupPreferences.folderUri()
         cloudBackupPermissionValid.value = uri != null &&
             CloudBackupPermissions.hasPersistedWrite(getApplication(), uri)
+    }
+
+    private fun applyPendingCloudAutoAfterRestore() {
+        val auto = pendingCloudAutoAfterRestore ?: return
+        val scheduleInitial = pendingCloudScheduleInitialAfterRestore
+        pendingCloudAutoAfterRestore = null
+        pendingCloudScheduleInitialAfterRestore = false
+        if (auto) {
+            cloudBackupPreferences.setAutoEnabled(true)
+            cloudBackupScheduler.setAutoEnabled(true, scheduleInitial = scheduleInitial)
+            cloudBackupRuntime.update {
+                it.copy(message = "Automatic backups are on.", messageIsError = false)
+            }
+        }
     }
 
     fun selectCloudBackupFolder(
@@ -1958,6 +1994,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 cloudBackupPermissionValid.value = true
                 val autoEnabled = enableAuto || cloudBackupPreferences.config.value.autoBackupEnabled
+                val existing = runCatching { cloudBackupRunner.findLatestBackup(uri) }.getOrNull()
+                if (existing != null) {
+                    // Do not create a fresh, empty backup before the athlete decides whether this
+                    // archive is theirs. The standard import review dialog is the question.
+                    pendingCloudAutoAfterRestore = autoEnabled
+                    pendingCloudScheduleInitialAfterRestore = scheduleInitialBackup
+                    cloudBackupPreferences.setAutoEnabled(false)
+                    cloudBackupScheduler.cancelAutomatic()
+                    cloudBackupRuntime.update {
+                        it.copy(
+                            message = "Found ${existing.name}. Review it to restore your data.",
+                            messageIsError = false
+                        )
+                    }
+                    inspectUserDataImport(Uri.parse(existing.uri))
+                    return@launch
+                }
                 if (autoEnabled) {
                     cloudBackupPreferences.setAutoEnabled(true)
                     cloudBackupScheduler.setAutoEnabled(true, scheduleInitial = scheduleInitialBackup)

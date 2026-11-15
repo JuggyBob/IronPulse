@@ -122,8 +122,8 @@ Release APKs are attached to the
 checksums.
 
 ```bash
-sha256sum IronPulse-5.0.0.apk
-apksigner verify --print-certs IronPulse-5.0.0.apk
+sha256sum IronPulse-5.0.1.apk
+apksigner verify --print-certs IronPulse-5.0.1.apk
 ```
 
 Compare the file hash against the published `.sha256` before installing an APK you did not build

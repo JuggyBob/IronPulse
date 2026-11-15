@@ -1,10 +1,10 @@
-# IronPulse 5.0.0
+# IronPulse 5.0.1
 
 [![License](https://img.shields.io/badge/license-source--available-lightgrey.svg)](LICENSE)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.2-7F52FF.svg)](https://kotlinlang.org)
 [![Android](https://img.shields.io/badge/Android-7.1%2B-3DDC84.svg)](https://developer.android.com)
-[![Release](https://img.shields.io/badge/release-v5.0.0-blue.svg)](https://github.com/JuggyBob/IronPulse/releases/tag/v5.0.0)
-[![Tests](https://img.shields.io/badge/tests-906%20passing-brightgreen.svg)](https://github.com/JuggyBob/IronPulse)
+[![Release](https://img.shields.io/badge/release-v5.0.1-blue.svg)](https://github.com/JuggyBob/IronPulse/releases/tag/v5.0.1)
+[![Tests](https://img.shields.io/badge/tests-908%20passing-brightgreen.svg)](https://github.com/JuggyBob/IronPulse)
 
 **IronPulse is a local-first strength and calisthenics trainer for Android.** It keeps the plan, the
 workout and the numbers in one place: a 1,334-movement exercise library, reusable Routines arranged
@@ -12,11 +12,17 @@ into a weekly Schedule, a focused workout interface with warm-up sets and drop s
 analytics, body-weight tracking and an optional AI coach that works with the provider you already
 use. No account, no tracking, and no server-side copy of your training data.
 
-IronPulse 5.0.0 is the first public release since 4.4.0 and the largest update in the project's
-history. It replaces the multi-day routine model with **Routines + Schedules**, rebuilds the active
-workout around an exercise selector, adds **drop sets**, **warm-up sets** and per-set rest overrides,
-gives every exercise an explicit field configuration, and adds **cloud-folder backups** and **eight
-selectable launcher icons**. The full 4.4.0 → 5.0.0 record is in [CHANGELOG.md](CHANGELOG.md).
+IronPulse 5.0.1 is a bug-fix update to 5.0.0. It fixes onboarding and backup recovery: `.ironpulse`
+files are selectable from any folder again, connecting a cloud folder offers the newest existing
+backup before writing anything, restoring during onboarding finishes setup instead of asking for
+metrics, and cloud backups wait for a saved profile. The full 4.4.0 → 5.0.1 record is in
+[CHANGELOG.md](CHANGELOG.md).
+
+IronPulse 5.0.0 itself was the first public release since 4.4.0 and the largest update in the
+project's history. It replaced the multi-day routine model with **Routines + Schedules**, rebuilt the
+active workout around an exercise selector, added **drop sets**, **warm-up sets** and per-set rest
+overrides, gave every exercise an explicit field configuration, and added **cloud-folder backups** and
+**eight selectable launcher icons**.
 
 <p align="center">
   <img src="docs/screenshots/5.0.0/01-home-dashboard.png" width="30%" alt="Home: today's workout and the week" />
@@ -26,7 +32,7 @@ selectable launcher icons**. The full 4.4.0 → 5.0.0 record is in [CHANGELOG.md
 
 ---
 
-## What is new in 5.0.0
+## What is new in 5.0
 
 - **Plan is the new home for training structure.** A Routine is one workout. A Schedule is a week of
   seven weekday slots. The active Schedule drives Home and the streak.
@@ -398,6 +404,8 @@ as such and never as the athlete's own.
 - The archive contains profile, preferences, Home layout, custom/edited exercises, all workouts and
   sets, Routines and Schedules, weigh-ins, AI conversations/messages, monthly summaries,
   post-workout summaries and the motivation photo.
+- Import shows every file so a `.ironpulse` archive is selectable from any folder or provider; the
+  archive validator rejects anything that is not a valid IronPulse backup.
 - Import verifies structure, paths, checksums, counts and relationships **before** the destructive
   confirmation. Replacement is transactional with a rollback snapshot; a failure never claims the
   old data was restored unless it was.
@@ -424,6 +432,10 @@ the Drive API.
 - A failed attempt is removed and never overwrites an older backup.
 - The five newest cloud backups are retained; files created by manual export or by the athlete are
   left alone.
+- **Connecting a folder also checks it for existing backups.** If a complete `.ironpulse` archive is
+  present, IronPulse asks before restoring it and writes no new file until you decide. This works for
+  both manual exports and cloud backups. Restoring during onboarding finishes setup immediately;
+  cloud backups wait for a saved profile, so no empty archive is created first.
 - Cloud backups are the same unencrypted `.ironpulse` archive. The UI says so and recommends a
   private folder.
 
@@ -482,7 +494,7 @@ Android still asks for install permission. No token or credential is built into 
 
 <p align="center">
   <img src="docs/screenshots/5.0.0/22-settings.png" width="45%" alt="The Settings hub and athlete profile" />
-  <img src="docs/screenshots/5.0.0/27-about.png" width="45%" alt="About IronPulse 5.0.0 and update settings" />
+  <img src="docs/screenshots/5.0.0/27-about.png" width="45%" alt="About IronPulse and update settings" />
 </p>
 
 ---
@@ -507,7 +519,7 @@ Android still asks for install permission. No token or credential is built into 
 | | |
 |---|---|
 | Package | `com.aistudio.fitness.ironpulse` |
-| Version | **5.0.0 (13)** |
+| Version | **5.0.1 (14)** |
 | Minimum Android | 7.1 (API 24) |
 | Target / compile SDK | 36 |
 | Database | Room 19 |
@@ -517,11 +529,13 @@ Android still asks for install permission. No token or credential is built into 
 - **Public 4.4.0 installs upgrade in place.** The package and signing certificate are unchanged, so
   Android keeps the database. Room migrates 15 → 19, each legacy multi-day routine becomes a
   Schedule plus standalone Routines, and completed sessions and sets are preserved.
-- **Backups from 4.4.0 and earlier** import through the v1–v6 migration chain. A schema-2 4.4.0
-  archive was restored into a fresh 5.0.0 install during release validation, including its logged
+- **Public 5.0.0 installs upgrade in place to 5.0.1.** No schema or backup-format change; the update
+  only replaces the onboarding/backup code.
+- **Backups from 4.4.0 and earlier** import through the v1-v6 migration chain. A schema-2 4.4.0
+  archive was restored into a fresh 5.0.1 install during release validation, including its logged
   sets and active Schedule.
-- **Internal debug builds 13–25** were never public and were debug-signed. A device carrying one must
-  uninstall it before installing the release-signed 5.0.0. Public 4.4.0 is unaffected.
+- **Internal debug builds 13-25** were never public and were debug-signed. A device carrying one must
+  uninstall it before installing the release-signed 5.0.1. Public 4.4.0 and 5.0.0 are unaffected.
 - **Not carried in backups:** API keys, the profile picture, exercise media, per-exercise rest
   defaults and the launcher-icon choice.
 
@@ -569,7 +583,7 @@ Never commit the keystore, a password file, `.env`, `local.properties` or a sign
 ### Tests and lint
 
 ```bash
-./gradlew testDebugUnitTest     # 906 JVM/Robolectric tests across 120 suites
+./gradlew testDebugUnitTest     # 908 JVM/Robolectric tests across 120 suites
 ./gradlew lintDebug             # lint gates the build
 ```
 
@@ -578,12 +592,13 @@ Never commit the keystore, a password file, `.env`, `local.properties` or a sign
 ## Download
 
 Prebuilt APKs are attached to the
-[releases page](https://github.com/JuggyBob/IronPulse/releases). The 5.0.0 release also carries its
+[releases page](https://github.com/JuggyBob/IronPulse/releases). The 5.0.1 release also carries its
 SHA-256 file and source/documentation archives.
 
 | Version | File |
 |---|---|
-| **v5.0.0** | [`IronPulse-5.0.0.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v5.0.0/IronPulse-5.0.0.apk) |
+| **v5.0.1** | [`IronPulse-5.0.1.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v5.0.1/IronPulse-5.0.1.apk) |
+| v5.0.0 | [`IronPulse-5.0.0.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v5.0.0/IronPulse-5.0.0.apk) |
 | v4.4.0 | [`IronPulse-4.4.0.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.4.0/IronPulse-4.4.0.apk) |
 | v4.3.0 | [`IronPulse4.3.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.3.0/IronPulse4.3.0-release.apk) |
 | v4.2.0 | [`IronPulse4.2.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.2.0/IronPulse4.2.0-release.apk) |
@@ -641,7 +656,7 @@ IronPulse/
 │   │   └── res/                        # Icons, strings, themes, backup rules
 │   └── src/test/                       # 906 JVM tests (JUnit + Robolectric)
 ├── docs/
-│   ├── screenshots/5.0.0/              # Final 5.0.0 screenshots used below and in the README
+│   ├── screenshots/5.0.0/              # Final 5.0 screenshots used below and in the README
 │   ├── ARCHITECTURE.md
 │   ├── DATABASE.md
 │   ├── BACKUP_FORMAT.md

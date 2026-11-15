@@ -61,6 +61,19 @@ data class CloudBackupProgress(
     val fraction: Float?
 )
 
+/**
+ * One `.ironpulse` file found in the selected folder.
+ *
+ * The cloud folder can contain both IronPulse cloud backups and manual exports. A restore scans
+ * every real archive, not only the files this feature named itself.
+ */
+data class CloudBackupFile(
+    val name: String,
+    val uri: String,
+    val sizeBytes: Long,
+    val modifiedAt: Long
+)
+
 sealed interface CloudBackupOutcome {
     data class Success(
         val fileName: String,
@@ -170,6 +183,22 @@ object CloudBackupNaming {
 
     fun isPartial(name: String): Boolean =
         name.startsWith(PREFIX) && name.endsWith(".$EXTENSION$PARTIAL_SUFFIX")
+
+    /**
+     * Anything that is a complete `.ironpulse` archive can seed a restore.
+     *
+     * Manual exports use `IronPulse_Backup_...` and cloud backups use
+     * `IronPulse_Cloud_Backup_...`; both are valid. A `.partial` write is never a candidate because
+     * its name ends with `.partial` rather than `.ironpulse`.
+     */
+    fun isRestorableBackup(name: String): Boolean =
+        name.endsWith(".$EXTENSION", ignoreCase = true) &&
+            !name.endsWith(PARTIAL_SUFFIX, ignoreCase = true)
+
+    /** Newest archive by provider timestamp, with the name as a deterministic tie-breaker. */
+    fun newestBackup(files: List<CloudBackupFile>): CloudBackupFile? =
+        files.filter { isRestorableBackup(it.name) }
+            .maxWithOrNull(compareBy({ it.modifiedAt }, { it.name }))
 
     /**
      * Newest first by the timestamp embedded in the name. Only files this feature created are

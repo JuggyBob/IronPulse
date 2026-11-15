@@ -7,6 +7,47 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [5.0.1] - 2026-11-15
+
+IronPulse 5.0.1 is a bug-fix release for onboarding and backup restoration. It does not change the
+Room schema, the `.ironpulse` data schema or the workout model. The public version code is **14**.
+
+### Fixed
+
+- **`.ironpulse` files are selectable again.** The import picker filtered by ZIP/octet-stream MIME
+  types, which hid valid archives on providers that report another type. Onboarding and Data
+  Management now show every file and let the archive validator decide whether it is an IronPulse
+  backup.
+- **Restoring during onboarding finishes setup.** Importing a backup that contains a profile now
+  completes onboarding immediately, even when the archive predates the onboarding flag. The athlete
+  is no longer sent to the metrics form after the restore.
+- **Connecting a cloud folder finds an existing backup.** When the selected folder already contains
+  a complete `.ironpulse` archive (manual export or cloud backup), IronPulse inspects the newest one
+  and asks whether to restore it before writing anything.
+- **No empty backup is created during setup.** Automatic and manual cloud backups wait until a
+  profile is saved, so connecting a folder on the onboarding data page cannot create a backup before
+  the restore decision or before the athlete finishes setup.
+- **Local users can restore from a backup folder.** Connecting or changing the folder in
+  Data Management now offers the newest archive in that folder instead of silently starting a new
+  backup. Declining the restore keeps local data and applies the requested automatic-backup setting.
+- **Restore choice is honoured.** If the athlete confirms, the folder's backup is applied and the
+  requested automatic-backup setting is resumed. If they cancel, local data stays in place and the
+  folder remains connected.
+
+### Verification
+
+- `.ironpulse` files are visible and selectable from Downloads and from a nested folder in the
+  system picker.
+- A schema-2 4.4.0 backup with **no** `onboardingCompleted` preference imported during onboarding and
+  opened Home directly, with its two logged sets preserved.
+- A cloud folder containing several backups showed the newest archive and asked for confirmation
+  before any write; the folder's file count did not change while the prompt was open.
+- After confirming the cloud restore, onboarding completed and Home showed the restored athlete and
+  Schedule. After canceling in Data Management, local data stayed and automatic backup resumed.
+- **908 JVM/Robolectric tests across 120 suites, 0 failures**; `lintDebug` successful.
+
+---
+
 ## [5.0.0] - 2026-11-15
 
 IronPulse 5.0.0 is the first public release since 4.4.0. It is a major release because the training

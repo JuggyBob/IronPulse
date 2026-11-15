@@ -18,8 +18,10 @@ import com.example.data.backup.BackupException
 import com.example.data.backup.BackupFormat
 import com.example.data.backup.UserDataBackupManager
 import com.example.data.backup.copyWithLimit
+import com.example.data.preferences.UserPreferencesRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -43,6 +45,29 @@ class CloudBackupRunner(
     private val preferences: CloudBackupPreferences
 ) {
 
+    /**
+     * Finds the newest complete `.ironpulse` archive in a folder the athlete just selected.
+     *
+     * Both manual exports and IronPulse cloud backups are eligible. The caller asks before
+     * replacing local data; this method only lists and sorts.
+     */
+    suspend fun findLatestBackup(treeUri: Uri): CloudBackupFile? = withContext(Dispatchers.IO) {
+        val parent = runCatching { DocumentFile.fromTreeUri(context, treeUri) }.getOrNull()
+            ?: return@withContext null
+        val files = runCatching { parent.listFiles().toList() }.getOrDefault(emptyList())
+            .filter { it.isFile }
+            .mapNotNull { file ->
+                val name = file.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                CloudBackupFile(
+                    name = name,
+                    uri = file.uri.toString(),
+                    sizeBytes = runCatching { file.length() }.getOrDefault(0L),
+                    modifiedAt = runCatching { file.lastModified() }.getOrDefault(0L)
+                )
+            }
+        CloudBackupNaming.newestBackup(files)
+    }
+
     suspend fun run(
         reason: CloudBackupReason,
         onProgress: (CloudBackupProgress) -> Unit = {}
@@ -55,6 +80,11 @@ class CloudBackupRunner(
                     "Choose a backup folder first.",
                     CloudBackupErrorCode.NOT_CONFIGURED,
                     retryable = false
+                )
+            }
+            if (!hasFinishedSetup()) {
+                return@withLock CloudBackupOutcome.Skipped(
+                    "Finish setting up your profile before IronPulse creates a cloud backup."
                 )
             }
             if (reason.isAutomatic && !config.autoBackupEnabled) {
@@ -281,6 +311,17 @@ class CloudBackupRunner(
                 temp.delete()
             }
         }
+    }
+
+    /**
+     * Onboarding can connect a folder before the profile exists. A backup written at that point
+     * would contain no athlete, and it would run before an existing archive had a chance to be
+     * restored. Both automatic and manual cloud backups wait for a saved profile.
+     */
+    private suspend fun hasFinishedSetup(): Boolean {
+        val preferences = UserPreferencesRepository(context)
+        return preferences.onboardingCompletedFlow.first() ||
+            preferences.storedProfileWeightKg() != null
     }
 
     private fun deleteDocumentQuietly(uri: Uri) {

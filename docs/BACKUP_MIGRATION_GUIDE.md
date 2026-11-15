@@ -41,8 +41,8 @@ converted by the same Room migration used for an in-place upgrade: one Schedule 
 Routine per distinct workout day. If the archive carried `activeRoutineId`, the migrated Schedule is
 promoted to active once it exists.
 
-The 4.4.0 → 5.0.0 release validation restored a real schema-2 archive into a fresh install; the two
-logged sets survived and the active Schedule appeared automatically.
+The 4.4.0 → 5.0.0/5.0.1 release validation restored a real schema-2 archive into a fresh install;
+the two logged sets survived and the active Schedule appeared automatically.
 
 ## Why the DTOs are frozen
 

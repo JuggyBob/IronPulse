@@ -316,8 +316,8 @@ To cut a release:
 2. **Tag the bumped commit.** The tag names the release; it does not set the version:
 
    ```bash
-   git tag -a v5.0.0 -m "IronPulse 5.0.0"
-   git push origin v5.0.0
+   git tag -a v5.0.1 -m "IronPulse 5.0.1"
+   git push origin v5.0.1
    ```
 
 3. **Build the signed release APK** locally with the release key and record its checksum:
@@ -327,18 +327,18 @@ To cut a release:
    sha256sum app/build/outputs/apk/release/app-release.apk
    ```
 
-   Rename the artefact to the release convention (`IronPulse-5.0.0.apk`) and write the
-   checksum to `IronPulse-5.0.0.apk.sha256`. Verify the package, versionCode, versionName and
+   Rename the artefact to the release convention (`IronPulse-5.0.1.apk`) and write the
+   checksum to `IronPulse-5.0.1.apk.sha256`. Verify the package, versionCode, versionName and
    signing certificate before attaching it.
 4. **Build the source and documentation archives** from the tagged commit, and checksum each:
 
    ```bash
-   git archive --format=tar.gz --prefix=IronPulse-5.0.0/ \
-     -o IronPulse-5.0.0-source.tar.gz v5.0.0
-   git archive --format=tar.gz --prefix=IronPulse-5.0.0-docs/ \
-     -o IronPulse-5.0.0-docs.tar.gz v5.0.0 \
+   git archive --format=tar.gz --prefix=IronPulse-5.0.1/ \
+     -o IronPulse-5.0.1-source.tar.gz v5.0.1
+   git archive --format=tar.gz --prefix=IronPulse-5.0.1-docs/ \
+     -o IronPulse-5.0.1-docs.tar.gz v5.0.1 \
      README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md LICENSE LICENSES docs
-   sha256sum IronPulse-5.0.0-source.tar.gz IronPulse-5.0.0-docs.tar.gz
+   sha256sum IronPulse-5.0.1-source.tar.gz IronPulse-5.0.1-docs.tar.gz
    ```
 
    Inspect the archives for keystores, password files, `local.properties`, `.env` files and other
@@ -347,12 +347,12 @@ To cut a release:
    attaching every APK/checksum/archive/checksum pair:
 
    ```bash
-   gh release create v5.0.0 \
-     IronPulse-5.0.0.apk IronPulse-5.0.0.apk.sha256 \
-     IronPulse-5.0.0-source.tar.gz IronPulse-5.0.0-source.tar.gz.sha256 \
-     IronPulse-5.0.0-docs.tar.gz IronPulse-5.0.0-docs.tar.gz.sha256 \
-     --title "IronPulse 5.0.0" \
-     --notes-file IronPulse-5.0.0-release-notes.md \
+   gh release create v5.0.1 \
+     IronPulse-5.0.1.apk IronPulse-5.0.1.apk.sha256 \
+     IronPulse-5.0.1-source.tar.gz IronPulse-5.0.1-source.tar.gz.sha256 \
+     IronPulse-5.0.1-docs.tar.gz IronPulse-5.0.1-docs.tar.gz.sha256 \
+     --title "IronPulse 5.0.1" \
+     --notes-file IronPulse-5.0.1-release-notes.md \
      --verify-tag
    ```
 

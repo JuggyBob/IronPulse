@@ -1513,13 +1513,9 @@ fun SettingsScreen(
                         }
                         OutlinedButton(
                             onClick = {
-                                importDataLauncher.launch(
-                                    arrayOf(
-                                        "application/zip",
-                                        "application/octet-stream",
-                                        "application/x-zip-compressed"
-                                    )
-                                )
+                                // Show every file. Providers disagree about the MIME type of an
+                                // `.ironpulse` archive, which made valid backups unselectable.
+                                importDataLauncher.launch(arrayOf("*/*"))
                             },
                             enabled = !busy,
                             modifier = Modifier

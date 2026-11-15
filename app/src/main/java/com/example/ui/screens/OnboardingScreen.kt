@@ -552,13 +552,10 @@ private fun DataPage(viewModel: MainViewModel) {
             accent = MintGreen,
             enabled = !busy,
             onClick = {
-                importLauncher.launch(
-                    arrayOf(
-                        "application/zip",
-                        "application/octet-stream",
-                        "application/x-zip-compressed"
-                    )
-                )
+                // A `.ironpulse` file can be reported as application/octet-stream, application/zip,
+                // application/x-zip-compressed or an unknown provider type. Filtering by MIME hid
+                // valid backups, so show every file and let the archive validator decide.
+                importLauncher.launch(arrayOf("*/*"))
             },
             testTag = "onboarding_import_button"
         )

@@ -7,10 +7,12 @@
 package com.example
 
 import com.example.data.backup.cloud.CloudBackupConfig
+import com.example.data.backup.cloud.CloudBackupFile
 import com.example.data.backup.cloud.CloudBackupNaming
 import com.example.data.backup.cloud.CloudBackupProviders
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
@@ -69,6 +71,53 @@ class CloudBackupNamingTest {
         assertEquals(
             listOf("IronPulse_Cloud_Backup_2026-11-02_10-00-00.ironpulse", "IronPulse_Cloud_Backup_2026-11-01_10-00-00.ironpulse"),
             CloudBackupNaming.retentionVictims(names, keep = 2)
+        )
+    }
+
+    @Test
+    fun `the newest restorable archive can be a manual export or a cloud backup`() {
+        val files = listOf(
+            CloudBackupFile(
+                name = "IronPulse_Backup_2026-11-01.ironpulse",
+                uri = "content://manual",
+                sizeBytes = 10,
+                modifiedAt = 1_000L
+            ),
+            CloudBackupFile(
+                name = "IronPulse_Cloud_Backup_2026-11-12_21-49-07.ironpulse",
+                uri = "content://cloud",
+                sizeBytes = 20,
+                modifiedAt = 2_000L
+            ),
+            CloudBackupFile(
+                name = "IronPulse_Cloud_Backup_2026-11-13_21-49-07.ironpulse.partial",
+                uri = "content://partial",
+                sizeBytes = 30,
+                modifiedAt = 3_000L
+            ),
+            CloudBackupFile(
+                name = "notes.txt",
+                uri = "content://notes",
+                sizeBytes = 1,
+                modifiedAt = 4_000L
+            )
+        )
+
+        assertEquals("content://cloud", CloudBackupNaming.newestBackup(files)?.uri)
+        assertTrue(CloudBackupNaming.isRestorableBackup("IronPulse_Backup_2026-11-01.ironpulse"))
+        assertFalse(CloudBackupNaming.isRestorableBackup("IronPulse_Backup_2026-11-01.ironpulse.partial"))
+        assertFalse(CloudBackupNaming.isRestorableBackup("notes.txt"))
+    }
+
+    @Test
+    fun `no restorable archive returns null`() {
+        assertNull(
+            CloudBackupNaming.newestBackup(
+                listOf(
+                    CloudBackupFile("notes.txt", "content://notes", 1, 1_000L),
+                    CloudBackupFile("backup.ironpulse.partial", "content://partial", 1, 2_000L)
+                )
+            )
         )
     }
 
