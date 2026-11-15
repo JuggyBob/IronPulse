@@ -130,7 +130,7 @@ profile, the AI provider layer, the update checker and manual `.ironpulse` expor
 - Quick workouts and unplanned sessions remain untracked for adherence; a planned day counts only
   when a completed linked session has at least one completed set.
 - The three Android launcher widgets now read the same Schedule data and refresh after plan changes.
-- The existing Home cards, widget manager, weekly goal and motivation photo are otherwise unchanged.
+- The Home widget manager, weekly goal and motivation photo are unchanged.
 
 ### Changed: Routine editor, loads and exercise cards
 
