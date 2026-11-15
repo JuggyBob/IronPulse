@@ -10,13 +10,9 @@ else finds them.
 
 | Version | Supported |
 |---|---|
-| 4.4.x | Yes |
-| 4.3.x | No - upgrade to 4.4.x |
-| 4.2.x | No - upgrade to 4.4.x |
-| 4.1.x | No - upgrade to 4.4.x |
-| 4.0.x | No - upgrade to 4.4.x |
-| 3.0.x | No - upgrade to 4.4.x |
-| 2.x | No - upgrade to 4.4.x |
+| **5.0.x** | **Yes** |
+| 4.4.x | No - upgrade to 5.0.x |
+| 4.3.x and older | No - upgrade to 5.0.x |
 
 Only the latest released version receives security fixes. If you are on an older build, upgrade —
 there is no patched older branch.
@@ -63,12 +59,13 @@ system, and no analytics. This shapes what can realistically be a vulnerability:
 
 | Asset | Where it lives | Threat |
 |---|---|---|
-| Workout history, weigh-ins, routines | SQLite in app-private storage | A backup being read; an exported file; a rooted device |
+| Workout history, weigh-ins, Routines and Schedules | SQLite in app-private storage | A backup being read; an exported file; a rooted device |
 | AI provider API keys and custom endpoint URL | DataStore, entered by the user | Leaking to another provider or host; committing a key to a repo |
 | Athlete profile | SQLite + DataStore | Exfiltration through an AI request the user did not consent to |
 | Gallery media | Copied into `filesDir/exercise_media/` | Leaving a user's photo on disk after they remove it |
 | Profile picture | Copied into `filesDir/profile_media/` | A copy of the user's photo outliving the app data wipe |
-| Routines and chat history | SQLite | Loss or corruption; unintended deletion |
+| Routines, Schedules and chat history | SQLite | Loss or corruption; unintended deletion |
+| IronPulse cloud backup folder | A document-provider folder chosen by the user | An unencrypted `.ironpulse` archive readable by anyone with access to that folder |
 
 **Out of scope**, because there is nothing to attack:
 - Any server-side component. There is no server.
@@ -86,7 +83,7 @@ Worth knowing, because they are deliberate and should stay that way:
   explicitly enables it. `athleteContextPromptBlock()` returns an empty string while it is off.
 - **AI Coach workout-data access is a separate, default-off permission.** Retrieval tools are not
   registered and direct dispatch is rejected while it is off. Disabling it also expires pending
-  routine proposals.
+  plan proposals.
 - **Credentials stay with their provider.** Each provider has its own key and model in DataStore.
   A key is sent only to that provider's fixed host, or, for the custom endpoint, only to the exact
   normalized URL the user confirmed. Changing the URL requires a new confirmation.
@@ -94,13 +91,13 @@ Worth knowing, because they are deliberate and should stay that way:
   credentials or fragment. Plain HTTP is accepted only for loopback and private-network hosts, with
   an explicit warning. Redirects are not followed, and TLS certificate checks are never disabled.
 - **AI retrieval tools are read-only.** The registry can search and read completed workouts, the
-  current routine, the exercise catalog and exercise history through narrow repository methods.
-  There is no SQL, filesystem, arbitrary network or code execution tool, and every call is validated,
-  byte-capped and bounded.
-- **AI routine changes require explicit approval.** The model can only create a proposal. A single
-  displayed substitution is applied by the app after the user presses Grant permission, with a
-  permission recheck, active-routine check, stale-signature check and one Room transaction. There is
-  no general AI database-write tool.
+  active Schedule, saved Routines, the live workout, the exercise catalog and exercise history
+  through narrow repository methods. There is no SQL, filesystem, arbitrary network or code
+  execution tool, and every call is validated, byte-capped and bounded.
+- **AI plan changes require explicit approval.** The model can only create a proposal. A single
+  displayed substitution or new Routine is applied by the app after the user presses Grant
+  permission, with a permission recheck, active-Schedule check, stale-signature check and one Room
+  transaction. There is no general AI database-write tool.
 - **The API key is never committed.** `.env`, `local.properties`, `*.jks` and `*.keystore` are
   gitignored, and CI scans every push for secrets.
 - **Release signing keys are not in the repository.**
@@ -111,8 +108,10 @@ Worth knowing, because they are deliberate and should stay that way:
   in the database, so "erase all app data" deletes it explicitly rather than leaving a copy behind.
 - **The shipped catalog is not a trust boundary for user data.** Editing a library row writes through
   the same path as any other edit; it cannot read anything the app cannot already read.
-- **Backups are excluded.** Android backup rules keep app data out of cloud backup and device
-  transfer, so a restored image cannot leak another person's history onto a new phone.
+- **Android auto-backup is excluded.** Android backup rules keep app data out of OS cloud backup and
+  device transfer, so a restored image cannot leak another person's history onto a new phone.
+  IronPulse's own `.ironpulse` exports are separate, explicit user actions and are **not encrypted**;
+  the UI says so for both manual and cloud-folder backups.
 
 ---
 
@@ -124,7 +123,10 @@ checksums.
 
 ```bash
 sha256sum IronPulse-5.0.0.apk
+apksigner verify --print-certs IronPulse-5.0.0.apk
 ```
 
-Compare against the checksum in the release notes before installing an APK you did not build
-yourself.
+Compare the file hash against the published `.sha256` before installing an APK you did not build
+yourself. Public releases are signed with the certificate whose SHA-256 fingerprint is
+`46893F8E6C463E01B7B849AEF18098331E4C162325E906D86762F16A6430BB2C`; a different signer is not an
+IronPulse public release.
