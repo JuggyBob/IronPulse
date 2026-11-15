@@ -80,6 +80,9 @@ class UserPreferencesRepository(private val context: Context) {
         val PROFILE_AVATAR_PATH = stringPreferencesKey("profile_avatar_path")
         val SAVED_REST_TIMERS_JSON = stringPreferencesKey("saved_rest_timers_json")
 
+        /** Per-exercise default rest, as a JSON object keyed by exercise id. */
+        val EXERCISE_DEFAULT_RESTS_JSON = stringPreferencesKey("exercise_default_rests_json")
+
         /**
          * Body weight benchmark personal records (max reps).
          *
@@ -152,6 +155,9 @@ class UserPreferencesRepository(private val context: Context) {
 
         /** Whether the optional accent-coloured settings preview animations are shown. */
         val MATERIAL_EXPRESSIVE_3 = booleanPreferencesKey("material_expressive_3")
+
+        /** Stable key of the selected launcher icon variant. */
+        val LAUNCHER_ICON = stringPreferencesKey("launcher_icon")
 
         /**
          * Set once the athlete has finished the first run onboarding, so the landing pages are shown
@@ -246,6 +252,9 @@ class UserPreferencesRepository(private val context: Context) {
          * plan of this routine, and nothing is scheduled until the athlete picks one.
          */
         val ACTIVE_ROUTINE_ID = longPreferencesKey("active_routine_id")
+
+        /** The one Schedule that drives the recurring week, or 0 when none is active. */
+        val ACTIVE_SCHEDULE_ID = longPreferencesKey("active_schedule_id")
 
         /**
          * The last release information read from GitHub, kept so the About screen has something
@@ -462,6 +471,17 @@ class UserPreferencesRepository(private val context: Context) {
         }
     }
 
+    /** The selected launcher icon key; absent means the original icon. */
+    val launcherIconFlow: Flow<String> = context.userDataStore.data.map { prefs ->
+        prefs[LAUNCHER_ICON]?.takeIf { it.isNotBlank() } ?: "default"
+    }
+
+    suspend fun setLauncherIcon(key: String) {
+        context.userDataStore.edit { prefs ->
+            prefs[LAUNCHER_ICON] = key
+        }
+    }
+
     /** Custom accents saved by the athlete, oldest first and de-duplicated. */
     val savedCustomAccentsFlow: Flow<List<String>> = context.userDataStore.data.map { prefs ->
         val raw = prefs[SAVED_CUSTOM_ACCENTS].orEmpty()
@@ -635,6 +655,42 @@ class UserPreferencesRepository(private val context: Context) {
         context.userDataStore.edit { it[ACTIVE_ROUTINE_ID] = id }
     }
 
+    /** The active weekly Schedule, or 0 when the athlete has not chosen one. */
+    val activeScheduleIdFlow: Flow<Long> = context.userDataStore.data.map { prefs ->
+        prefs[ACTIVE_SCHEDULE_ID] ?: 0L
+    }
+
+    suspend fun setActiveScheduleId(id: Long) {
+        context.userDataStore.edit { prefs ->
+            prefs[ACTIVE_SCHEDULE_ID] = id.coerceAtLeast(0L)
+        }
+    }
+
+    /**
+     * Promotes a migrated legacy program to the active Schedule without overwriting a choice the
+     * athlete has already made in the new UI.
+     */
+    suspend fun migrateActiveRoutine(
+        legacyRoutineId: Long,
+        scheduleId: Long,
+        /**
+         * True when the app is promoting the key during a normal start. The key is then consumed,
+         * so a later deliberate deactivation cannot resurrect the old plan. A backup restore
+         * keeps it untouched because the archive contract preserves the stored value.
+         */
+        consumeLegacyKey: Boolean = false
+    ) {
+        if (legacyRoutineId <= 0L || scheduleId <= 0L) return
+        context.userDataStore.edit { prefs ->
+            val currentSchedule = prefs[ACTIVE_SCHEDULE_ID] ?: 0L
+            val oldActive = prefs[ACTIVE_ROUTINE_ID] ?: 0L
+            if (currentSchedule == 0L && oldActive == legacyRoutineId) {
+                prefs[ACTIVE_SCHEDULE_ID] = scheduleId
+                if (consumeLegacyKey) prefs[ACTIVE_ROUTINE_ID] = 0L
+            }
+        }
+    }
+
     /**
      * The last release information read from GitHub.
      *
@@ -667,42 +723,96 @@ class UserPreferencesRepository(private val context: Context) {
     )
 
     val savedRestTimersFlow: Flow<List<com.example.data.model.CustomRestTimer>> = context.userDataStore.data.map { preferences ->
-        val rawJson = preferences[SAVED_REST_TIMERS_JSON]
-        if (rawJson.isNullOrBlank()) {
-            defaultRestTimers
-        } else {
-            try {
-                val array = org.json.JSONArray(rawJson)
-                val list = mutableListOf<com.example.data.model.CustomRestTimer>()
-                for (i in 0 until array.length()) {
-                    val obj = array.getJSONObject(i)
-                    list.add(
-                        com.example.data.model.CustomRestTimer(
-                            id = obj.optString("id", java.util.UUID.randomUUID().toString()),
-                            name = obj.optString("name", "Rest Timer"),
-                            totalSeconds = obj.optInt("totalSeconds", 90)
-                        )
+        decodeRestTimers(preferences[SAVED_REST_TIMERS_JSON])
+    }
+
+    private fun decodeRestTimers(rawJson: String?): List<com.example.data.model.CustomRestTimer> {
+        if (rawJson.isNullOrBlank()) return defaultRestTimers
+        return try {
+            val array = org.json.JSONArray(rawJson)
+            val list = mutableListOf<com.example.data.model.CustomRestTimer>()
+            for (i in 0 until array.length()) {
+                val obj = array.getJSONObject(i)
+                list.add(
+                    com.example.data.model.CustomRestTimer(
+                        id = obj.optString("id", java.util.UUID.randomUUID().toString()),
+                        name = obj.optString("name", "Rest Timer"),
+                        totalSeconds = obj.optInt("totalSeconds", 90)
                     )
-                }
-                if (list.isEmpty()) defaultRestTimers else list
-            } catch (_: Exception) {
-                defaultRestTimers
+                )
             }
+            if (list.isEmpty()) defaultRestTimers else list
+        } catch (_: Exception) {
+            defaultRestTimers
         }
+    }
+
+    /** Per-exercise default rest in seconds; absent means no automatic timer. */
+    val exerciseDefaultRestsFlow: Flow<Map<Long, Int>> = context.userDataStore.data.map { prefs ->
+        parseExerciseDefaultRests(prefs[EXERCISE_DEFAULT_RESTS_JSON])
+    }
+
+    suspend fun setExerciseDefaultRest(exerciseId: Long, seconds: Int) {
+        if (exerciseId <= 0L) return
+        context.userDataStore.edit { prefs ->
+            val current = parseExerciseDefaultRests(prefs[EXERCISE_DEFAULT_RESTS_JSON]).toMutableMap()
+            if (seconds > 0) current[exerciseId] = seconds.coerceIn(1, 3600) else current.remove(exerciseId)
+            prefs[EXERCISE_DEFAULT_RESTS_JSON] = encodeExerciseDefaultRests(current)
+        }
+    }
+
+    private fun parseExerciseDefaultRests(raw: String?): Map<Long, Int> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        return runCatching {
+            val obj = org.json.JSONObject(raw)
+            buildMap {
+                obj.keys().forEach { key ->
+                    val id = key.toLongOrNull() ?: return@forEach
+                    val seconds = obj.optInt(key, 0)
+                    if (seconds > 0) put(id, seconds.coerceIn(1, 3600))
+                }
+            }
+        }.getOrDefault(emptyMap())
+    }
+
+    private fun encodeExerciseDefaultRests(values: Map<Long, Int>): String {
+        val obj = org.json.JSONObject()
+        values.filterValues { it > 0 }.forEach { (id, seconds) -> obj.put(id.toString(), seconds) }
+        return obj.toString()
+    }
+
+    private fun encodeRestTimers(timers: List<com.example.data.model.CustomRestTimer>): String {
+        val array = org.json.JSONArray()
+        for (timer in timers) {
+            val obj = org.json.JSONObject().apply {
+                put("id", timer.id)
+                put("name", timer.name)
+                put("totalSeconds", timer.totalSeconds)
+            }
+            array.put(obj)
+        }
+        return array.toString()
     }
 
     suspend fun saveRestTimers(timers: List<com.example.data.model.CustomRestTimer>) {
         context.userDataStore.edit { preferences ->
-            val array = org.json.JSONArray()
-            for (timer in timers) {
-                val obj = org.json.JSONObject().apply {
-                    put("id", timer.id)
-                    put("name", timer.name)
-                    put("totalSeconds", timer.totalSeconds)
-                }
-                array.put(obj)
-            }
-            preferences[SAVED_REST_TIMERS_JSON] = array.toString()
+            preferences[SAVED_REST_TIMERS_JSON] = encodeRestTimers(timers)
+        }
+    }
+
+    /**
+     * Atomically transforms the persisted timer list inside one DataStore edit.
+     *
+     * A caller must not read the list from a lazily shared flow and write it back: two quick
+     * saves, or a delete immediately after a save, can otherwise start from a stale snapshot.
+     */
+    suspend fun updateRestTimers(
+        transform: (List<com.example.data.model.CustomRestTimer>) ->
+            List<com.example.data.model.CustomRestTimer>
+    ) {
+        context.userDataStore.edit { preferences ->
+            val current = decodeRestTimers(preferences[SAVED_REST_TIMERS_JSON])
+            preferences[SAVED_REST_TIMERS_JSON] = encodeRestTimers(transform(current))
         }
     }
 

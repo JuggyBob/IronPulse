@@ -2,9 +2,13 @@ package com.example.data.ai
 
 import com.example.data.model.Exercise
 import com.example.data.model.RoutineDay
+import com.example.data.model.RoutineDropSet
 import com.example.data.model.RoutineParser
 import com.example.data.model.SavedRoutine
 import com.example.data.model.SessionWithSets
+import com.example.data.model.DropSetRules
+import com.example.data.model.WorkoutDraft
+import com.example.data.model.WorkoutDraftCodec
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.repository.FitnessRepository
 import kotlinx.coroutines.flow.first
@@ -92,12 +96,20 @@ interface AiDataAccess {
         limit: Int
     ): List<SessionWithSets>
     suspend fun currentRoutineSchedule(): AiRoutineSchedule?
+
+    /**
+     * The workout in progress, exactly as the autosave has it, or null when nothing is running.
+     * Read-only tools must be able to answer questions about the current session, including drop
+     * sets that have not been persisted to history yet.
+     */
+    suspend fun activeWorkoutDraft(): WorkoutDraft? = null
 }
 
 /** Repository-backed implementation used by the app. */
 class RepositoryAiDataAccess(
     private val repository: FitnessRepository,
-    private val preferences: UserPreferencesRepository? = null
+    private val preferences: UserPreferencesRepository? = null,
+    private val planRepository: com.example.data.repository.PlanRepository? = null
 ) : AiDataAccess {
 
     override suspend fun searchExercises(query: String, limit: Int): List<Exercise> {
@@ -131,9 +143,11 @@ class RepositoryAiDataAccess(
 
     override suspend fun allExercises(): List<Exercise> = repository.getAllExercisesOnce()
 
-    override suspend fun getRoutineById(id: Long): SavedRoutine? = repository.getSavedRoutineById(id)
+    override suspend fun getRoutineById(id: Long): SavedRoutine? =
+        planRepository?.getRoutine(id) ?: repository.getSavedRoutineById(id)
 
-    override suspend fun listRoutines(): List<SavedRoutine> = repository.getAllSavedRoutinesOnce()
+    override suspend fun listRoutines(): List<SavedRoutine> =
+        planRepository?.getAllRoutinesOnce() ?: repository.getAllSavedRoutinesOnce()
 
     override suspend fun recentWorkouts(
         fromMillis: Long?,
@@ -182,12 +196,42 @@ class RepositoryAiDataAccess(
             .toList()
     }
 
+    override suspend fun activeWorkoutDraft(): WorkoutDraft? =
+        preferences?.activeWorkoutDraftFlow?.first()?.let(WorkoutDraftCodec::decode)
+
     override suspend fun currentRoutineSchedule(): AiRoutineSchedule? {
         val pref = preferences ?: return null
+        val exercises = repository.getAllExercisesOnce()
+        val activeScheduleId = pref.activeScheduleIdFlow.first()
+        val plans = planRepository
+        if (activeScheduleId > 0L && plans != null) {
+            val schedule = plans.getSchedule(activeScheduleId) ?: return null
+            val routines = plans.getAllRoutinesOnce().associateBy { it.id }
+            val slots = plans.getDaysOnce(activeScheduleId).associateBy { it.weekday }
+            val days = (1..com.example.data.model.Weekday.COUNT).map { weekday ->
+                val routine = slots[weekday]?.routineId?.let(routines::get)
+                if (routine == null) {
+                    com.example.data.model.RoutineDay(weekday = weekday)
+                } else {
+                    com.example.data.model.RoutineDay(
+                        weekday = weekday,
+                        dayTitle = routine.name,
+                        exercises = RoutineParser.parseSingleWorkout(routine.exercisesJson, exercises),
+                        note = routine.description,
+                        routineId = routine.id
+                    )
+                }
+            }
+            return AiRoutineSchedule(
+                routineId = schedule.id,
+                routineName = schedule.name,
+                days = days
+            )
+        }
+        // Legacy active routine while the one-time migration has not run yet.
         val activeId = pref.activeRoutineIdFlow.first()
         if (activeId <= 0L) return null
         val routine = repository.getSavedRoutineById(activeId) ?: return null
-        val exercises = repository.getAllExercisesOnce()
         val weekStartsOnMonday = pref.appSettingsFlow.first().weekStartsOnMonday
         return AiRoutineSchedule(
             routineId = routine.id,
@@ -395,6 +439,7 @@ object AiToolCatalog {
     const val LIST_ROUTINES = "list_routines"
     const val SEARCH_RECENT_WORKOUTS = "search_recent_workouts"
     const val GET_CURRENT_ROUTINE = "get_current_routine"
+    const val GET_ACTIVE_WORKOUT = "get_active_workout"
     const val SEARCH_EXERCISE_HISTORY = "search_exercise_history"
     const val PROPOSE_ROUTINE_MODIFICATION = "propose_routine_modification"
     const val PROPOSE_NEW_ROUTINE = "propose_new_routine"
@@ -485,9 +530,9 @@ object AiToolCatalog {
         ),
         AiToolDefinition(
             name = GET_ROUTINE,
-            description = "Read one saved routine and its training days, including sets, reps, holds " +
-                "and the per-exercise rest default. Provide routineId or name; with neither, the most " +
-                "recent routine is returned.",
+            description = "Read one standalone saved Routine (one workout, never multiple days), " +
+                "including its ordered exercises, sets, reps, holds and per-exercise rest default. " +
+                "Provide routineId or name; with neither, the most recent Routine is returned.",
             inputSchemaJson = """
                 {
                   "type": "object",
@@ -508,8 +553,8 @@ object AiToolCatalog {
         ),
         AiToolDefinition(
             name = LIST_ROUTINES,
-            description = "List the athlete's saved routines with their goal, weekly frequency and " +
-                "exercise count. Use it before answering questions about their plan.",
+            description = "List the athlete's standalone saved Routines with their exercise count. " +
+                "A Routine is one workout; use get_current_routine for the weekly Schedule.",
             inputSchemaJson = """
                 {
                   "type": "object",
@@ -529,8 +574,11 @@ object AiToolCatalog {
         AiToolDefinition(
             name = SEARCH_RECENT_WORKOUTS,
             description = "Retrieve completed workout sessions in a time range, optionally filtered " +
-                "by exercise name. Returns dates, duration, order and completed set performance. Use " +
-                "it for questions about recent training, volume, frequency or a specific session.",
+                "by exercise name. Returns dates, duration, order and completed set performance, " +
+                "including an explicit isWarmup flag, drop-set parent/order fields and warm-up, " +
+                "main, drop and working set counts. " +
+                "Use it for questions about recent training, volume, frequency or a specific session. " +
+                "Warm-up sets count toward volume and set counts, but never as working-set PRs or 1RM records.",
             inputSchemaJson = """
                 {
                   "type": "object",
@@ -567,9 +615,9 @@ object AiToolCatalog {
         ),
         AiToolDefinition(
             name = GET_CURRENT_ROUTINE,
-            description = "Read the athlete's actual current weekly scheduled routine, including " +
-                "rest days, day titles and every exercise in order. Use this instead of guessing the " +
-                "current plan.",
+            description = "Read the athlete's active weekly Schedule: seven weekday slots, each " +
+                "assigned one standalone Routine or left as a rest day, with every exercise in order. " +
+                "Use this instead of guessing the current plan.",
             inputSchemaJson = """
                 {
                   "type": "object",
@@ -581,10 +629,29 @@ object AiToolCatalog {
             maxResultBytes = 48 * 1024
         ),
         AiToolDefinition(
+            name = GET_ACTIVE_WORKOUT,
+            description = "Read the workout currently in progress: its exercise order and every set, " +
+                "including completion, warm-up status and explicit drop-set parent/order data. " +
+                "Returns found=false when no workout is running. Use it for questions about the " +
+                "current session; never confuse it with the weekly Schedule.",
+            inputSchemaJson = """
+                {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": false
+                }
+            """.trimIndent(),
+            domain = AiToolDomain.WORKOUT_DATA,
+            maxResultBytes = 32 * 1024
+        ),
+        AiToolDefinition(
             name = SEARCH_EXERCISE_HISTORY,
             description = "Retrieve completed historical performance for one exact exercise. Returns " +
-                "session dates and the completed sets with weight, reps, hold seconds, distance and " +
-                "body weight. Use it for progress comparisons; never combine different exercise names.",
+                "session dates and the completed sets with weight, reps, hold seconds, distance, " +
+                "body weight, an explicit isWarmup flag and explicit drop-set parent/order data. " +
+                "Use it for progress comparisons; never " +
+                "combine different exercise names. Warm-up sets count toward volume but never as " +
+                "working-set PRs, best sets or estimated 1RM records.",
             inputSchemaJson = """
                 {
                   "type": "object",
@@ -676,13 +743,12 @@ object AiToolCatalog {
         ),
         AiToolDefinition(
             name = PROPOSE_NEW_ROUTINE,
-            description = "Propose a complete NEW weekly workout routine for explicit approval. " +
-                "Use this only when the athlete asks to create a new routine and has given enough " +
-                "detail (goal, experience, training days, equipment). This never saves anything: the " +
-                "app shows the full plan in an approval card and creates it only when the athlete " +
-                "taps save. Prefer exercises from the catalog (use search_exercises first). For a " +
-                "genuinely missing movement, provide newExercise metadata; it is created only after " +
-                "approval.",
+            description = "Propose a complete NEW weekly plan for explicit approval. A Routine is " +
+                "exactly ONE workout; repeated workout days in the proposed week must reuse the same " +
+                "Routine. After approval the app creates each unique Routine once and a Schedule with " +
+                "seven weekday references; it does not activate the Schedule without an explicit " +
+                "request. Use this only when the athlete asks for a new plan and has given enough " +
+                "detail (goal, experience, training days, equipment). Prefer catalog exercises.",
             inputSchemaJson = """
                 {
                   "type": "object",
@@ -714,8 +780,29 @@ object AiToolCatalog {
                                 "weightKg": {"type": "number", "minimum": 0},
                                 "addedWeightKg": {"type": "number", "minimum": 0},
                                 "holdSeconds": {"type": "integer", "minimum": 0, "maximum": 600},
+                                "distanceKm": {"type": "number", "minimum": 0},
                                 "restSeconds": {"type": "integer", "minimum": 0, "maximum": 600},
                                 "prescription": {"type": "string", "description": "Optional, e.g. 4 sets x 8 reps."},
+                                "dropSets": {
+                                  "type": "array",
+                                  "description": "Optional direct children of a main set. Only add them when the training plan calls for drop sets; never flatten them into top-level sets.",
+                                  "maxItems": 20,
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "mainSet": {"type": "integer", "minimum": 1, "maximum": 10, "description": "1-based main set this child continues."},
+                                      "drop": {"type": "integer", "minimum": 1, "maximum": 20, "description": "1-based order within that main set."},
+                                      "reps": {"type": "integer", "minimum": 0, "maximum": 100},
+                                      "holdSeconds": {"type": "integer", "minimum": 0, "maximum": 600},
+                                      "weightKg": {"type": "number", "minimum": 0},
+                                      "addedWeightKg": {"type": "number", "minimum": 0},
+                                      "distanceKm": {"type": "number", "minimum": 0},
+                                      "restSeconds": {"type": "integer", "minimum": 0, "maximum": 600}
+                                    },
+                                    "required": ["mainSet"],
+                                    "additionalProperties": false
+                                  }
+                                },
                                 "newExercise": {
                                   "type": "object",
                                   "description": "Only when no catalog exercise fits. Do not create it before approval.",
@@ -727,6 +814,11 @@ object AiToolCatalog {
                                     "secondaryMuscles": {"type": "array", "items": {"type": "string"}},
                                     "equipment": {"type": "string"},
                                     "exerciseType": {"type": "string"},
+                                    "supportedFields": {
+                                      "type": "array",
+                                      "description": "Explicit set fields: reps, weight, addedWeight, holdSeconds, timeSeconds, distanceKm. Omit to use the type defaults.",
+                                      "items": {"type": "string", "enum": ["reps", "weight", "addedWeight", "holdSeconds", "timeSeconds", "distanceKm"]}
+                                    },
                                     "instructions": {"type": "string"},
                                     "description": {"type": "string"}
                                   },
@@ -784,6 +876,7 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
             AiToolCatalog.LIST_ROUTINES -> listRoutines(arguments)
             AiToolCatalog.SEARCH_RECENT_WORKOUTS -> searchRecentWorkouts(arguments)
             AiToolCatalog.GET_CURRENT_ROUTINE -> getCurrentRoutine(arguments)
+            AiToolCatalog.GET_ACTIVE_WORKOUT -> getActiveWorkout()
             AiToolCatalog.SEARCH_EXERCISE_HISTORY -> searchExerciseHistory(arguments)
             AiToolCatalog.PROPOSE_ROUTINE_MODIFICATION -> proposeRoutineModification(arguments)
             AiToolCatalog.PROPOSE_NEW_ROUTINE -> proposeNewRoutine(arguments)
@@ -856,10 +949,11 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
             "not_found",
             "No routine matched ${if (id != null) "id $id" else "\"$name\""}."
         )
-        val days = RoutineParser.parseDays(routine.exercisesJson, dataAccess.allExercises())
+        val catalog = dataAccess.allExercises()
+        val days = RoutineParser.parseDays(routine.exercisesJson, catalog)
         return JSONObject().apply {
             put("ok", true)
-            put("routine", routine.toRoutineJson(days))
+            put("routine", routine.toRoutineJson(days, catalog))
             put("selectedMostRecent", id == null && name == null)
         }
     }
@@ -917,12 +1011,12 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
         val schedule = dataAccess.currentRoutineSchedule()
             ?: return toolError(
                 "no_active_routine",
-                "The athlete has no active weekly routine. No weekly schedule is configured."
+                "The athlete has no active Schedule. No weekly plan is configured."
             )
         if (schedule.days.isEmpty()) {
             return toolError(
                 "no_active_routine",
-                "The active routine has no configured weekly days."
+                "The active Schedule has no configured weekday slots."
             )
         }
         val catalog = dataAccess.allExercises()
@@ -930,6 +1024,8 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
         val byName = catalog.associateBy { it.name.trim().lowercase() }
         return JSONObject().apply {
             put("ok", true)
+            put("scheduleId", schedule.routineId)
+            put("scheduleName", schedule.routineName)
             put("routineId", schedule.routineId)
             put("routineName", schedule.routineName)
             put("days", JSONArray().apply {
@@ -938,6 +1034,7 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
                         put("weekday", day.weekday)
                         put("day", day.dayName)
                         put("title", day.dayTitle)
+                        put("routineId", day.routineId)
                         put("restDay", day.isRestDay)
                         put("note", day.note)
                         put("exercises", JSONArray().apply {
@@ -953,10 +1050,17 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
                                     put("weightKg", item.targetWeight)
                                     put("addedWeightKg", item.targetAddedWeightKg)
                                     put("holdSeconds", item.targetHoldSeconds)
+                                    put("distanceKm", item.targetDistanceKm)
                                     put("restSeconds", item.restSeconds)
                                     put("prescription", item.prescription)
                                     val catalogExercise = byId[item.exerciseId]
                                         ?: byName[item.exerciseName.trim().lowercase()]
+                                    if (catalogExercise != null) {
+                                        put("supportedFields", JSONArray().apply {
+                                            catalogExercise.exerciseFields.forEach { put(it.id) }
+                                        })
+                                    }
+                                    put("dropSets", item.dropSets.toToolDropSetArray())
                                     put(
                                         "instructions",
                                         catalogExercise?.instructions.orEmpty().take(500)
@@ -968,6 +1072,83 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
                                 })
                             }
                         })
+                    })
+                }
+            })
+        }
+    }
+
+    /**
+     * The live session as structured JSON. The set fields mirror the history tool so the model can
+     * use one mental model for completed and in-progress work, and drop children keep their parent
+     * UID instead of being flattened.
+     */
+    private suspend fun getActiveWorkout(): JSONObject {
+        val draft = dataAccess.activeWorkoutDraft()
+            ?: return JSONObject().apply {
+                put("ok", true)
+                put("found", false)
+                put("message", "No workout is currently in progress.")
+            }
+        val routineItemsById = draft.routineItems.associateBy { it.exerciseId }
+        val setsByExercise = draft.sets.groupBy { it.exerciseId }
+        val catalogById = dataAccess.allExercises().associateBy { it.id }
+        val orderedIds = LinkedHashSet<Long>().apply {
+            addAll(draft.exerciseIds)
+            addAll(draft.sets.map { it.exerciseId })
+        }
+        return JSONObject().apply {
+            put("ok", true)
+            put("found", true)
+            put("kind", draft.kind)
+            put("title", draft.title)
+            put("startMillis", draft.startTime)
+            put("routineId", draft.routineId)
+            put("dayTitle", draft.dayTitle)
+            put("sessionOnlyExerciseIds", JSONArray().apply {
+                draft.sessionOnlyExerciseIds.sorted().forEach { put(it) }
+            })
+            put("exercises", JSONArray().apply {
+                orderedIds.forEachIndexed { index, exerciseId ->
+                    val exerciseSets = setsByExercise[exerciseId].orEmpty()
+                    val item = routineItemsById[exerciseId]
+                    put(JSONObject().apply {
+                        put("order", index + 1)
+                        put("exerciseId", exerciseId)
+                        put("name", item?.exerciseName ?: exerciseSets.firstOrNull()?.exerciseName.orEmpty())
+                        put("exerciseType", item?.exerciseType ?: exerciseSets.firstOrNull()?.exerciseType.orEmpty())
+                        catalogById[exerciseId]?.let { catalogExercise ->
+                            put("supportedFields", JSONArray().apply {
+                                catalogExercise.exerciseFields.forEach { put(it.id) }
+                            })
+                        }
+                        put("sessionOnly", exerciseId in draft.sessionOnlyExerciseIds)
+                        put("mainSetCount", exerciseSets.count { !it.isDropSet })
+                        put("dropSetCount", exerciseSets.count { it.isDropSet })
+                        put("completedSetCount", exerciseSets.count { it.isCompleted })
+                    })
+                }
+            })
+            put("sets", JSONArray().apply {
+                draft.sets.sortedWith(
+                    compareBy({ it.setNumber }, { it.isDropSet }, { it.dropIndex }, { it.timestamp })
+                ).forEach { set ->
+                    put(JSONObject().apply {
+                        put("setUid", set.setUid)
+                        put("exerciseId", set.exerciseId)
+                        put("exerciseName", set.exerciseName)
+                        put("setNumber", set.setNumber)
+                        put("isDropSet", set.isDropSet)
+                        put("parentSetUid", set.parentSetUid ?: JSONObject.NULL)
+                        put("dropIndex", set.dropIndex)
+                        put("weightKg", set.weight)
+                        put("addedWeightKg", set.addedWeight)
+                        put("reps", set.reps)
+                        put("holdSeconds", set.holdDurationSeconds)
+                        put("distanceKm", set.distanceKm)
+                        put("isWarmup", set.isWarmup)
+                        put("isCompleted", set.isCompleted)
+                        put("restSecondsOverride", set.restSecondsOverride ?: JSONObject.NULL)
                     })
                 }
             })
@@ -988,7 +1169,14 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
             put("exerciseName", exerciseName)
             put("found", sessions.isNotEmpty())
             put("exerciseInCatalog", catalogMatch != null)
-            catalogMatch?.let { put("catalogName", it.name) }
+            catalogMatch?.let { exercise ->
+                put("catalogName", exercise.name)
+                put("catalogExerciseId", exercise.id)
+                put("catalogExerciseType", exercise.exerciseType)
+                put("supportedFields", JSONArray().apply {
+                    exercise.exerciseFields.forEach { put(it.id) }
+                })
+            }
             put("fromDate", isoDate(from))
             put("toDate", isoDate(to))
             put("count", sessions.size)
@@ -1079,39 +1267,69 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
                 }
                 val sets = exObj.optInt("sets", 3).coerceIn(1, 10)
                 var reps = exObj.optInt("reps", 8).coerceIn(0, 100)
-                val hold = exObj.optInt("holdSeconds", 0).coerceIn(0, 600)
+                var hold = exObj.optInt("holdSeconds", 0).coerceIn(0, 600)
                 if (reps <= 0 && hold <= 0) reps = 8
                 val equipment = catalog?.equipment
                     ?: generated?.equipment.orEmpty().ifBlank { "Bodyweight" }
-                val prescription = RoutineParser.shortPrescription(
+                // The exercise's explicit configuration is authoritative. The model may be using
+                // an older schema that always emits weight and reps; never store those values for
+                // an exercise that does not display them.
+                val fields = (catalog ?: generated)?.exerciseFields.orEmpty()
+                fun supports(field: com.example.data.model.ExerciseField): Boolean =
+                    fields.isEmpty() || field in fields
+
+                var weightKg = exObj.optDouble("weightKg", 0.0).coerceAtLeast(0.0)
+                var addedWeightKg = exObj.optDouble("addedWeightKg", 0.0).coerceAtLeast(0.0)
+                var distanceKm = exObj.optDouble("distanceKm", 0.0).coerceAtLeast(0.0)
+                if (!supports(com.example.data.model.ExerciseField.REPS)) reps = 0
+                if (
+                    !supports(com.example.data.model.ExerciseField.HOLD_SECONDS) &&
+                    !supports(com.example.data.model.ExerciseField.TIME_SECONDS)
+                ) {
+                    hold = 0
+                }
+                if (!supports(com.example.data.model.ExerciseField.WEIGHT)) weightKg = 0.0
+                if (!supports(com.example.data.model.ExerciseField.ADDED_WEIGHT)) addedWeightKg = 0.0
+                if (!supports(com.example.data.model.ExerciseField.DISTANCE_KM)) distanceKm = 0.0
+
+                val parsedPrescription = RoutineParser.shortPrescription(
                     exObj.optString("prescription", ""),
                     equipment
                 ).ifBlank {
                     when {
                         hold > 0 && reps > 0 -> "$sets sets x $reps reps / ${hold}s"
                         hold > 0 -> "$sets sets x ${hold}s"
+                        distanceKm > 0.0 -> "$sets sets x ${distanceKm} km"
                         else -> "$sets sets x $reps reps"
                     }
                 }
+                val proposed = ProposedRoutineExercise(
+                    name = catalog?.name ?: generated!!.name,
+                    exerciseId = catalog?.id ?: 0L,
+                    category = catalog?.category ?: generated?.category.orEmpty(),
+                    equipment = equipment,
+                    exerciseType = catalog?.exerciseType
+                        ?: generated?.exerciseType
+                        ?: com.example.data.model.ExerciseType.PURE_BODYWEIGHT,
+                    generatedExercise = generated?.let(ProposedExercise::fromExercise),
+                    targetSets = sets,
+                    targetReps = reps,
+                    targetWeightKg = weightKg,
+                    targetAddedWeightKg = addedWeightKg,
+                    targetHoldSeconds = hold,
+                    targetDistanceKm = distanceKm,
+                    restSeconds = exObj.optInt("restSeconds", 90).coerceIn(0, 600),
+                    prescription = parsedPrescription,
+                    dropSets = parseToolDropSets(exObj, sets, fields)
+                )
                 parsedExercises.add(
-                    ProposedRoutineExercise(
-                        name = catalog?.name ?: generated!!.name,
-                        exerciseId = catalog?.id ?: 0L,
-                        category = catalog?.category ?: generated?.category.orEmpty(),
-                        equipment = equipment,
-                        exerciseType = catalog?.exerciseType
-                            ?: generated?.exerciseType
-                            ?: com.example.data.model.ExerciseType.PURE_BODYWEIGHT,
-                        generatedExercise = generated?.let(ProposedExercise::fromExercise),
-                        targetSets = sets,
-                        targetReps = reps,
-                        targetWeightKg = exObj.optDouble("weightKg", 0.0).coerceAtLeast(0.0),
-                        targetAddedWeightKg = exObj.optDouble("addedWeightKg", 0.0)
-                            .coerceAtLeast(0.0),
-                        targetHoldSeconds = hold,
-                        restSeconds = exObj.optInt("restSeconds", 90).coerceIn(0, 600),
-                        prescription = prescription
-                    )
+                    if (hold > 0 || distanceKm > 0.0) {
+                        proposed.copy(
+                            prescription = RoutineParser.buildPrescription(proposed.toRoutineItem(1, "", ""))
+                        )
+                    } else {
+                        proposed
+                    }
                 )
             }
             val existing = byWeekday[weekday]
@@ -1367,6 +1585,7 @@ private fun Exercise.toSummaryJson(): JSONObject = JSONObject().apply {
     put("target", target)
     put("equipment", equipment)
     put("exerciseType", exerciseType)
+    put("supportedFields", JSONArray().apply { exerciseFields.forEach { put(it.id) } })
 }
 
 private fun Exercise.toDetailJson(): JSONObject = JSONObject().apply {
@@ -1378,13 +1597,17 @@ private fun Exercise.toDetailJson(): JSONObject = JSONObject().apply {
     put("secondaryMuscles", parseStringArray(secondaryMuscles))
     put("equipment", equipment)
     put("exerciseType", exerciseType)
+    put("supportedFields", JSONArray().apply { exerciseFields.forEach { put(it.id) } })
     put("instructions", instructions.take(4000))
     put("instructionsTruncated", instructions.length > 4000)
     put("description", description.take(1000))
     put("isCustom", isCustom)
 }
 
-private fun SavedRoutine.toRoutineJson(days: List<com.example.data.model.RoutineDay>): JSONObject =
+private fun SavedRoutine.toRoutineJson(
+    days: List<com.example.data.model.RoutineDay>,
+    catalog: List<Exercise>
+): JSONObject =
     JSONObject().apply {
         put("id", id)
         put("name", name)
@@ -1408,15 +1631,28 @@ private fun SavedRoutine.toRoutineJson(days: List<com.example.data.model.Routine
                                     day.exercises.forEach { item ->
                                         put(
                                             JSONObject().apply {
+                                                put("exerciseId", item.exerciseId)
                                                 put("name", item.exerciseName)
+                                                put("exerciseType", item.exerciseType)
+                                                val catalogExercise = catalog.firstOrNull {
+                                                    it.id == item.exerciseId ||
+                                                        it.name.equals(item.exerciseName, ignoreCase = true)
+                                                }
+                                                if (catalogExercise != null) {
+                                                    put("supportedFields", JSONArray().apply {
+                                                        catalogExercise.exerciseFields.forEach { put(it.id) }
+                                                    })
+                                                }
                                                 put("equipment", item.equipment)
                                                 put("sets", item.targetSets)
                                                 put("reps", item.targetReps)
                                                 put("weightKg", item.targetWeight)
                                                 put("addedWeightKg", item.targetAddedWeightKg)
                                                 put("holdSeconds", item.targetHoldSeconds)
+                                                put("distanceKm", item.targetDistanceKm)
                                                 put("restSeconds", item.restSeconds)
                                                 put("prescription", item.prescription)
+                                                put("dropSets", item.dropSets.toToolDropSetArray())
                                             }
                                         )
                                     }
@@ -1456,6 +1692,10 @@ private fun SessionWithSets.toWorkoutJson(): JSONObject = JSONObject().apply {
     val completed = sets.filter { it.isCompleted }
         .sortedWith(compareBy({ it.setNumber }, { it.timestamp }))
     put("completedSetCount", completed.size)
+    put("warmupSetCount", completed.count { it.isWarmup })
+    put("dropSetCount", completed.count { it.isDropSet })
+    put("mainSetCount", completed.count { !it.isDropSet })
+    put("workingSetCount", completed.count { !it.isWarmup && !it.isDropSet })
     put("setsTruncated", completed.size > MAX_SETS_IN_TOOL_RESULT)
     put(
         "sets",
@@ -1464,6 +1704,10 @@ private fun SessionWithSets.toWorkoutJson(): JSONObject = JSONObject().apply {
                 put(
                     JSONObject().apply {
                         put("setNumber", set.setNumber)
+                        put("setUid", set.setUid)
+                        put("isDropSet", set.isDropSet)
+                        put("parentSetUid", set.parentSetUid ?: JSONObject.NULL)
+                        put("dropIndex", set.dropIndex)
                         put("exerciseId", set.exerciseId)
                         put("exerciseName", set.exerciseName)
                         put("exerciseType", set.exerciseType)
@@ -1481,11 +1725,90 @@ private fun SessionWithSets.toWorkoutJson(): JSONObject = JSONObject().apply {
                         )
                         put("distanceKm", set.distanceKm)
                         put("bodyWeightKg", set.bodyWeightKg)
+                        put("isWarmup", set.isWarmup)
+                        put("restSecondsOverride", set.restSecondsOverride ?: JSONObject.NULL)
                     }
                 )
             }
         }
     )
+}
+
+/** Reads optional AI drop-set children, clamped to the exercise's real main sets. */
+private fun parseToolDropSets(
+    obj: JSONObject,
+    mainSetCount: Int,
+    fields: List<com.example.data.model.ExerciseField>
+): List<RoutineDropSet> {
+    val array = obj.optJSONArray("dropSets") ?: return emptyList()
+    val result = mutableListOf<RoutineDropSet>()
+    fun supports(field: com.example.data.model.ExerciseField): Boolean =
+        fields.isEmpty() || field in fields
+    for (i in 0 until array.length()) {
+        val drop = array.optJSONObject(i) ?: continue
+        result += RoutineDropSet(
+            mainSetIndex = drop.optInt("mainSet", drop.optInt("mainSetIndex", 1))
+                .coerceIn(1, mainSetCount.coerceAtLeast(1)),
+            dropIndex = drop.optInt("drop", drop.optInt("dropIndex", i + 1)).coerceAtLeast(1),
+            targetReps = if (supports(com.example.data.model.ExerciseField.REPS)) {
+                drop.optInt("reps", 0).coerceIn(0, 100)
+            } else {
+                0
+            },
+            targetHoldSeconds = if (
+                supports(com.example.data.model.ExerciseField.HOLD_SECONDS) ||
+                supports(com.example.data.model.ExerciseField.TIME_SECONDS)
+            ) {
+                drop.optInt("holdSeconds", 0).coerceIn(0, 600)
+            } else {
+                0
+            },
+            targetDistanceKm = if (supports(com.example.data.model.ExerciseField.DISTANCE_KM)) {
+                drop.optDouble("distanceKm", 0.0).coerceAtLeast(0.0)
+            } else {
+                0.0
+            },
+            targetWeight = if (supports(com.example.data.model.ExerciseField.WEIGHT)) {
+                drop.optDouble("weightKg", drop.optDouble("weight", 0.0)).coerceAtLeast(0.0)
+            } else {
+                0.0
+            },
+            targetAddedWeightKg = if (
+                supports(com.example.data.model.ExerciseField.ADDED_WEIGHT)
+            ) {
+                drop.optDouble(
+                    "addedWeightKg",
+                    drop.optDouble("addedWeight", 0.0)
+                ).coerceAtLeast(0.0)
+            } else {
+                0.0
+            },
+            restSeconds = drop.optInt("restSeconds", 0).coerceIn(0, 600)
+        )
+    }
+    return result
+        .groupBy { it.mainSetIndex }
+        .flatMap { (_, rows) ->
+            rows.sortedBy { it.dropIndex }.mapIndexed { index, drop -> drop.copy(dropIndex = index + 1) }
+        }
+}
+
+/** Structured drop-set output for the read-only routine tools. */
+private fun List<RoutineDropSet>.toToolDropSetArray(): JSONArray = JSONArray().apply {
+    this@toToolDropSetArray
+        .sortedWith(compareBy({ it.mainSetIndex }, { it.dropIndex }))
+        .forEach { drop ->
+            put(JSONObject().apply {
+                put("mainSet", drop.mainSetIndex)
+                put("drop", drop.dropIndex)
+                put("reps", drop.targetReps)
+                put("holdSeconds", drop.targetHoldSeconds)
+                put("distanceKm", drop.targetDistanceKm)
+                put("weightKg", drop.targetWeight)
+                put("addedWeightKg", drop.targetAddedWeightKg)
+                put("restSeconds", drop.restSeconds)
+            })
+        }
 }
 
 private fun parseStringArray(raw: String): JSONArray {

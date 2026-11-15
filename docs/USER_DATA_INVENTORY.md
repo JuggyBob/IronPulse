@@ -8,7 +8,7 @@ verified. It is the coverage contract for the `.ironpulse` format.
 
 | Mechanism | Exact location | User data? | Backup treatment |
 |---|---|---|---|
-| Room database | `ironpulse_database`, schema v15, `AppDatabase` | Yes | Tables below are exported section by section inside one Room transaction. |
+| Room database | `ironpulse_database`, schema 19, `AppDatabase` | Yes | Tables below are exported section by section inside one Room transaction. |
 | Preferences DataStore | `user_preferences.preferences_pb` via `Context.userDataStore` | Mixed | Explicit allowlist. Credentials and the avatar path are never read into the archive. |
 | SharedPreferences `ironpulse_library_edits` | `edited_exercise_ids` | Yes | Exported as `editedLibraryExerciseIds`; used to stop the dataset reseed overwriting restored edits. |
 | SharedPreferences `rest_timer_alert_prefs` | `vibration_enabled`, `sound_enabled` | Derived | Mirror of the two DataStore alert settings. Rebuilt from the imported preferences. |
@@ -24,17 +24,17 @@ content was found in `app/src/main/java`.
 
 ## 2. Room tables
 
-Schema version: **15**. Relationships are logical (the schema declares indexes, not foreign keys),
+Schema version: **19**. Relationships are logical (the schema declares indexes, not foreign keys),
 so the importer validates them explicitly.
 
 ### 2.1 `exercises`
 
 | Field | Detail |
 |---|---|
-| Data category | Built-in exercise catalog, user-created exercises, AI-generated exercises, athlete edits to built-in rows |
+| Data category | Built-in exercise catalog, user-created exercises, AI-generated exercises, athlete edits to built-in rows, and each exercise's ordered `supportedFields` |
 | Model | `Exercise` |
 | Relationships | `LoggedSet.exerciseId` (soft: history also stores the exercise name and type); routine JSON references ids and names |
-| Export strategy | Only rows where `isCustom = 1`, `isAiGenerated = 1`, or `id` is in `LibraryEditTracker`. All textual/structured fields are copied. |
+| Export strategy | Only rows where `isCustom = 1`, `isAiGenerated = 1`, or `id` is in `LibraryEditTracker`. All textual/structured fields, including `supportedFields`, are copied. |
 | Import strategy | Replace all user-owned rows with the archive's ids preserved; restore edited built-in rows by id; reseed the untouched shipped catalog. |
 | Exclusions | `customMediaUri`, `customMediaIsVideo`; custom `mediaPath` is cleared. Built-in rows not edited by the athlete are not user data. |
 | Verification | Imported ids/fields are compared after replacement; the reseed must not alter an imported edit because the imported edited-id set is installed first. |
@@ -55,9 +55,9 @@ so the importer validates them explicitly.
 
 | Field | Detail |
 |---|---|
-| Data category | Every set, including incomplete sets, order number, weight, added weight, reps, hold duration, cardio distance, completion state, timestamp and body-weight snapshot |
+| Data category | Every set, including incomplete sets, order number, weight, added weight, reps, hold duration, cardio distance, completion state, timestamp, body-weight snapshot, warm-up flag, per-set rest override, stable set UID and optional drop-set parent/index |
 | Model | `LoggedSet` |
-| Relationships | Belongs to one session by `sessionId`. |
+| Relationships | Belongs to one session by `sessionId`; a drop child stores its parent's `setUid`. |
 | Export strategy | Every row, original id and all numeric fields. Doubles are serialized as JSON numbers and are not recalculated. |
 | Import strategy | Delete all destination sets, insert with the same ids and numeric values. |
 | Exclusions | None. |
@@ -79,13 +79,25 @@ so the importer validates them explicitly.
 
 | Field | Detail |
 |---|---|
-| Data category | Saved routines, names, descriptions, goals, days per week, the complete exercise/day JSON blob, creation time and schedule-version flag |
+| Data category | Standalone workout Routines: names, descriptions, goals, the complete ordered exercise JSON blob, creation time and `modelVersion` (0 legacy awaiting conversion, 1 hidden legacy history row, 2 current single-workout Routine) |
 | Model | `SavedRoutine` |
-| Relationships | `ScheduledWorkoutDay.routineId`; routine JSON contains exercise ids/names |
-| Export strategy | Every row, including the JSON string exactly as stored. |
-| Import strategy | Delete all destination routines and insert the archive rows with the same ids; the JSON is validated as JSON but not reinterpreted. |
+| Relationships | `ScheduledWorkoutDay.routineId`; `schedule_days.routineId`; routine JSON contains exercise ids/names |
+| Export strategy | Every row, including the JSON string exactly as stored and its model version. |
+| Import strategy | Delete all destination routines and insert the archive rows with the same ids; legacy rows are converted after restore by the same one-time migration the database upgrade uses. |
 | Exclusions | None. |
 | Verification | List equality by id; JSON syntax validation; schedule link validation where applicable. |
+
+### 2.5.1 `schedules` and `schedule_days`
+
+| Field | Detail |
+|---|---|
+| Data category | Weekly plans: Schedule name, description, goal strategy, creation time, the legacy routine it came from, and exactly seven weekday references (null = rest day) |
+| Models | `SchedulePlan`, `ScheduleDaySlot` |
+| Relationships | `ScheduleDaySlot.scheduleId` → `schedules.id`; `ScheduleDaySlot.routineId` → `saved_routines.id` and may repeat on multiple days |
+| Export strategy | Every Schedule and every weekday slot; the active Schedule id travels in the preferences section. |
+| Import strategy | Delete all destination Schedules and slots, insert archive rows with their ids, then validate that every Schedule has seven distinct weekdays and every non-null reference exists. |
+| Exclusions | None. |
+| Verification | Exactly seven distinct weekdays per Schedule; one Routine at most per weekday; repeated references allowed; active Schedule id non-negative. |
 
 ### 2.6 `scheduled_workout_days`
 
@@ -172,7 +184,7 @@ a whole. These keys are exported:
 | Workout behavior | `week_starts_on_monday`, `auto_save_interval_seconds`, `active_workout_draft`, `share_athlete_data_with_ai`, `autoplay_exercise_demos`, `auto_check_updates_on_start` |
 | Onboarding | `onboarding_completed` |
 | Personal records | `pr_push_ups`, `pr_push_ups_added_kg`, `pr_pull_ups`, `pr_pull_ups_added_kg`, `pr_bulgarian_split_squat`, `pr_bulgarian_split_squat_added_kg` |
-| Routine | `active_routine_id` |
+| Plan | `active_schedule_id`; legacy `active_routine_id` is retained for the one-time 4.4 promotion |
 | Home dashboard | `home_widget_order`, `home_widget_hidden`, `home_widget_weekly_goal`; the image is carried as a file and `home_widget_photo_path` is rebuilt locally |
 | AI data and summaries | `ai_workout_data_access`, `post_workout_ai_summaries` |
 | Android widgets | `android_widget_theme_streak`, `android_widget_theme_weekly`, `android_widget_theme_profile` |
@@ -184,6 +196,9 @@ These keys are deliberately **not** exported:
 - `profile_avatar_path`.
 - `cached_github_release` (disposable network cache).
 - `dismissed_update_prompt_version` (installation-specific UI suppression).
+- `launcher_icon_key` and `material_expressive_3` (device-local appearance).
+- Per-exercise default rest and the rest-timer alert mirror (device-local behaviour).
+- The cloud-backup tree URI and provider authority (device-local folder permission).
 
 Custom AI base URLs containing userinfo, a query string, a fragment, or obvious token parameters are
 redacted from the export and its acknowledgement is dropped. This prevents a URL from becoming a
@@ -204,6 +219,8 @@ preferences), so the same calculations reconstruct the same state after import.
 - The dataset-version cache.
 - Coil's animation cache.
 - Pending alarm/broadcast state for a running rest timer.
+- The cloud-backup folder URI and provider authority, and the WorkManager schedule.
+- Per-exercise default rests, the launcher-icon choice and Material Expressive 3.
 
 None of these is restored. In-progress workouts are user data and **are** carried in
 `active_workout_draft`.

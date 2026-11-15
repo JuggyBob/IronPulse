@@ -123,7 +123,7 @@ Release APKs are attached to the
 checksums.
 
 ```bash
-sha256sum IronPulse-4.4.0.apk
+sha256sum IronPulse-5.0.0.apk
 ```
 
 Compare against the checksum in the release notes before installing an APK you did not build

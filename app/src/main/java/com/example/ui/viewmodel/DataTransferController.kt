@@ -45,6 +45,7 @@ class DataTransferController(
     private val scope: CoroutineScope,
     private val onBeforeImportApply: suspend () -> Unit,
     private val onImportSettled: suspend () -> Unit,
+    private val onImportCompleted: () -> Unit,
     private val onWidgetsChanged: () -> Unit
 ) {
     private val _dataTransferState =
@@ -193,6 +194,7 @@ class DataTransferController(
                     onImportSettled()
                 }
                 onWidgetsChanged()
+                onImportCompleted()
                 _dataTransferState.value = DataTransferState.Success(
                     operation = BackupOperation.IMPORT,
                     title = "Backup restored",

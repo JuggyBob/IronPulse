@@ -92,8 +92,8 @@ class RoutineWorkoutSessionControllerTest {
                         targetSets = 2,
                         targetReps = 10,
                         targetWeight = 50.0,
-                        weekday = 1,
-                        dayTitle = "Leg Day"
+                        weekday = 0,
+                        dayTitle = ""
                     )
                 )
             )
@@ -108,6 +108,7 @@ class RoutineWorkoutSessionControllerTest {
             weekStartsOnMonday = { true },
             currentBodyWeightKg = { 80.0 },
             resolveBodyWeightKg = { 80.0 },
+            defaultRestForExercise = { 0 },
             stopRestTimer = {},
             clearQuickWorkout = { quickCleared = true },
             clearWorkoutDraft = { draftCleared = true },
@@ -115,13 +116,13 @@ class RoutineWorkoutSessionControllerTest {
             onSessionSaved = {}
         )
 
-        controller.start(routine, targetWeekday = 1)
+        controller.start(routine, targetWeekday = 1, scheduleId = 7L, scheduleGoal = "Strength")
         val active = controller.activeRoutineWorkout.value
         assertNotNull(active)
         assertEquals(2, active!!.sets.size)
         assertEquals(10, active.sets.first().reps)
         assertEquals(50.0, active.sets.first().weight, 0.0)
-        assertEquals("Leg Day", active.dayTitle)
+        assertEquals("Test Routine", active.dayTitle)
         assertTrue(active.plannedDateKey > 0L)
 
         controller.updateSet(0, active.sets.first().copy(isCompleted = true))
@@ -130,7 +131,7 @@ class RoutineWorkoutSessionControllerTest {
         val saved = withTimeout(5_000) {
             repository.getAllSessionsWithSets().first { sessions -> sessions.any { it.sets.isNotEmpty() } }
         }.single()
-        assertEquals("Test Routine (Leg Day)", saved.session.title)
+        assertEquals("Test Routine", saved.session.title)
         assertEquals(42L, saved.session.routineId)
         assertEquals(1, saved.sets.size)
         assertEquals(80.0, saved.sets.single().bodyWeightKg, 0.0)
@@ -145,5 +146,62 @@ class RoutineWorkoutSessionControllerTest {
         assertTrue(quickCleared)
         assertTrue(draftCleared)
         assertTrue(widgetsChanged)
+    }
+
+    @Test
+    fun `routine rest wins over the exercise default and carries to added sets`() = runBlocking {
+        val exercise = Exercise(
+            id = 2L,
+            name = "Romanian Deadlift",
+            category = "Legs",
+            exerciseType = ExerciseType.STANDARD_WEIGHT,
+            equipment = "Barbell"
+        )
+        val routine = SavedRoutine(
+            id = 43L,
+            name = "Rest Test",
+            description = "",
+            exercisesJson = RoutineParser.serializeExercises(
+                listOf(
+                    RoutineExerciseItem(
+                        exerciseId = 2L,
+                        exerciseName = "Romanian Deadlift",
+                        exerciseType = ExerciseType.STANDARD_WEIGHT,
+                        targetSets = 1,
+                        targetReps = 8,
+                        restSeconds = 75,
+                        weekday = 1,
+                        dayTitle = "Monday"
+                    )
+                )
+            )
+        )
+        val controller = RoutineWorkoutSessionController(
+            repository = repository,
+            scope = scope,
+            allExercises = { listOf(exercise) },
+            weekStartsOnMonday = { true },
+            currentBodyWeightKg = { 80.0 },
+            resolveBodyWeightKg = { 80.0 },
+            defaultRestForExercise = { 120 },
+            stopRestTimer = {},
+            clearQuickWorkout = {},
+            clearWorkoutDraft = {},
+            refreshWidgets = {},
+            onSessionSaved = {}
+        )
+
+        controller.start(routine, targetWeekday = 1, scheduleId = 0L, scheduleGoal = "")
+        val first = controller.activeRoutineWorkout.value!!.sets.single()
+        assertEquals(75, first.restSecondsOverride)
+
+        controller.updateSet(0, first.copy(restSecondsOverride = 45))
+        controller.addSet(exercise)
+        assertEquals(45, controller.activeRoutineWorkout.value!!.sets.last().restSecondsOverride)
+
+        val added = controller.activeRoutineWorkout.value!!.sets.last()
+        controller.updateSet(1, added.copy(restSecondsOverride = null))
+        controller.addSet(exercise)
+        assertEquals(75, controller.activeRoutineWorkout.value!!.sets.last().restSecondsOverride)
     }
 }

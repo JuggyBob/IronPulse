@@ -137,8 +137,25 @@ data class Exercise(
      * They are editable/deletable like the user's own exercises, but the UI always labels them
      * as AI generated so the two are never confused.
      */
-    val isAiGenerated: Boolean = false
+    val isAiGenerated: Boolean = false,
+    /**
+     * Explicit supported set-input fields, stored as a compact comma-separated list of stable
+     * [ExerciseField] ids. Empty means a legacy/default row, which falls back to [exerciseType].
+     * Tags/type never override a non-empty explicit configuration.
+     */
+    @ColumnInfo(defaultValue = "")
+    val supportedFields: String = ""
 ) {
+    /** The authoritative ordered fields this exercise can record. */
+    val exerciseFields: List<ExerciseField>
+        get() = ExerciseFieldCatalog.effectiveFields(this)
+
+    val primaryFields: List<ExerciseField>
+        get() = ExerciseFieldCatalog.primaryFields(exerciseFields)
+
+    val detailFields: List<ExerciseField>
+        get() = ExerciseFieldCatalog.detailFields(exerciseFields)
+
     /** Synergist muscles as a list, parsed from the stored JSON array. */
     val secondaryMuscleList: List<String>
         get() = parseMuscleList(secondaryMuscles)
@@ -233,7 +250,13 @@ data class WorkoutSession(
      * fall back to deriving the key from [plannedDate].
      */
     @ColumnInfo(defaultValue = "0")
-    val plannedDateKey: Long = 0L
+    val plannedDateKey: Long = 0L,
+    /** The Schedule that supplied this workout, or 0 for a standalone routine/quick workout. */
+    @ColumnInfo(defaultValue = "0")
+    val scheduleId: Long = 0L,
+    /** The Schedule goal strategy captured when the workout started. */
+    @ColumnInfo(defaultValue = "")
+    val scheduleGoal: String = ""
 )
 
 /**
@@ -263,6 +286,47 @@ data class ScheduledWorkoutDay(
     /** The number of prescribed exercises; 0 is a planned rest day. */
     val exerciseCount: Int = 0,
     val capturedAt: Long = System.currentTimeMillis()
+)
+
+/**
+ * A weekly training plan.
+ *
+ * The Schedule owns seven weekday slots and a goal strategy. It never owns exercise prescriptions;
+ * each slot points at one [SavedRoutine] identifier, and a null slot is a rest day.
+ */
+@Immutable
+@Entity(
+    tableName = "schedules",
+    indices = [Index(value = ["createdAt"])]
+)
+data class SchedulePlan(
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0,
+    val name: String,
+    val description: String = "",
+    val goal: String = "Strength & Muscle Growth",
+    val createdAt: Long = System.currentTimeMillis(),
+    /** The legacy multi-day routine this Schedule was migrated from, or 0 for a new plan. */
+    @ColumnInfo(defaultValue = "0")
+    val legacyRoutineId: Long = 0L
+)
+
+/**
+ * One weekday slot of a [SchedulePlan].
+ *
+ * `weekday` is the stable ISO identity, 1 = Monday ... 7 = Sunday. It is independent of the
+ * user's week-start presentation preference. A null [routineId] is a rest day.
+ */
+@Immutable
+@Entity(
+    tableName = "schedule_days",
+    primaryKeys = ["scheduleId", "weekday"],
+    indices = [Index(value = ["routineId"])]
+)
+data class ScheduleDaySlot(
+    val scheduleId: Long,
+    val weekday: Int,
+    val routineId: Long? = null
 )
 
 /**
@@ -321,10 +385,53 @@ data class LoggedSet(
      * every set it saves, so a stored 0 should only ever be seen on a set that is still in progress.
      */
     @ColumnInfo(defaultValue = "0")
-    val bodyWeightKg: Double = 0.0
+    val bodyWeightKg: Double = 0.0,
+    /**
+     * Whether this individual set was a warm-up set.
+     *
+     * This is deliberately a set-level property, never an exercise- or workout-level flag: the
+     * athlete may warm up on one set and work on the next. It persists through drafts, history and
+     * backups. Missing values from before schema 17 always read as false.
+     */
+    @ColumnInfo(defaultValue = "0")
+    val isWarmup: Boolean = false,
+    /**
+     * A rest duration chosen for this set, in seconds, or null to inherit the existing default.
+     *
+     * Null is the important case: it means "use the Routine exercise default or the existing manual
+     * timer behaviour", so an old set and a newly added set both keep the old rest semantics. A
+     * non-null value applies only to this set and never rewrites the global or exercise default.
+     */
+    val restSecondsOverride: Int? = null,
+    /**
+     * Stable identity for this set while it is still in memory.
+     *
+     * The database id is 0 until a workout is saved, and set numbers are reused by drop sets and
+     * rewritten when sets are deleted. The UID is what parent-child links and draft/backup
+     * round trips use instead of positions or transient row ids.
+     */
+    @ColumnInfo(defaultValue = "")
+    val setUid: String = "",
+    /**
+     * The setUid of the main set this row continues, or null for a main set.
+     *
+     * A drop set is a direct child of exactly one main set. It is never a top-level set with a
+     * decorative label, and it is never nested more than one level.
+     */
+    val parentSetUid: String? = null,
+    /** 1-based order among the children of [parentSetUid]; 0 for a main set. */
+    @ColumnInfo(defaultValue = "0")
+    val dropIndex: Int = 0
 ) {
     /** Whether this set records a distance rather than a load. */
     val isDistanceBased: Boolean get() = ExerciseType.DISTANCE_BASED.contains(exerciseType)
+
+    /** A drop set is any row with an explicit parent reference. */
+    val isDropSet: Boolean get() = !parentSetUid.isNullOrBlank()
+
+    companion object {
+        fun newUid(): String = java.util.UUID.randomUUID().toString()
+    }
 }
 
 @Immutable
@@ -364,8 +471,16 @@ data class SavedRoutine(
      * format. See [com.example.data.db.RoutineScheduleMigration].
      */
     @ColumnInfo(defaultValue = "0")
-    val scheduleVersion: Int = 0
-)
+    val scheduleVersion: Int = 0,
+    /**
+     * 0 = legacy multi-day routine awaiting conversion, 1 = legacy routine kept only for history,
+     * 2 = the new single-workout Routine format.
+     */
+    @ColumnInfo(defaultValue = "0")
+    val modelVersion: Int = 0
+) {
+    val isSingleWorkout: Boolean get() = modelVersion >= 2
+}
 
 @Immutable
 @Entity(

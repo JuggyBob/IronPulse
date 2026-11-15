@@ -7,6 +7,8 @@
 package com.example.data.ai
 
 import com.example.data.model.Exercise
+import com.example.data.model.ExerciseField
+import com.example.data.model.ExerciseFieldCatalog
 import com.example.data.model.SavedRoutine
 import org.json.JSONArray
 import org.json.JSONObject
@@ -23,7 +25,8 @@ data class ProposedExercise(
     val equipment: String,
     val exerciseType: String,
     val instructions: String,
-    val description: String = ""
+    val description: String = "",
+    val supportedFields: List<String> = emptyList()
 ) {
     fun toExercise(): Exercise = Exercise(
         name = name,
@@ -36,7 +39,16 @@ data class ProposedExercise(
         description = description,
         equipment = equipment,
         isCustom = true,
-        isAiGenerated = true
+        isAiGenerated = true,
+        supportedFields = ExerciseFieldCatalog.serialize(
+            runCatching {
+                ExerciseFieldCatalog.validate(
+                    supportedFields.mapNotNull(ExerciseField::fromId).ifEmpty {
+                        ExerciseFieldCatalog.defaultsForType(exerciseType)
+                    }
+                )
+            }.getOrElse { ExerciseFieldCatalog.defaultsForType(exerciseType) }
+        )
     )
 
     fun toJson(): JSONObject = JSONObject().apply {
@@ -47,6 +59,7 @@ data class ProposedExercise(
         put("secondaryMuscles", JSONArray().apply { secondaryMuscles.forEach { put(it) } })
         put("equipment", equipment)
         put("exerciseType", exerciseType)
+        if (supportedFields.isNotEmpty()) put("supportedFields", JSONArray().apply { supportedFields.forEach { put(it) } })
         put("instructions", instructions)
         put("description", description)
     }
@@ -61,7 +74,8 @@ data class ProposedExercise(
             equipment = exercise.equipment,
             exerciseType = exercise.exerciseType,
             instructions = exercise.instructions,
-            description = exercise.description
+            description = exercise.description,
+            supportedFields = exercise.exerciseFields.map { it.id }
         )
 
         fun fromJson(obj: JSONObject): ProposedExercise? {
@@ -80,7 +94,8 @@ data class ProposedExercise(
                 equipment = parsed.equipment,
                 exerciseType = parsed.exerciseType,
                 instructions = parsed.instructions,
-                description = parsed.description
+                description = parsed.description,
+                supportedFields = parsed.exerciseFields.map { it.id }
             )
         }
     }

@@ -11,13 +11,17 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
@@ -56,7 +60,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ShowChart
@@ -73,6 +77,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.key
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -93,6 +100,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.view.ViewCompat
@@ -111,6 +119,8 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.data.model.UpdateState
 import com.example.ui.components.LiquidGlassLens
+import com.example.ui.components.BottomDockState
+import com.example.ui.components.LocalBottomDockState
 import com.example.ui.components.LocalLiquidGlassEnabled
 import com.example.ui.components.StartupUpdateDialog
 import com.example.ui.components.WorkoutSummaryDialog
@@ -125,7 +135,7 @@ import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.LogWorkoutScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.WidgetAppearanceScreen
-import com.example.ui.screens.SavedRoutinesView
+import com.example.ui.screens.PlanScreen
 import com.example.ui.screens.ProgressScreen
 import com.example.ui.screens.RoutineWorkoutScreen
 import com.example.ui.theme.DarkBg
@@ -140,14 +150,17 @@ import com.example.ui.theme.ThemeRuntime
 import com.example.ui.theme.OnAccent
 import com.example.ui.viewmodel.MainViewModel
 import com.example.util.ApkInstaller
+import com.example.util.LauncherIconOption
+import com.example.util.LauncherIcons
 import java.io.File
 import kotlin.math.abs
+import kotlinx.coroutines.delay
 
 sealed class Screen(val route: String, val title: String, val icon: ImageVector, val tag: String) {
     object LogWorkout : Screen("log_workout", "Exercises", Icons.Default.FitnessCenter, "nav_log_workout")
     object Progress : Screen("progress", "Progress", Icons.Default.ShowChart, "nav_progress")
     object Home : Screen("home", "Home", Icons.Default.Home, "nav_home")
-    object Routine : Screen("routine", "Routine", Icons.Default.Checklist, "nav_routine")
+    object Plan : Screen("plan", "Plan", Icons.Default.CalendarMonth, "nav_plan")
     object AiCoach : Screen("ai_coach", "AI Coach", Icons.Default.AutoAwesome, "nav_ai_coach")
     object Settings : Screen("settings", "Settings", Icons.Default.Settings, "nav_settings")
     object WidgetAppearance : Screen(
@@ -319,6 +332,16 @@ fun IronPulseApp(
     onWidgetNavigationHandled: (Long) -> Unit = {}
 ) {
     val viewModel: MainViewModel = viewModel()
+    val launcherIcon by viewModel.launcherIcon.collectAsStateWithLifecycle()
+    val launcherContext = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(launcherIcon) {
+        if (launcherIcon.isNotBlank()) {
+            val option = LauncherIconOption.fromKey(launcherIcon)
+            LauncherIcons.apply(launcherContext, option)
+            // The alias only changes the launcher entry; Recents keeps using the task's icon.
+            LauncherIcons.applyTaskIcon(launcherContext, option)
+        }
+    }
     val liquidGlassEnabled by viewModel.liquidGlassEnabled.collectAsStateWithLifecycle()
     val fullscreenEnabled by viewModel.fullscreenEnabled.collectAsStateWithLifecycle()
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
@@ -353,11 +376,19 @@ fun IronPulseApp(
                     .background(DarkBg)
                     .then(insetModifier)
             ) {
-                IronPulseAppContent(
-                    viewModel = viewModel,
-                    widgetNavigation = widgetNavigation,
-                    onWidgetNavigationHandled = onWidgetNavigationHandled
-                )
+                // The onboarding and main-app compositions are different trees. Rebuilding the
+                // whole content when the gate flips is what keeps a freshly restored backup from
+                // reusing the onboarding slot table. Without this, finishing onboarding or
+                // importing a backup could crash while the first main-screen state was created.
+                val onboardingCompleted by viewModel.onboardingCompleted.collectAsStateWithLifecycle()
+                key(onboardingCompleted) {
+                    IronPulseAppContent(
+                        viewModel = viewModel,
+                        onboardingCompleted = onboardingCompleted,
+                        widgetNavigation = widgetNavigation,
+                        onWidgetNavigationHandled = onWidgetNavigationHandled
+                    )
+                }
             }
         }
     }
@@ -366,16 +397,32 @@ fun IronPulseApp(
 @Composable
 private fun IronPulseAppContent(
     viewModel: MainViewModel,
+    onboardingCompleted: Boolean,
     widgetNavigation: kotlinx.coroutines.flow.StateFlow<WidgetNavigationRequest?>? = null,
     onWidgetNavigationHandled: (Long) -> Unit = {}
 ) {
-    val navController = rememberNavController()
+    var navigationGeneration by rememberSaveable { mutableIntStateOf(0) }
+    val navController = key(navigationGeneration) { rememberNavController() }
+    var wasOnboarding by remember { mutableStateOf(!onboardingCompleted) }
+    LaunchedEffect(onboardingCompleted) {
+        if (!onboardingCompleted) navigationGeneration++
+        if (onboardingCompleted && wasOnboarding) {
+            runCatching { navController.graph }.getOrNull()?.let { graph ->
+                navController.navigate(Screen.Home.route) {
+                    popUpTo(graph.startDestinationId) { inclusive = true }
+                    launchSingleTop = true
+                }
+            }
+        }
+        wasOnboarding = !onboardingCompleted
+    }
     val navigationState = widgetNavigation ?: remember {
         kotlinx.coroutines.flow.MutableStateFlow<WidgetNavigationRequest?>(null)
     }
     val widgetRequest by navigationState.collectAsStateWithLifecycle()
 
     LaunchedEffect(widgetRequest?.id) {
+        if (!onboardingCompleted) return@LaunchedEffect
         val request = widgetRequest ?: return@LaunchedEffect
         val navigateHome = {
             navController.navigate(Screen.Home.route) {
@@ -394,7 +441,7 @@ private fun IronPulseAppContent(
                 viewModel.startTodayWorkoutFromWidget()
             }
             com.example.widget.WidgetNavigation.ACTION_SAVED_ROUTINES -> {
-                navController.navigate(Screen.Routine.route) {
+                navController.navigate(Screen.Plan.route) {
                     popUpTo(navController.graph.findStartDestination().id) { saveState = true }
                     launchSingleTop = true
                     restoreState = true
@@ -414,7 +461,7 @@ private fun IronPulseAppContent(
     val workoutSummaryState by viewModel.workoutSummaryState.collectAsStateWithLifecycle()
     // Gate rather than a route: the landing pages are a modal flow with no back navigation, and
     // showing the tab bar behind them would let the athlete wander into another tab mid form.
-    val onboardingCompleted by viewModel.onboardingCompleted.collectAsStateWithLifecycle()
+    // `onboardingCompleted` is collected above the NavController so a wipe can reset it.
 
     // A workout that was in progress when the app was closed, waiting for the athlete to decide.
     val pendingDraft by viewModel.pendingWorkoutDraft.collectAsStateWithLifecycle()
@@ -637,13 +684,13 @@ private fun IronPulseAppContent(
                 workoutSnapshot = lastWorkout
             )
         } else {
-        // The order of the bottom bar. Home sits between Progress and Routine, which is where the
+        // The order of the bottom bar. Home sits between Progress and Plan, which is where the
         // athlete expects the entry point to the app to be.
         val screens = listOf(
             Screen.LogWorkout,
             Screen.Progress,
             Screen.Home,
-            Screen.Routine,
+            Screen.Plan,
             Screen.AiCoach
         )
 
@@ -656,8 +703,26 @@ private fun IronPulseAppContent(
 
         val isKeyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
         val glassEnabled = LocalLiquidGlassEnabled.current
+        var aiChatDrawerOpen by remember { mutableStateOf(false) }
         var navBounds by remember { mutableStateOf<Rect?>(null) }
         var contentBounds by remember { mutableStateOf<Rect?>(null) }
+        LaunchedEffect(currentRoute) {
+            if (currentRoute != Screen.AiCoach.route) aiChatDrawerOpen = false
+        }
+        // The dock's backdrop blur re-records a full-screen graphics layer on every frame.
+        // During a tab transition the page is moving anyway, so the last capture is reused for
+        // the length of the navigation animation instead of paying for a blur of pixels that are
+        // about to be replaced. The dock keeps its glass colour; only the hidden capture pauses.
+        var dockBackdropSettled by remember { mutableStateOf(true) }
+        var lastBackdropRoute by remember { mutableStateOf(currentRoute) }
+        LaunchedEffect(currentRoute) {
+            if (currentRoute != lastBackdropRoute) {
+                lastBackdropRoute = currentRoute
+                dockBackdropSettled = false
+                delay(340)
+                dockBackdropSettled = true
+            }
+        }
         val dockBounds = remember(navBounds, contentBounds) {
             val nav = navBounds
             val content = contentBounds
@@ -672,6 +737,38 @@ private fun IronPulseAppContent(
                 )
             }
         }
+        val quickWorkoutAttached = glassEnabled &&
+            !isKeyboardOpen &&
+            activeSession != null &&
+            currentRoute == Screen.LogWorkout.route
+        val dockMorph by animateFloatAsState(
+            targetValue = if (quickWorkoutAttached) 1f else 0f,
+            animationSpec = tween(240, easing = FastOutSlowInEasing),
+            label = "bottom_dock_morph"
+        )
+        val dockHorizontalInset by animateDpAsState(
+            targetValue = if (glassEnabled) 12.dp * (1f - dockMorph) else 0.dp,
+            animationSpec = tween(240, easing = FastOutSlowInEasing),
+            label = "bottom_dock_horizontal_inset"
+        )
+        val dockVerticalInset by animateDpAsState(
+            targetValue = if (glassEnabled) 8.dp * (1f - dockMorph) else 0.dp,
+            animationSpec = tween(240, easing = FastOutSlowInEasing),
+            label = "bottom_dock_vertical_inset"
+        )
+        val dockCornerRadius = 26.dp * (1f - dockMorph)
+        val dockDensity = LocalDensity.current
+        val dockTopInset = remember(navBounds, contentBounds, dockDensity) {
+            val nav = navBounds
+            val content = contentBounds
+            if (nav == null || content == null) {
+                92.dp
+            } else {
+                with(dockDensity) {
+                    (content.bottom - nav.top).coerceAtLeast(0f).toDp()
+                }
+            }
+        }
         val navigate: (Screen) -> Unit = { screen ->
             if (currentRoute != screen.route) {
                 navController.navigate(screen.route) {
@@ -684,6 +781,13 @@ private fun IronPulseAppContent(
             }
         }
 
+        CompositionLocalProvider(
+            LocalBottomDockState provides BottomDockState(
+                visible = !isKeyboardOpen && !aiChatDrawerOpen,
+                attached = quickWorkoutAttached,
+                topInset = dockTopInset
+            )
+        ) {
         // The dock is an overlay, not a Scaffold bottom bar. A reserved bottom bar would paint an
         // opaque page-coloured strip behind the glass and prevent any content from ever showing
         // through it. The NavHost now fills the screen and the floating dock draws above it.
@@ -701,13 +805,14 @@ private fun IronPulseAppContent(
                     // Records the pages into a graphics layer and draws a genuinely blurred copy
                     // only inside the dock silhouette. This is the backdrop the glass sits on.
                     .liquidGlassBackdrop(
-                        enabled = glassEnabled && !isKeyboardOpen,
+                        enabled = glassEnabled && !isKeyboardOpen && !aiChatDrawerOpen,
                         bounds = dockBounds,
-                        cornerRadius = 28.dp,
+                        cornerRadius = 28.dp * (1f - dockMorph),
                         // A wide blur spreads a bright card behind the dock into an even glow;
                         // the uniform scrim keeps the top from reading as a separate white bar.
                         blurRadius = 30.dp,
-                        scrimAlpha = 0.28f
+                        scrimAlpha = 0.28f,
+                        updateContent = dockBackdropSettled
                     )
                     .background(DarkBg)
             ) {
@@ -717,8 +822,8 @@ private fun IronPulseAppContent(
                 composable(Screen.Progress.route) {
                     ProgressScreen(viewModel = viewModel)
                 }
-                composable(Screen.Routine.route) {
-                    SavedRoutinesView(
+                composable(Screen.Plan.route) {
+                    PlanScreen(
                         viewModel = viewModel,
                         onLaunchRoutine = {
                             navController.navigate(Screen.LogWorkout.route) {
@@ -752,7 +857,7 @@ private fun IronPulseAppContent(
                     HomeScreen(
                         viewModel = viewModel,
                         onOpenSavedRoutines = {
-                            navController.navigate(Screen.Routine.route) {
+                            navController.navigate(Screen.Plan.route) {
                                 popUpTo(navController.graph.findStartDestination().id) {
                                     saveState = true
                                 }
@@ -788,6 +893,7 @@ private fun IronPulseAppContent(
                 composable(Screen.AiCoach.route) {
                     AiCoachScreen(
                         viewModel = viewModel,
+                        onChatDrawerOpenChanged = { aiChatDrawerOpen = it },
                         onNavigateToLogWorkout = {
                             navController.navigate(Screen.LogWorkout.route) {
                                 popUpTo(navController.graph.findStartDestination().id) {
@@ -798,7 +904,7 @@ private fun IronPulseAppContent(
                             }
                         },
                         onNavigateToSavedRoutines = {
-                            navController.navigate(Screen.Routine.route) {
+                            navController.navigate(Screen.Plan.route) {
                                 popUpTo(navController.graph.findStartDestination().id) {
                                     saveState = true
                                 }
@@ -856,23 +962,39 @@ private fun IronPulseAppContent(
             // Hidden while typing rather than lifted: it cannot be used during a text edit and
             // would shrink the visible list to a row of dead space above the keyboard.
             if (!isKeyboardOpen) {
-                IronBottomBar(
-                    screens = screens,
-                    currentRoute = selectedTabRoute,
-                    onSelect = navigate,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .then(
-                            if (glassEnabled) {
-                                Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                            } else {
-                                Modifier
-                            }
+                AnimatedVisibility(
+                    visible = !aiChatDrawerOpen,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                    enter = slideInVertically(
+                        initialOffsetY = { it },
+                        animationSpec = tween(260, easing = FastOutSlowInEasing)
+                    ) + fadeIn(tween(180)) + scaleIn(
+                        initialScale = 0.86f,
+                        animationSpec = tween(260, easing = FastOutSlowInEasing)
+                    ),
+                    exit = slideOutVertically(
+                        targetOffsetY = { it },
+                        animationSpec = tween(220, easing = FastOutSlowInEasing)
+                    ) + fadeOut(tween(150)) + scaleOut(
+                        targetScale = 0.86f,
+                        animationSpec = tween(220, easing = FastOutSlowInEasing)
+                    )
+                ) {
+                    IronBottomBar(
+                        screens = screens,
+                        currentRoute = selectedTabRoute,
+                        onSelect = navigate,
+                        cornerRadius = dockCornerRadius,
+                        modifier = Modifier.padding(
+                            horizontal = dockHorizontalInset,
+                            vertical = dockVerticalInset
                         ),
-                    onBoundsChanged = { navBounds = it }
-                )
+                        onBoundsChanged = { navBounds = it }
+                    )
+                }
             }
         }
+    }
     }
     }
 }
@@ -896,6 +1018,7 @@ private fun IronBottomBar(
     screens: List<Screen>,
     currentRoute: String,
     onSelect: (Screen) -> Unit,
+    cornerRadius: Dp = 26.dp,
     modifier: Modifier = Modifier,
     onBoundsChanged: (Rect) -> Unit = {}
 ) {
@@ -945,10 +1068,10 @@ private fun IronBottomBar(
                     if (glassEnabled) {
                         Modifier
                             .liquidGlass(
-                                shape = RoundedCornerShape(26.dp),
+                                shape = RoundedCornerShape(cornerRadius),
                                 enabled = true,
                                 tint = ElectricCyan,
-                                cornerRadius = 26.dp,
+                                cornerRadius = cornerRadius,
                                 elevation = 16.dp,
                                 // The page behind the dock is already blurred by the NavHost's
                                 // liquidGlassBackdrop modifier. A lighter body lets that real

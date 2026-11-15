@@ -32,6 +32,7 @@ import com.example.data.model.RoutineExerciseItem
 import com.example.data.model.RoutineParser
 import com.example.data.model.SavedRoutine
 import com.example.data.model.SessionWithSets
+import com.example.data.model.WorkoutDraft
 import com.example.data.model.WorkoutSession
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
@@ -254,6 +255,7 @@ class AiWorkoutQueriesTest {
         assertTrue(names.contains(AiToolCatalog.GET_CURRENT_ROUTINE))
         assertTrue(names.contains(AiToolCatalog.SEARCH_EXERCISE_HISTORY))
         assertTrue(names.contains(AiToolCatalog.SEARCH_EXERCISES))
+        assertTrue(names.contains(AiToolCatalog.GET_ACTIVE_WORKOUT))
         assertTrue(names.contains(AiToolCatalog.PROPOSE_ROUTINE_MODIFICATION))
     }
 
@@ -423,4 +425,49 @@ class AiWorkoutQueriesTest {
         assertTrue(result.isError)
         assertEquals("invalid_arguments", body(result).getString("error"))
     }
+    @Test
+    fun `active workout returns in-progress drop-set parent links`() = runBlocking {
+        val main = LoggedSet(
+            sessionId = 0L,
+            exerciseId = pushUp.id,
+            exerciseName = pushUp.name,
+            exerciseType = pushUp.exerciseType,
+            setNumber = 1,
+            reps = 12,
+            isCompleted = true,
+            timestamp = now,
+            setUid = "active-main"
+        )
+        val child = main.copy(
+            reps = 8,
+            weight = 0.0,
+            timestamp = now + 1,
+            setUid = "active-drop",
+            parentSetUid = "active-main",
+            dropIndex = 1
+        )
+        val draft = WorkoutDraft(
+            title = "Live Push",
+            exerciseIds = listOf(pushUp.id),
+            sets = listOf(main, child)
+        )
+        val access = object : AiDataAccess by FakeDataAccess() {
+            override suspend fun activeWorkoutDraft(): WorkoutDraft = draft
+        }
+        val result = AiToolDispatcher(AiToolRegistry(access)).dispatch(
+            call(AiToolCatalog.GET_ACTIVE_WORKOUT),
+            AiAccessPolicy.all
+        )
+
+        assertFalse(result.isError)
+        val json = body(result)
+        assertTrue(json.getBoolean("found"))
+        val sets = json.getJSONArray("sets")
+        assertEquals(2, sets.length())
+        assertEquals("active-main", sets.getJSONObject(1).getString("parentSetUid"))
+        assertTrue(sets.getJSONObject(1).getBoolean("isDropSet"))
+        assertEquals(1, sets.getJSONObject(1).getInt("dropIndex"))
+        assertEquals(1, json.getJSONArray("exercises").getJSONObject(0).getInt("dropSetCount"))
+    }
+
 }

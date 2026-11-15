@@ -7,6 +7,939 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [5.0.0] - 2026-11-15
+
+IronPulse 5.0.0 is the first public release since 4.4.0 and the largest update in the project's
+history. It replaces the multi-day routine model with standalone **Routines** and weekly
+**Schedules**, rebuilds the active workout around an exercise selector, adds **drop sets**,
+**warm-up sets** and per-set rest overrides, gives every exercise an explicit field configuration,
+adds cloud-folder backups and selectable launcher icons, and ships a reviewed 1,334-exercise
+catalogue. The public version code is **13**, exactly one above the public 4.4.0 build.
+
+The internal line produced sixteen builds between 4.4.0 and this release. Every one is accounted for
+at the end of this section. Several features were introduced in one internal build and then
+corrected in later revisions; the notes below describe the behaviour that actually ships in 5.0.0,
+not the intermediate implementation.
+
+### Major highlights
+
+- **Plan replaces the Routine tab.** A Routine is now one reusable workout. A Schedule is a week of
+  seven weekday references. Home, the streak and the Android widgets follow the active Schedule.
+- **A rebuilt workout experience.** An exercise selector, focused exercise view, unified set rows,
+  per-set options and a whole-workout body-part completion map replace the stacked exercise cards.
+- **Drop sets and warm-up sets are first-class data.** Both survive drafts, completion, history,
+  progress, AI context and `.ironpulse` backups.
+- **Explicit per-exercise fields.** `reps`, `weight`, `addedWeight`, `holdSeconds`, `timeSeconds`
+  and `distanceKm` are configured per exercise, and all 1,334 catalogue rows were audited.
+- **Cloud-folder backups** through Android's Storage Access Framework, with automatic verified
+  backups and five-file retention.
+- **Eight selectable launcher icons**, adaptive and legacy variants, with Recents integration.
+- **The 4.4 → 5.0 upgrade is automatic.** Room schema 15 → 19 and backup data schema 2 → 6, with
+  legacy routines converted to Routines plus a Schedule and completed history left untouched.
+
+### Plan: Schedules and Routines
+
+- **A Routine is one workout.** The old multi-day container is gone from the active UI. A Routine has
+  one ordered exercise list, one goal, one description and its own set/rest/load defaults.
+- **Schedules own the week.** A Schedule is a named plan with seven stable weekday slots
+  (`1 = Monday … 7 = Sunday`). A slot references a Routine or is a rest day; the same Routine may be
+  assigned to several weekdays.
+- **One active Schedule.** The active Schedule drives Home's Today card, the week strip, Start Today,
+  schedule-adherence streaks and the launcher widgets. Changing the week-start preference changes
+  display order only; it never moves a workout to another weekday.
+- **Goal strategy lives on the Schedule.** Strength & Muscle Growth, Strength & Power, Hypertrophy &
+  Muscle Growth, Calisthenics Mastery and Conditioning & Fat Loss each explain what they change.
+  A workout started through a Schedule captures that goal at start, so editing the Schedule later
+  cannot rewrite an active or completed session.
+- **Start any weekday.** A Schedule can start a workout for a chosen day without changing the active
+  Schedule. Home can also start another saved Routine on a rest day.
+- **Four starter templates.** Three-Day Full Body, Four-Day Upper/Lower, Five-Day Push Pull Legs and
+  Six-Day Push Pull Legs. Copying a template creates independent Routines and a Schedule; duplicate
+  copies are guarded and progress is shown.
+- **Batch management.** Routines and Schedules support multi-select deletion with confirmation.
+- **Reference-safe deletion.** Deleting a Routine turns every weekday that referenced it into a rest
+  day. Completed sessions and logged sets are never deleted with the plan.
+- **Legacy conversion.** Each 4.4 multi-day program becomes one Schedule plus one standalone Routine
+  per distinct workout day. Identical days inside one program share one Routine. The old row remains
+  hidden at `modelVersion = 1` so historical session links still resolve.
+- **AI-created plans use the same model.** A generated multi-day plan becomes Routines plus a
+  Schedule; a single-workout request becomes one Routine and no Schedule.
+
+### Workout logging
+
+- **Exercise-selector interface.** Numbered exercise chips, a focused exercise card, one set list and
+  the body-part preview replace the old stacked cards in Routine workouts and the Quick Workout tray.
+- **One set row, all fields.** Field names are shown once in an aligned header. Each row uses the
+  same stepper boxes, completion action and delete action; the first two configured fields are
+  inline and additional fields live in the set's expandable details.
+- **Set options.** The set-number circle opens an attached panel with a per-set rest override and a
+  warm-up toggle. A non-zero override starts that timer when the set is completed; inheriting the
+  Routine or exercise default is the fallback. Completing a set starts the existing floating timer.
+- **Warm-up sets.** Every logged set persists `isWarmup`. Warm-ups remain visible in workout and
+  exercise history, count toward total volume, and are excluded from max reps, estimated 1RM, best
+  working sets and working PRs. A workout with only warm-ups produces no fabricated record.
+- **Drop sets.** A drop set is a direct child of one main set, stored with a stable set UID, parent
+  UID and 1-based drop index. Main sets keep `1..N`; each branch numbers its children `D1..DN`.
+  Completing a child completes its parent; un-completing a parent clears its children; deleting a
+  parent removes its children; deleting a child leaves its siblings alone.
+- **Read-only exercise details mid-workout.** Tapping an exercise name opens the same media,
+  instructions, field and body-map sheet used by the library, with editing disabled while training.
+- **Body-part completion map.** The workout header shows the whole session's completed/total sets per
+  body part, with a compact progress list. Material Expressive 3 uses the animated dot-snake
+  treatment.
+- **Motion.** New sets unfold and slide into place; switching exercises uses a direction-aware
+  horizontal transition in both the Routine workout and Quick Workout tray. Both honour the system
+  reduced-motion setting.
+- **Quick Workout stays non-modal.** The resizable tray keeps its minimize/half/full modes and
+  survives cross-tab navigation; the selected exercise, sets and scroll position are preserved.
+- **History presentation.** Main sets and their drop branches are shown together, warm-ups carry a
+  `WARM` badge, and set numbering is per exercise and per session rather than counting drop children
+  as top-level sets.
+
+### Exercise catalogue and explicit fields
+
+- **All 1,334 exercises audited.** 391 ordered field configurations changed and 943 were left
+  unchanged. The matrix is `docs/exercise_field_audit.csv`; the reproducible generator is
+  `tools/audit_exercise_fields.py`.
+- **Six stable field identifiers:** `reps`, `weight`, `addedWeight`, `holdSeconds`, `timeSeconds`
+  and `distanceKm`. An exercise stores its own ordered list; the exercise type only supplies a
+  fallback suggestion and the badge metadata.
+- **Corrected configurations** for weighted planks and holds, weighted calisthenics, static
+  stretches, no-load props, loaded carries, conditioning work and bodyweight movements that had
+  inherited an irrelevant hold.
+- **Create and Edit Exercise** expose the field selector with a live inline/details preview.
+  Changing the type no longer removes fields the athlete chose. Hold and time cannot both be
+  configured because they share the stored duration column; weight and added weight remain mutually
+  exclusive.
+- **History and analytics read the recorded values**, not the current type: holds, time, distance and
+  load are displayed and aggregated from the set. Any recorded added weight contributes to load.
+- **Catalogue version 5.** The dataset reseed fills every shipped row with its explicit field list
+  while preserving custom and AI-created exercises.
+
+### Home and Android widgets
+
+- **Schedule-driven Home.** Today's card shows the active Schedule's workout, a rest day, a request
+  to choose a Schedule, or a Resume action for a running session. It never silently starts a second
+  workout.
+- **The week at a glance.** All seven days show their date, Routine/rest state and exercise count.
+  Tapping a training day starts it.
+- **Streak adherence.** A planned day counts when a completed linked session has at least one
+  completed set. Rest days do not break the streak; missed planned days do; today's unfinished plan
+  is pending. The card shows current/best streak, a 12-week heat map, Done/Missed/Best/Next totals
+  and the alive/burnt-out flame.
+- **Last seven days.** Volume or Duration coverage of the same dates; tapping a day opens what was
+  trained.
+- **This week in three numbers:** workouts, time and volume.
+- **Body weight** shows the latest weigh-in, the change since the previous one and a Log Weight
+  action that writes the same weigh-in the Progress page uses.
+- **Last workout** expands in place with exercise names, one line per logged set and a full-history
+  link.
+- **Home widget manager** still controls order, visibility, weekly goal and the motivation photo;
+  the layout survives restarts and later releases.
+- **Three Android launcher widgets** remain available: Workout Streak, Weekly Workout Overview and
+  Workout Profile. Each keeps its own Light, Dark, AMOLED Dark or IronPulse appearance and refreshes
+  after workouts, profile/plan/theme changes, imports, boot and timezone changes.
+
+### Progress, history and metrics
+
+- **Activity heat map** covers twelve months, supports Time/Volume and keeps the selected month
+  across vertical scrolling; the initial jump to the newest month happens once.
+- **Body Weight Timeline and Weigh-in Logs** are grouped beneath the heat map. The header height and
+  spacing are stable in both collapsed and expanded states.
+- **Exercise Progression** keeps the exercise selector, muscle illustration, statistics/graphs and
+  AI Monthly Summary, with an isolated-weight tag for comparing loads.
+- **Session History** starts collapsed and pages five logged days at a time with Load More, without
+  duplicating entries.
+- **Warm-up and drop-set correctness** in progress: warm-ups are volume but never a PR; drop children
+  are not counted as top-level sets; a hold-only set cannot create a zero-rep record or a fabricated
+  1RM.
+- **Body-weight snapshots stay frozen.** A later weigh-in never rewrites the body weight a past set
+  was performed at. The idempotent repair only fills rows whose snapshot is still zero.
+- **Volume is defined once.** The heat map and Progress chart derive it from the same load rules, so
+  two screens cannot disagree about the same week.
+- **Workout-history statistics cards** share one height, and the volume value/unit no longer wraps on
+  narrow screens.
+
+### AI
+
+- **Eleven bounded tools.** Nine read-only tools cover the catalogue, saved Routines, the active
+  Schedule, completed workouts, one exercise's history and the live workout. Two proposal tools can
+  prepare a routine change or a new routine, and neither can apply itself.
+- **Schedule-aware contexts.** Tool results and prompts use single-workout Routines, the active
+  seven-day Schedule, explicit supported fields, distance, warm-up flags, drop-set parent links and
+  per-set rest.
+- **Approval cards** for a routine substitution or a new routine; applying requires a fresh
+  permission check, active-plan check, stale-signature check and one transaction.
+- **AI data access remains off by default.** The personal-data tools are not registered until the
+  athlete enables access, and the switch is enforced at dispatch.
+- **Routine Generator** creates a full Routine/Schedule plan from goal, training days and available
+  equipment. **AI Parser** turns pasted text or JSON into the same model.
+- **Monthly summaries** are saved offline per exercise. **Post-workout summaries** are immutable,
+  reopen from history without another request, and compare against the previous comparable session.
+- **Provider-independent layer:** Google, OpenAI, Anthropic, OpenRouter, xAI and a custom
+  OpenAI-compatible endpoint, with per-provider model choice and Auto/Native/Text tool modes.
+- **Composer and drawer polish.** The chat composer follows the bottom dock when the history drawer
+  opens. A red warning appears under Post-workout AI summaries when the active provider has no key
+  or endpoint, with a direct Connect a provider action.
+
+### Backup, restore and cloud backup
+
+- **`.ironpulse` data schema 6.** The archive now carries Schedules, weekday slots, routine model
+  versions, warm-up/rest flags, set UIDs and drop-set parent links, and per-exercise field lists. v1
+  through v5 archives migrate forward deterministically.
+- **Full replacement semantics remain.** Import verifies structure, checksums, relationships and
+  counts before the destructive confirmation, then replaces the exported state transactionally.
+  API keys, the profile picture and exercise media stay on the destination device.
+- **Cloud Backup** under Settings → Data. Choose a folder with Android's document picker, including
+  Google Drive or OneDrive when their provider is installed. The folder permission persists.
+- **Automatic and verified.** Backups are requested after a completed workout, after a restore and
+  after profile/onboarding changes, with a daily WorkManager recovery run. Each file is written to a
+  temporary document, read back, size- and SHA-256-verified, then renamed. A failed attempt never
+  overwrites an older backup, and the five newest cloud backups are retained.
+- **Onboarding data step.** A new install can import a backup or connect a cloud folder before
+  finishing setup; the step is optional and skippable.
+- **Drive detection corrected.** The unreliable package-name pre-check was removed. The document
+  picker is the source of truth, so an installed Drive provider is no longer reported as missing.
+- **The archive is not encrypted**, and the UI says so. API keys, profile pictures and exercise media
+  are excluded from both manual and cloud backups.
+
+### Appearance, launcher icons and settings
+
+- **Four themes:** IronPulse, Dark, Light and AMOLED Dark, with true black in AMOLED.
+- **Accent customization:** eight presets plus a custom hue/saturation/brightness picker with HEX and
+  RGB input. The choice applies to buttons, tabs, fields, switches, sliders, charts and selections.
+- **Liquid Glass** captures and blurs the content behind the floating dock on Android 12+, with the
+  documented translucent fallback on older versions. Hold the dock to magnify neighbouring tabs.
+- **Fullscreen Mode** hides the status/navigation bars and respects the display cutout.
+- **Material Expressive 3** enables the accent-coloured countdown-line and completed-set snake
+  animations.
+- **Eight launcher icons:** IronPulse, Cool Cyan, Signal Amber, Ultra Violet, Ocean Blue, Crimson
+  Red, Rose Quartz and Arctic White. Each has an adaptive foreground, round variant, legacy density
+  bitmaps and a picker preview. Activity aliases apply the choice; a bootstrap alias keeps a fresh
+  install launchable; the Recents task icon follows the selected artwork.
+- **Adaptive-icon safe zone corrected.** Generated foregrounds use a 60dp centred layer-list, so
+  circular/squircle masks no longer cut the dumbbell plates; the monochrome layer is wrapped the same
+  way.
+- **Reorganized Settings hub:** Athlete Profile, Appearance, User Preferences, AI Tools, Data, About
+  and Support, with App Icon and Data Management as dedicated subpages.
+- **Home Tab Widgets** can be reordered, hidden, restored and given a weekly goal or motivation
+  photo. Android widget appearances remain independent of the app theme.
+- **Per-exercise default rest** is stored on the device and seeds Quick Workout sets and new Routine
+  entries; a rest saved on the Routine still wins. It is not included in `.ironpulse` backups.
+- **Exercise cards** keep Add Set usable with four-field exercises, open read-only details from the
+  card, and expose edit/delete through their existing controls. The duplicated overflow menu is gone.
+- **Schedule dialogs** wrap to content, grow to 90% height, scroll on short screens and explain the
+  selected goal strategy.
+- **Import, export and cloud notices** use one shared status card with the dismiss action integrated.
+
+### Data, storage and migrations
+
+- **Room schema 19.**
+  - 16: adds `saved_routines.modelVersion`, `workout_sessions.scheduleId`/`scheduleGoal`, and the
+    `schedules`/`schedule_days` tables; converts legacy routines.
+  - 17: adds `logged_sets.isWarmup` and `restSecondsOverride`.
+  - 18: adds `logged_sets.setUid`, `parentSetUid` and `dropIndex`; every old set becomes a normal
+    top-level set with a deterministic `legacy-<id>` UID.
+  - 19: adds `exercises.supportedFields`; the dataset reseed fills every catalogue row.
+- **Routine JSON compatibility.** Legacy `addedWeight` values are moved into `weight` when the
+  exercise records only weight, including every main-set default and drop set. Loads written only in
+  a text prescription (`3x8 @ 34kg`, `+9kg`, `lb`) are parsed into the correct field, and `Name:
+  3x8` lines are no longer discarded as prose.
+- **Active-plan promotion fixed during release validation.** The 4.4 active routine is now promoted
+  to its migrated Schedule as soon as the asynchronous conversion creates it, instead of being
+  missed by a one-shot startup read. The legacy preference is consumed after a normal promotion and
+  left intact during backup restore. This was reproduced on a real 4.4.0 install and on a schema-2
+  backup import.
+- **Chat deletion is transactional**, exercise names remain unique, and seeding remains transactional
+  and idempotent.
+- **`fallbackToDestructiveMigrationOnDowngrade()` is the only destructive path.** A normal upgrade
+  never drops a table or row.
+
+### Performance and reliability
+
+- Exercise-list thumbnails use the dataset's static 180×180 JPG instead of the animated GIF; the
+  measured first-scroll image data fell by roughly 5× (about 4.3 MB to 0.9 MB). Animation remains in
+  the detail view.
+- A rate-limited warmer fetches still images for exercises referenced by saved Routines, two at a
+  time after a settle delay. The persistent 80 MB Coil cache is reused unchanged.
+- List placeholders no longer run an infinite pulse animation per row.
+- The dock's full-screen backdrop capture is reused for the 340 ms tab transition instead of being
+  re-recorded every frame.
+- Rest-timer presets apply atomically; a fast save/delete can no longer act on a stale timer list.
+- The heat map's selected month survives scrolling; the rest field no longer shifts when a custom
+  rest is set; schedule dialogs no longer clip on short screens.
+- Onboarding and restore no longer crash while the app switches from onboarding to the main
+  interface.
+
+### Removed or changed functionality
+
+- **The multi-day routine container is removed** from the active UI. Existing programs are converted
+  to Routines and a Schedule, and the old row is retained only for historical links.
+- **The Routine tab is replaced by Plan**, with Schedules and Routines pages.
+- **Saved Routines is no longer an AI Coach sub-tab.** AI Coach has Chat and Routine Generator; plan
+  management lives in Plan.
+- **Type-driven set inputs are replaced** by per-exercise explicit field lists. The type remains a
+  fallback and badge, not the authority.
+- **The automatic history-type rewrite on database open was removed.** Logged sets keep the type and
+  values they were recorded with.
+- **The Google Drive package check was removed.** The document picker decides which providers exist.
+- **The onboarding export card was removed.** A fresh install has nothing to export; import and cloud
+  setup remain, and export stays in Settings.
+
+### Internal release history
+
+| Build | Code | Date | Scope |
+|---|---|---|---|
+| 4.5.0 | 13 | 2026-11-10 | Routine/Schedule rebuild, Room 16, backup schema 3, starter templates, AI plan paths |
+| 4.5.1 | 14 | 2026-11-11 | Routine search, batch deletion, Schedule Start Workout, data-wipe reset, editor polish |
+| 4.6.0 | 15 | 2026-11-12 | Exercise-selector workout, warm-up sets, per-set rest, body-part map, Room 17, backup 4 |
+| 4.6.1 | 16 | 2026-11-12 | Set header/actions, body preview, warm-up motion, Liquid Glass bars |
+| 4.6.2 | 17 | 2026-11-12 | New-set and exercise-switch animations with reduced-motion support |
+| 4.7.0 | 18 | 2026-11-12 | Cloud-folder backups, verified writes, retention, onboarding data step |
+| 4.7.1 | 19 | 2026-11-13 | Drive detection fix, onboarding export removal, history stats, static thumbnails |
+| 4.8.0 | 20 | 2026-11-14 | Drop sets, exercise management, field audit, Room 18/19, backup 5/6 |
+| 4.8.1 | 21 | 2026-11-14 | Exercise cards, default rest, schedule dialogs, notices, weigh-ins, four launcher icons |
+| 4.8.1 rev 2 | 21 | 2026-11-14 | Card/detail simplification and default rest under Targets |
+| 4.8.1 rev 3 | 21 | 2026-11-14 | Rest-timer preset rebound and one-row default-rest presets |
+| 4.8.1 rev 4 | 21 | 2026-11-15 | Launcher-icon switching crash, bootstrap alias, centred picker and confirmation |
+| 4.8.2 | 22 | 2026-11-15 | Workout spacing, routine disclosure fixes, AI drawer dock, four more icons |
+| 4.8.2 rev 2 | 23 | 2026-11-15 | Heat-map state, weigh-in spacing, editor alignment, composer, image warmer, AI warning |
+| 4.8.2 rev 3 | 24 | 2026-11-15 | Legacy `addedWeight` load migration, working-load badge, read-only routine details |
+| 4.8.3 | 25 | 2026-11-15 | Icon safe zone, Recents icon, text/JSON prescription loads, colon exercise lines |
+
+### Compatibility and upgrade notes
+
+- **From public 4.4.0:** install in place. The package and production signing certificate are
+  unchanged, so Android treats 5.0.0 (13) as an upgrade and keeps the database.
+- **Database:** schema 15 → 19 runs through the full migration chain. Routines, schedules, sessions,
+  sets, weigh-ins, chats, summaries and profile rows are preserved. The 4.4 multi-day routine becomes
+  a Schedule plus standalone Routines; the completed session keeps its link.
+- **Backups:** v1–v6 archives import. A v2 4.4.0 archive was restored into a fresh 5.0.0 install
+  during release validation, including its two logged sets and its active Schedule.
+- **Device-local settings not in backups:** API keys, profile picture, exercise media, per-exercise
+  rest defaults and the launcher-icon choice.
+- **Internal builds:** 13–25 were debug-signed and never public. A device carrying one of those
+  builds must uninstall it before installing the release-signed 5.0.0; this does not affect public
+  4.4.0 installations.
+
+### Verification
+
+- **906 JVM/Robolectric tests across 120 suites, 0 failures.**
+- `assembleRelease` and `lintDebug` pass; the release APK is signed with the production certificate
+  `46893F8E6C463E01B7B849AEF18098331E4C162325E906D86762F16A6430BB2C`.
+- Real **4.4.0 → 5.0.0** upgrade on `emulator-5562` preserved the logged sets and converted the
+  legacy routine into a Schedule.
+- A **4.4.0 schema-2 backup** imported into a fresh 5.0.0 install preserved history and activated the
+  migrated Schedule. `ActiveSchedulePromotionTest` covers the same promotion and the one-time legacy
+  key consumption.
+- Installation, onboarding, Home, Plan, Routine editing, active and quick workouts, drop sets,
+  warm-ups, per-set rest, body map, exercise details/creation, Progress, history, AI screens, cloud
+  backup, Settings and the icon picker were exercised on the final release build.
+- Appearance for every README screenshot: **AMOLED Dark, Liquid Glass ON, Material Expressive 3 ON**.
+- Known limits: physical RedMagic/Poco devices were unavailable; live AI provider calls were not
+  exercised; real Google Drive/OneDrive synchronization was not available on the emulator (the same
+  SAF write path was verified with a local document provider); tablets and landscape are not
+  supported (portrait-only).
+
+---
+
+## Internal development history (4.5.0 – 4.8.3)
+
+The sections below record the internal builds that led to 5.0.0. They are preserved for history;
+where an earlier revision was later corrected, the 5.0.0 notes above describe the final behaviour.
+
+## [4.8.3] - Internal development build
+
+IronPulse 4.8.3 fixes the launcher-icon clipping and the last two paths that could still erase a
+prescribed routine load. No Room tables or `.ironpulse` archive fields changed.
+
+### Launcher icons
+
+- The generated adaptive icons referenced the raw 512px foreground as the whole 108dp layer, so
+  their dumbbell rendered about 70dp wide — outside the 66dp adaptive safe zone — and circular or
+  squircle masks cut the plates. Each generated foreground now uses a 60dp centered layer-list,
+  giving the same visible width as the default icon (38.7dp versus 38.3dp). The monochrome layer is
+  wrapped the same way.
+- The recent-tasks card now follows the selected launcher icon. Activity aliases only change the
+  launcher entry; `MainActivity` now sets a task description from the chosen artwork whenever the
+  preference changes, so Recents no longer falls back to the default icon.
+
+### Routine loads
+
+- Text and AI programs keep their prescribed loads. The legacy text parser hard-coded
+  `targetWeight = 0` and ignored `@ 34kg` in the prescription, so the 4.5 schedule/routine rebuild
+  erased every load that existed only in the program text when it converted routines to JSON.
+  Loads are now read from the prescription (`kg`/`lb`, with `+`/`added`/`weighted` meaning added
+  weight) and normalized against the exercise's real fields.
+- JSON items whose `weight`/`addedWeight` fields are empty also fall back to their prescription
+  text.
+- Exercise lines written as `Name: 3 x 8 @ 34kg` are no longer classified as prose and dropped;
+  the colon without a leading space is now a valid name separator.
+- A routine that was already migrated before this build cannot recover a value its stored JSON no
+  longer contains; the value may still be present in workout history.
+
+### Verification
+
+- **904 unit tests passed**, across 119 suites. New tests cover the legacy text-to-routine
+  migration, a load in a JSON prescription, `+9kg` added-weight text, a plain load on an
+  added-weight exercise and a no-unit line.
+- A synthetic backup generated from the athlete's 15:37 backup, with the Single Arm Band Curl
+  prescription set to `3 sets x 8 reps @ 34 kg`, was imported on `emulator-5556`; the routine
+  editor showed **34 kg**. The text migration unit test produced the same value from a real
+  4.4-style text routine.
+- Launcher icons were checked in the app drawer with **Ocean Blue**: the whole dumbbell sits inside
+  the circular mask, and the recent-tasks card showed the selected variant. Evidence is in
+  `docs/screenshots/4.8.3/`.
+
+---
+
+## [4.8.2] - Internal development build, revision 3
+
+IronPulse 4.8.2 Revision 3 restores prescribed loads in older routines and makes the routine editor's
+exercise details reachable. No exercise fields, Room tables or `.ironpulse` archive fields changed.
+
+### Routine loads
+
+- Fixed routines showing **0 kg** in every main set while the card still advertised `+9 kg`. Routine
+  JSON written before the explicit field architecture stored dumbbell loads in `addedWeight`; after
+  the field audit a Standard weight exercise only records `weight`, so the value was invisible and
+  sanitizing erased it on save.
+- A compatibility migration now moves such a load into the field the exercise actually records,
+  before the editor, plan card or workout reads it. It also covers every main-set default and drop
+  set, works in both directions (weight ↔ added weight) when only one field is supported, leaves
+  exercises that record both untouched, and never rewrites the stored routine until the athlete
+  saves.
+- The routine card now shows a small working-load badge (`9 kg`) for Standard weight targets, next
+  to the existing `+9 kg` added-weight badge, so the prescription is visible without opening the
+  defaults.
+
+### Routine editor
+
+- Tapping an exercise name now opens the same read-only `ExerciseDetailDialog` the workout uses:
+  media, instructions, logged fields, targets and body map, with **no pencil** and **no Add Set**.
+- The exercise-level defaults panel (added weight and routine rest) moved to a small tune button,
+  shown only for exercises that record an added weight, so the name is no longer its hidden route.
+- Both the Create/Edit Routine screen and the Plan-tab routine editor use the same sheet.
+
+### Verification
+
+- **899 unit tests passed**, across 119 suites. New tests cover the legacy load migration (parse,
+  sanitize, main sets, drops), preservation of genuine added-weight work, the name-vs-defaults
+  affordances and the read-only detail sheet.
+- The athlete's real 15:37 backup was imported on `emulator-5556`: the editor shows **9 kg** in
+  Main set 1, **Update** persists `"weight":9,"addedWeight":0`, and starting the routine prefills
+  set 1 at 9 kg. Tapping the exercise name opened the detail sheet with no pen and no Add Set.
+  Evidence is in `docs/screenshots/4.8.2-rev3/`.
+
+---
+
+## [4.8.2] - Internal development build, revision 2
+
+IronPulse 4.8.2 Revision 2 is a stabilization pass. It fixes two UI state-reset bugs, aligns the
+routine editor's set cards, makes the AI Coach composer follow the dock, removes the remaining
+unnecessary image work from tab navigation and adds the missing AI-provider warning. No exercise
+fields, Room tables or `.ironpulse` archive fields changed.
+
+### Progress
+
+- Reduced the gap between the Body Weight Timeline card and the Weigh-in Logs card. The section
+  header is shorter, and its surrounding spacers are smaller, so the two cards read as one group.
+  The header height is fixed, so expanding or collapsing the logs cannot reintroduce the gap.
+- Fixed the activity heat map resetting to the newest month after vertical scrolling. The card is a
+  `LazyColumn` item, so scrolling it out of view disposed it and its "scroll to newest" effect ran
+  again on the way back. The initial jump is now recorded with the item's saved state and happens
+  exactly once; the athlete's chosen month survives any amount of vertical scrolling.
+
+### Routine editor
+
+- The drop-set branch arm is now anchored to the drop-set header, not the card's vertical centre.
+  Expanding a drop set no longer drags the arm into the middle of the expanded fields.
+- The main-set defaults panel and the drop-set card now start at the same 28dp gutter and share the
+  same right edge, so their outer widths match.
+- **Set defaults & drop sets** now starts collapsed in both Create Routine and Edit Routine. Opening
+  an exercise shows only its summary until the athlete asks for more.
+- Section, main-set and drop-set expansion are stored with the LazyColumn item's saved state. An
+  exercise scrolled out of the viewport and back keeps exactly the panels that were open.
+
+### AI Coach
+
+- The chat composer now travels with the bottom dock. Opening the history drawer removes the 92dp
+  dock clearance with the same 220ms spec the dock uses, so no empty strip is left beside the
+  drawer; closing it restores the composer and the dock together.
+
+### Performance and exercise images
+
+- Exercise pictures remain on demand: the Exercises tab still pages 30 exercises at a time, and a
+  row requests its still image only when the LazyColumn composes it. No code path downloads the
+  catalog in bulk.
+- Added a rate-limited warmer for exercises referenced by saved routines. It fetches only those
+  still images, two at a time, after a short settle delay, and leaves the rest of the database
+  alone. Coil joins duplicate requests and serves cached entries without touching the network.
+- The existing persistent Coil disk cache (`cache/exercise_media`, 80 MB) is reused unchanged, so
+  updates and later sessions keep every image already downloaded and offline use keeps working.
+- The dock's full-screen backdrop capture is reused for the 340ms navigation transition instead of
+  being re-recorded every frame, removing the largest UI-thread cost from tab switches.
+
+### Workout
+
+- Fixed the rest field shifting down when a custom rest is set. The reset affordance used a
+  Material `IconButton` whose 48dp minimum touch target grew the header row and pushed the stepper
+  down. It is now an overlay that fills the text row without changing its height, so the rest field
+  and the warm-up control stay aligned whether or not the reset button is visible.
+
+### AI settings
+
+- Added a red warning card directly under **Post-workout AI summaries** when the active provider has
+  no saved key (or no endpoint URL for a custom provider). It reuses the Cloud Backups status card,
+  explains that summaries may not work yet, and offers **Connect a provider**, which opens the API
+  Key Setup page directly. The switch stays fully controllable, and the card appears and disappears
+  as the configuration changes.
+
+---
+
+## [4.8.2] - Internal development build, revision 1
+
+IronPulse 4.8.2 is a small corrective UI release on top of 4.8.1. It tightens workout spacing, adds
+four more launcher icons, hides the bottom navigation while the AI Coach drawer is open and fixes
+the routine editor's main-set fields. No exercise fields, Room tables or `.ironpulse` archive fields
+changed.
+
+### Active workout
+
+- Moved the body-parts selector to 4dp above the exercise card, so the button and the card it
+  belongs to read as one group instead of two separate blocks.
+- The **Add drop set** action keeps 6dp of breathing room from the bottom edge of its set card. Its
+  tap target and behaviour are unchanged.
+
+### Routine editor
+
+- Fixed the per-exercise field editor. The main-set fields were hidden behind a second collapsed
+  disclosure, which made the field dialogs look unresponsive. **Set defaults & drop sets** now opens
+  expanded for every exercise, so tapping a main-set row opens its fields immediately.
+- Removed the exercise-level chevron to the left of the reorder arrows. It opened a separate panel
+  at the bottom of the card rather than the field editors, so the row now offers only **Move Up**,
+  **Move Down** and **Remove Exercise**.
+- The drop-set branch connector now continues through an expanded main-set panel. Expanding both
+  **Set defaults & drop sets** and a main set no longer leaves the bracket cut off above the drop-set
+  number.
+
+### AI Coach
+
+- Opening the chat history drawer now hides the bottom navigation with a slide-down, fade and scale
+  animation, and closing the drawer restores it. The drawer's liquid-glass backdrop is disabled
+  while the dock is hidden, so the list and the version footer render cleanly.
+
+### Launcher icons
+
+- Added four more selectable icons: **Ocean Blue**, **Crimson Red**, **Rose Quartz** and **Arctic
+  White**, for eight in total. Each ships an adaptive icon, a round variant, legacy density bitmaps
+  and a preview, generated by `tools/generate_launcher_icons.py`.
+- The picker shows all eight in the existing centered grid with the same selection animation and
+  bottom confirmation. Each option maps to its own activity alias and only one alias is enabled at a
+  time.
+
+### Verification
+
+- **892 unit tests passed**, across 117 suites.
+- `assembleDebug` passed and the 4.8.2 debug build was installed over the existing 4.8.1 data on
+  `emulator-5556`. The routine editor was checked in edit mode: main-set fields open on the first
+  tap, the exercise chevron is gone, and the branch line stays connected with both disclosures
+  expanded. The AI drawer was checked with 20 temporary conversations: the dock hides, the last chat
+  and version footer stay reachable, and the dock returns on close. Body-parts and drop-set spacing
+  and the eight-icon picker were inspected on the running app, and selecting **Ocean Blue** switched
+  the launcher alias while the same task and process stayed alive. Evidence is in
+  `docs/screenshots/4.8.2/`.
+- Known limits: physical RedMagic/Poco devices remained unavailable. Live AI provider calls were not
+  part of this release.
+
+---
+
+## [4.8.1] - Internal development build
+
+IronPulse 4.8.1 is a focused UI and polish release. It fixes the exercise-card, schedule-dialog,
+notification, cloud-backup and weigh-in issues found in 4.8.0 and adds a selectable launcher icon.
+No exercise fields, Room tables or `.ironpulse` archive fields changed.
+
+### Exercise cards
+
+- The field summary now wraps inside the flexible width and the **Add Set** button keeps its
+  minimum width and height, so four-field exercises no longer compress or clip the button.
+- Removed the duplicated card overflow menu. The card/name opens the existing exercise detail
+  dialog, **Add Set** remains on the card, and edit/delete remain available through their existing
+  marker and detail controls.
+- Moved the per-exercise default rest into the exercise detail dialog, directly under **Targets**:
+  Off, 30s, 60s, 90s, 120s, 180s or 15-second steps, stored in DataStore. It seeds quick-workout
+  sets and new routine entries; a rest saved on the routine itself still wins, and an athlete-edited
+  set rest is inherited by the next set.
+- The default-rest presets stay on one horizontally scrollable row. 180s no longer wraps onto a
+  second line, so the control no longer reserves blank vertical space.
+- Exercise field definitions, the exercise database and existing workout data are unchanged.
+
+### Rest timer
+
+- Fixed the rest-timer preset selection briefly showing one extra second (for example 01:00 to
+  01:01 and back). Presets now apply the selected duration in a single digit transition with no
+  rebound or intermediate step.
+
+### Schedule dialogs
+
+- Create and Edit Schedule no longer use a fixed 82% height. They wrap to their content, grow up to
+  90% of the available height and fall back to scrolling on short screens or with the keyboard open.
+- The dialogs open and close with a short scale/fade transition.
+- Added a short explanation under **Goal Strategy** for every available goal.
+
+### Notifications and cloud backup
+
+- Import, export, cancellation and cloud-backup notices use one shared status card with the dismiss
+  action integrated into the card instead of a detached **Dismiss** button below it.
+- The cloud-backup card now shows a clear green enabled state with an icon, title and supporting
+  text. The old **ON** badge was removed and blank runtime messages are hidden.
+- A cloud-backup success notice now appears above the last-backup block instead of after the
+  **Back up now** button.
+
+### Weigh-ins and launcher icon
+
+- The weigh-in header reserves the same height in both states and uses an explicit header-to-panel
+  gap, so expanding or collapsing the logs no longer shifts the section or the cards below it. Only
+  the expanded state adds a **Hide all** action; the collapsed card keeps its own **View all**.
+- Added four selectable launcher icons: **IronPulse**, **Cool Cyan**, **Signal Amber** and **Ultra
+  Violet**. They are generated from the existing IronPulse logo by
+  `tools/generate_launcher_icons.py`.
+- Settings → Appearance → App Icon previews each variant, marks the selection and applies it
+  immediately through Android activity aliases. Exactly one launcher alias is enabled at a time,
+  the choice survives restarts and updates, and the default icon is used if the saved key is
+  unknown.
+- Fixed the app closing when the launcher icon changed. Aliases now open a transparent bridge that
+  roots the app task at `MainActivity`, so the selected alias can be swapped while the task and
+  process stay alive. A bootstrap alias keeps a fresh install launchable and disables itself after
+  the first app start.
+- The four icon choices are centered in the picker. Selecting one animates the card's scale,
+  background, border and check, and a bottom pop-up confirmation slides in, fades in, then
+  auto-dismisses.
+- The launcher-icon choice and per-exercise rest defaults are device-local preferences and are not
+  included in `.ironpulse` backups.
+
+### Verification
+
+- **892 unit tests passed**, across 117 suites.
+- `assembleDebug` passed and the 4.8.1 debug build was installed on `emulator-5556`. Exercise-card
+  layout, removal of the overflow menu, the under-Targets default-rest control and its horizontal
+  preset row, schedule Create/Edit dialogs, a real export, a real import through the system picker,
+  cloud notices, the cloud enabled state, weigh-in collapsed/expanded spacing, and launcher-icon
+  switching were inspected on the running app. Changing Cool Cyan → Signal Amber → IronPulse kept
+  the same `MainActivity` task and process alive; the picker's centered grid, selection animation
+  and bottom confirmation were checked. The timer preset transition was recorded at 30 fps and no
+  longer rebounds after reaching the target. Evidence is in `docs/screenshots/4.8.1/`.
+- Known limits: physical RedMagic/Poco devices remained unavailable. Live AI provider calls were
+  not part of this release.
+
+---
+
+## [4.8.0] - Internal development build
+
+IronPulse 4.8.0 replaces the legacy type-driven set inputs with an explicit, per-exercise field
+configuration. Every exercise in the shipped catalogue was audited. The database schema, dataset
+version and `.ironpulse` data schema were migrated without destructive changes.
+
+### Exercise database
+
+- Audited all **1,334** exercises. **391** ordered configurations changed and **943** were left
+  unchanged. The complete matrix is `docs/exercise_field_audit.csv`; the reproducible generator is
+  `tools/audit_exercise_fields.py`.
+- Added stable field identifiers: `reps`, `weight`, `addedWeight`, `holdSeconds`, `timeSeconds` and
+  `distanceKm`. Each exercise now stores its own ordered supported-field list.
+- Corrected weighted planks and holds, weighted calisthenics, static stretches, no-load props,
+  loaded carries, conditioning work and bodyweight movements that inherited an irrelevant hold.
+- Tags/types now only suggest defaults. An explicit field list is authoritative and is never
+  silently rewritten by a type change.
+
+### Workout and routine UI
+
+- Active workout rows render the first two configured fields inline and put any additional fields
+  in the existing per-set expansion. Drop sets inherit the same fields and independent values.
+- Routine creation/editing exposes all supported fields, including per-main-set defaults, drop-set
+  defaults, rest and distance.
+- Create Exercise and Edit Exercise allow independent field combinations without changing tags,
+  equipment or muscle groups. The selector previews which fields will be inline and which will be
+  expanded.
+- History and Progress display reps, holds, time, load and distance from the recorded values.
+  Hold-only sets no longer produce a fabricated 1RM or a zero-rep record.
+
+### Data and compatibility
+
+- Room **18 → 19** adds `exercises.supportedFields`; dataset version **5** seeds every catalogue row.
+- `.ironpulse` data schema **5 → 6** adds optional exercise field configuration. Old backups import
+  with an empty list, which keeps the legacy type fallback.
+- Historical set values and recorded exercise types are preserved. The automatic history-type
+  rewrite on database open was removed.
+- Calculations remain value-aware: any recorded added weight contributes to load; warm-ups remain
+  volume but never a PR; hold/distance values are not converted into reps or volume.
+
+### AI
+
+- AI exercise creation accepts `CARDIO` and explicit field lists.
+- Routine generation, natural-language parsing, Coach tools, active workout/history inspection and
+  proposal validation now carry per-exercise supported fields and distance.
+- AI-created exercises preserve body part, target, secondary muscles, instructions and fields.
+- No live AI provider credentials were available; prompt/schema/parser/tool behavior was tested
+  locally only.
+
+### Verification
+
+- **885 unit tests passed**, across 114 suites.
+- Real upgrade verified on `emulator-5556`: a schema-10 database with 1,333 exercises upgraded to
+  schema 19 with all rows and ids preserved and every row given an explicit field list.
+- `assembleDebug` passed; the debug APK was installed and the field, routine, drop-set, history and
+  Progress screens were inspected. Evidence is in `docs/screenshots/`.
+- Known limits: physical RedMagic/Poco devices were unavailable; live AI providers were not tested;
+  hold and time share the existing duration column, and weight and added weight are mutually
+  exclusive.
+
+---
+
+## [4.7.1] - Internal development build
+
+### Changed
+
+- Cloud backup no longer pre-detects the Google Drive package. Android's document picker is
+  the only source of truth, so Drive is selectable whenever its document provider is
+  available. The false "Google Drive is not installed" message was removed.
+- The cloud backup integration stays on the Storage Access Framework. OAuth and the Drive
+  API were evaluated, but a serverless app cannot keep long-lived refresh tokens for
+  automatic background backups without a backend. The trade-offs are documented in
+  `docs/CLOUD_BACKUP_ARCHITECTURE.md`.
+- The onboarding data step no longer offers an export, which a new install has no data for.
+  Import and cloud-folder setup remain available there; export remains in Settings.
+
+### Fixed
+
+- The workout-history statistics cards now share one height, and the volume value and unit
+  stay on one line. The number keeps priority over the unit on narrow screens.
+
+### Performance
+
+- Exercise-list thumbnails now use the dataset's static 180x180 JPG instead of downloading
+  the full animated GIF. The animation remains in the detail view. First-scroll image data
+  dropped by roughly 5x in measurement (about 4.3 MB to 0.9 MB for the same list scroll).
+- List placeholders no longer run an infinite pulse animation per row.
+
+---
+
+## [4.7.0] - Internal development build
+
+IronPulse 4.7.0 adds automatic cloud-folder backups and an onboarding data-management step. It
+does not change the database schema or the `.ironpulse` archive format.
+
+### Added
+
+- **Cloud Backup** under Settings, Data Management. Choose a folder with Android's system folder
+  picker, including Google Drive or OneDrive when their document provider is installed.
+- **Automatic backups** after a completed workout, after a restore, after profile or onboarding
+  changes, and once a day as a recovery net. Rapid changes are grouped, and manual "Back up now"
+  is always available.
+- **Safe retention.** Cloud backups use timestamped `.ironpulse` files, are read back and hashed
+  before being reported as successful, and keep the five most recent cloud backups. A failed
+  attempt never overwrites an older backup.
+- **Onboarding data step.** New installs can import an existing backup, export a backup, or connect
+  a cloud folder before finishing setup. The step is optional and can be skipped.
+
+### Fixed
+
+- Finishing onboarding or restoring a backup no longer crashes while the app switches from the
+  onboarding composition to the main interface.
+
+### Notes
+
+- Cloud backups use the same `.ironpulse` archive as manual export. They are not encrypted.
+  API keys, the profile picture and exercise media are not included, matching manual export.
+- A folder permission is stored only on this device and is not written into backups.
+- Google Drive synchronization itself is performed by the Google Drive app/document provider.
+  IronPulse writes through Android's Storage Access Framework and does not use Google OAuth.
+
+---
+
+## [4.6.2] - Internal development build
+
+IronPulse 4.6.2 adds motion to the active workout interface on top of 4.6.1. It does not change
+the database schema or backup format.
+
+### Added
+
+- **New-set animation.** Adding a set unfolds the new row from the top and slides it down into
+  place while the Add Set button moves with it.
+- **Exercise-switch swipe.** Selecting another exercise slides the old exercise out and the new
+  one in horizontally, in the direction of the selector movement, in both the Routine workout and
+  the compact Quick Workout tray.
+- Both transitions use the app's reduced-motion setting: with system animations disabled, the set
+  list and exercise content change instantly.
+
+---
+
+## [4.6.1] - Internal development build
+
+IronPulse 4.6.1 is an internal workout-interface refinement on top of 4.6.0. It does not change
+the database schema or backup format.
+
+### Changed
+
+- **Set column header.** Field names are shown once above the set cards instead of on every row.
+  The header labels align directly over the numeric inputs.
+- **Set actions.** Completion and delete are smaller rounded-square actions with precise hit
+  targets, vertically aligned with the field row and no touching/overlapping touch areas.
+- **Body-part preview.** The compact anatomy preview sits further inside the top-right corner.
+- **Quick Workout.** The compact interface scrolls as one surface at short tray heights, and the
+  selected exercise survives minimize, resize and cross-tab navigation.
+
+### Fixed
+
+- **Warm-up toggle.** Marking a set now animates the check with a spring scale/rotation and an
+  animated warm-up box.
+- **Liquid Glass workout controls.** The Quick Workout action bar uses the same single-tone glass
+  as the Routine bar, and the Routine bar now uses the real backdrop blur instead of the old
+  white top-lit glass gradient.
+
+---
+
+## [4.6.0] - Internal development build
+
+IronPulse 4.6.0 replaces the cramped card-based active workout with an exercise-selector
+interface, adds persistent warm-up sets and per-set rest overrides, and carries both through
+history, progress, AI, drafts and backups. This build is internal and is not a published release.
+
+### Added
+
+- **Exercise-selector workout interface.** A horizontal numbered selector, a focused exercise
+  overview, one set list and a compact body-part preview replace the stacked exercise cards in both
+  saved Routine workouts and the Quick Workout popup.
+- **Warm-up sets.** Every logged set has its own persisted `isWarmup` flag, toggled from the
+  expandable per-set panel. Warm-up sets remain visible in history and contribute to volume.
+- **Per-set rest overrides.** Each set can store its own rest duration. Inherited Routine defaults
+  remain the fallback, and completing a set starts the existing floating rest timer with the
+  resolved duration.
+- **Body-part completion map.** The workout header shows the existing anatomy illustration coloured
+  by completed/total sets for every body part in the whole workout, with a compact dialog listing
+  per-part counts and progress bars. Material Expressive 3 uses the existing animated dot-snake
+  progress treatment.
+- **Read-only workout details.** Tapping an exercise name opens the existing exercise-detail card
+  with editing disabled while the workout is running.
+
+### Changed
+
+- **Set rows.** Fields are grouped into unified dark stepper boxes with centred labels and compact
+  plus/minus controls. Completion and delete use equal rounded-square actions. The set-number
+  circle rotates through a full turn when its panel opens and reverses when it closes.
+- **Set options panel.** Rest and warm-up controls are attached to the same set card, split evenly,
+  and use the same stepper styling. The inherited default is labelled, and a reset action restores
+  it without changing global settings.
+- **Quick Workout tray.** The popup keeps its existing minimize/half/full resize modes and non-modal
+  coexistence with navigation, but now hosts the same interface in a compact, fully scrollable
+  form so set rows remain reachable at small heights.
+- **Progress metrics.** Maximum reps, estimated one-rep max and best working sets exclude warm-up
+  sets. Total volume still includes them. A workout with only warm-up sets shows no working-set
+  record instead of a fabricated maximum.
+- **History.** Completed workout details and per-exercise session history mark warm-up sets with a
+  readable `WARM` badge.
+- **AI context.** Gemini monthly summaries receive explicit per-set warm-up flags and working-set
+  volume/1RM rules; AI Coach retrieval tools return `isWarmup`, rest overrides and warm-up/working
+  set counts, and their instructions distinguish preparation from working-set PRs.
+- **Backup schema 4.** Workout payloads carry per-set warmth and rest. Schema 3 and older archives
+  migrate with every legacy set treated as a normal, inherited set.
+
+### Fixed
+
+- Warm-up and rest choices survive exercise switching, set add/delete, draft restore, workout
+  completion, history retrieval and backup round trips.
+- Quick Workout state and the selected exercise survive minimizing, resizing and navigating to
+  another tab and back.
+- Set rows no longer use a card-wide click target that merged badges and made the panel controls
+  ambiguous.
+
+---
+
+## [4.5.1] - Internal development build
+
+IronPulse 4.5.1 is an internal refinement build on top of 4.5.0. It polishes Routine and Schedule
+management and does not change the Room schema. This build is internal and is not a published
+release.
+
+### Added
+
+- **Routine exercise search.** A dedicated, relevance-ranked search over the full catalog with
+  category filters, a scrollable result list and the same exercise details card used by the
+  Exercises tab.
+- **Read-only details in Routine search.** Instructions, tracked fields, animation, target muscles
+  and the body map are available before adding an exercise. The edit pen is hidden in this context;
+  **Add to Routine** remains available.
+- **Batch management.** Routine and Schedule batch selection with confirmation dialogs and
+  reference-safe deletion.
+- **Schedule Start Workout.** Every Schedule can start a workout for one of its assigned weekdays
+  without changing the active Schedule.
+- **Starter Schedule feedback.** Copy progress, success feedback and a duplicate-copy guard.
+
+### Changed
+
+- **Routine editor.** Reused the full-height details card, added a sticky Save action and a clearer
+  empty state, and restored expandable rest/added-weight controls on each exercise row.
+- **Schedule goal selector.** Restored the animated flag dropdown inside a full-height create/edit
+  dialog so the options are not clipped.
+- **Delete App Data.** Now clears Schedules, weekday slots, routines and the active Schedule, then
+  returns through onboarding to Home.
+- **Onboarding and Settings.** Updated copy for the Routine/Schedule model, including the data
+  deletion warning.
+- **Quick Workout dock.** The tray and bottom navigation join correctly with Liquid Glass on and
+  off.
+
+### Fixed
+
+- Avoided duplicate Routine entries when adding from the search details for an exercise that is
+  already selected.
+- Preserved the search query, category filter and result scroll position while opening and closing
+  exercise details.
+- Kept Schedule references safe when deleting Routines: affected weekday slots become rest days
+  and completed workout history is retained.
+- Restored accessible exercise-card badges and expansion controls after removing the card-wide
+  click target.
+
+---
+
+## [4.5.0] - Internal development build
+
+IronPulse 4.5.0 replaces the legacy multi-day routine architecture with standalone single-workout
+Routines and weekly Schedules. This build is internal and is not a published release.
+
+### Changed
+
+- **Routine means one workout.** The former multi-day container is gone from the active UI. A
+  Routine is one ordered exercise list with its own sets, reps, rest and added-weight defaults.
+- **Plan tab.** The temporary Routine destination is now Plan, with Schedules on the left and
+  Routines on the right. Schedules show seven weekday references, an active state, a goal strategy,
+  rest days and starter templates.
+- **Active Schedule drives the week.** Home, Next Workout, Start Today and the streak use the active
+  Schedule's stable weekday references. Changing the week-start preference changes display order
+  only.
+- **Schedule goal strategy.** The existing goal options moved to the Schedule. A workout started
+  through a Schedule captures that strategy at start; an already running workout is unaffected by
+  later edits.
+- **Automatic migration.** Room schema 16 converts each legacy multi-day program into standalone
+  Routines plus a Schedule, deduplicating identical workout days inside the program and preserving
+  the old active selection. Completed sessions and logged sets are untouched.
+- **Backup schema 3.** `.ironpulse` archives now carry Schedules, weekday slots, Routine model
+  versions and the active Schedule id. v1/v2 archives are converted on restore by the same
+  deterministic migration.
+- **AI workflows.** Coach tools, Routine Generator, the parser and prompt workouts now create
+  Routines first and then a Schedule; single-workout requests create one Routine and no Schedule.
+
+### Added
+
+- Four built-in Schedule templates: Three-Day Full Body, Four-Day Upper/Lower, Five-Day Push Pull
+  Legs and Six-Day Push Pull Legs. Copying a template duplicates each unique Routine exactly once.
+- Routine and Schedule expansion animations, assignment popups, copy/edit/delete actions and
+  empty states.
+- `PlanArchitectureTest` coverage for migration, deduplication, reference cleanup, Schedule copying
+  and single-workout generation.
+
+---
+
 ## [4.4.0] - 2026-11-08
 
 IronPulse 4.4.0 is the Settings, Progress and routine-navigation release. It reorganizes the

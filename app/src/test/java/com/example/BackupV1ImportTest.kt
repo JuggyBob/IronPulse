@@ -83,5 +83,14 @@ class BackupV1ImportTest {
         assertEquals(ThemeMode.IRONPULSE, themes.streak)
         assertEquals(ThemeMode.IRONPULSE, themes.weekly)
         assertEquals(ThemeMode.IRONPULSE, themes.profile)
+
+        // The legacy multi-day routine in the fixture is converted automatically into a new
+        // standalone Routine and a seven-slot Schedule, without the user re-entering anything.
+        val migratedSchedules = db.schedulePlanDao().getAllSchedulesOnce()
+        assertEquals(1, migratedSchedules.size)
+        val migratedSlots = db.schedulePlanDao().getDaysForScheduleOnce(migratedSchedules.single().id)
+        assertEquals(7, migratedSlots.size)
+        assertEquals(1, migratedSlots.count { it.routineId != null })
+        assertEquals(1, db.savedRoutineDao().getUserRoutinesOnce().size)
     }
 }

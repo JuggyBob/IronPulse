@@ -54,7 +54,29 @@ fun describeCardioSet(set: LoggedSet, weightUnit: WeightUnit): String {
 data class MonthlySetEntry(
     val dateLabel: String,
     val setCount: Int,
+    val warmupSetCount: Int,
+    val dropSetCount: Int = 0,
     val topSetLabel: String,
+    val volume: Double,
+    val estimatedOneRm: Double
+)
+
+/**
+ * One individual set in the monthly window.
+ *
+ * The AI receives this list so it can see the warm-up classification of every set, not just an
+ * aggregate. Warm-up sets carry volume but their [estimatedOneRm] is deliberately zero: they are
+ * not working-set records.
+ */
+data class MonthlySetDetail(
+    val dateLabel: String,
+    val setNumber: Int,
+    val loadLabel: String,
+    val effortLabel: String,
+    val isWarmup: Boolean,
+    val isDropSet: Boolean = false,
+    val dropIndex: Int = 0,
+    val parentSetNumber: Int = 0,
     val volume: Double,
     val estimatedOneRm: Double
 )
@@ -81,8 +103,13 @@ data class MonthlyExerciseSummary(
     val maxReps: Int,
     val firstDayOneRm: Double,
     val lastDayOneRm: Double,
-    val dailyEntries: List<MonthlySetEntry>
+    val dailyEntries: List<MonthlySetEntry>,
+    val warmupSetCount: Int = 0,
+    val workingSetCount: Int = 0,
+    val setEntries: List<MonthlySetDetail> = emptyList()
 ) {
+    /** True when the window contains at least one non-warm-up set. */
+    val hasWorkingSets: Boolean get() = workingSetCount > 0
     /** Percentage change of the estimated 1RM between the first and the last logged day. */
     val trendPercent: Double
         get() = if (firstDayOneRm > 0.0) ((lastDayOneRm - firstDayOneRm) / firstDayOneRm) * 100.0 else 0.0
@@ -119,11 +146,14 @@ data class MonthlyExerciseSummary(
         sb.append("WINDOW: last ").append(windowDays).append(" days\n")
         sb.append("TRAINING DAYS LOGGED: ").append(daysLogged).append('\n')
         sb.append("TOTAL SETS LOGGED: ").append(setCount).append('\n')
-        sb.append("TOTAL VOLUME: ").append(formatWeight(totalVolume)).append(' ').append(unit).append("-reps\n")
+        sb.append("WORKING SETS: ").append(workingSetCount).append('\n')
+        sb.append("WARM-UP SETS: ").append(warmupSetCount).append('\n')
+        sb.append("TOTAL VOLUME: ").append(formatWeight(totalVolume)).append(' ').append(unit).append("-reps")
+            .append(" (includes warm-up sets)\n")
         sb.append("BEST ESTIMATED 1RM: ").append(formatWeight(bestOneRm)).append(' ').append(unit)
-            .append(" (").append(bestOneRmSource).append(")\n")
-        sb.append("BEST LOAD LOGGED: ").append(bestLoadLabel).append('\n')
-        sb.append("HIGHEST REP COUNT IN A SINGLE SET: ").append(maxReps).append('\n')
+            .append(" (").append(bestOneRmSource).append(") [working sets only]\n")
+        sb.append("BEST LOAD LOGGED: ").append(bestLoadLabel).append(" [working sets only]\n")
+        sb.append("HIGHEST REP COUNT IN A SINGLE WORKING SET: ").append(maxReps).append('\n')
         sb.append("FIRST LOGGED DAY ESTIMATED 1RM: ").append(formatWeight(firstDayOneRm)).append(' ').append(unit).append('\n')
         sb.append("MOST RECENT DAY ESTIMATED 1RM: ").append(formatWeight(lastDayOneRm)).append(' ').append(unit).append('\n')
         sb.append("CHANGE OVER THE PERIOD: ")
@@ -131,11 +161,44 @@ data class MonthlyExerciseSummary(
             .append(formatNumber(trendPercent))
             .append("%\n")
         sb.append('\n')
+        sb.append(
+            "WARM-UP RULES: A warm-up set is preparation, not a working-set performance record. " +
+                "Warm-up sets ARE included in TOTAL VOLUME and TOTAL SETS LOGGED. They are NOT " +
+                "eligible for BEST ESTIMATED 1RM, HIGHEST REP COUNT IN A SINGLE WORKING SET, " +
+                "working-set PRs or any peak working-set comparison.\n" +
+                "DROP-SET RULES: A drop set is a direct child of one main set. Its reps and volume " +
+                "count toward totals, but it is never a PR, best working set or 1RM source.\n"
+        )
+        sb.append('\n')
+        sb.append("INDIVIDUAL SETS (oldest first; isWarmup and isDropSet are explicit):\n")
+        setEntries.forEach { set ->
+            sb.append("- ").append(set.dateLabel)
+                .append(" | set ").append(set.setNumber)
+                .append(" | isWarmup=").append(if (set.isWarmup) "true" else "false")
+                .append(" | isDropSet=").append(if (set.isDropSet) "true" else "false")
+                .append(if (set.isDropSet) " | mainSet=" + set.parentSetNumber + " | drop=" + set.dropIndex else "")
+                .append(" | ").append(set.loadLabel).append(" x ").append(set.effortLabel)
+                .append(" | volume ").append(formatWeight(set.volume)).append(' ').append(unit).append("-reps")
+                .append(" | est 1RM ")
+                .append(
+                    if (set.isWarmup) {
+                        "n/a (warm-up)"
+                    } else if (set.isDropSet) {
+                        "n/a (drop set)"
+                    } else {
+                        formatWeight(set.estimatedOneRm) + " " + unit
+                    }
+                )
+                .append('\n')
+        }
+        sb.append('\n')
         sb.append("PER DAY BREAKDOWN (oldest first, one line per training day):\n")
         dailyEntries.forEach { entry ->
             sb.append("- ").append(entry.dateLabel)
                 .append(" | sets: ").append(entry.setCount)
-                .append(" | best set: ").append(entry.topSetLabel)
+                .append(" | warm-ups: ").append(entry.warmupSetCount)
+                .append(" | drops: ").append(entry.dropSetCount)
+                .append(" | best working set: ").append(entry.topSetLabel)
                 .append(" | volume: ").append(formatWeight(entry.volume))
                 .append(" | est 1RM: ").append(formatWeight(entry.estimatedOneRm))
                 .append('\n')
@@ -201,38 +264,88 @@ object MonthlyExerciseAnalyzer {
 
         val formatter = DAY_LABEL.get() ?: SimpleDateFormat("MMM d", Locale.getDefault())
 
+        val workingSets = WorkoutMetrics.workingSets(windowSets)
+        val warmupSets = windowSets.filter { it.isWarmup }
+        // Holds are real work but they have no rep count, so they can never win a 1RM comparison.
+        val measurableWorking = workingSets.filter {
+            it.reps > 0 && effectiveWeightOf(it, bodyWeightForSet) != null
+        }
+
         val dailyEntries = windowSets
             .groupBy { formatter.format(Date(it.timestamp)) }
             .map { (dateLabel, daySets) ->
-                // Only the sets whose load is actually known can be expressed as a weight
-                val measurable = daySets.filter { effectiveWeightOf(it, bodyWeightForSet) != null }
-                // The day's "best set" is the one with the highest estimated 1RM
-                val dayBest = measurable.maxByOrNull { estimateOneRepMax(effectiveWeightOf(it, bodyWeightForSet) ?: 0.0, it.reps) }
+                val dayWorking = WorkoutMetrics.workingSets(daySets)
+                val dayMeasurableWorking = dayWorking.filter {
+                    it.reps > 0 && effectiveWeightOf(it, bodyWeightForSet) != null
+                }
+                // Warm-up sets never win the working-set comparison, even when their numbers are
+                // larger. The day's top set is a working set by definition.
+                val dayBest = dayMeasurableWorking.maxByOrNull {
+                    estimateOneRepMax(effectiveWeightOf(it, bodyWeightForSet) ?: 0.0, it.reps)
+                }
+                val measurableAll = daySets.filter { effectiveWeightOf(it, bodyWeightForSet) != null }
                 MonthlySetEntry(
                     dateLabel = dateLabel,
                     setCount = daySets.size,
+                    warmupSetCount = daySets.count { it.isWarmup },
+                    dropSetCount = daySets.count { it.isDropSet },
                     topSetLabel = describeSet(dayBest, weightUnit, bodyWeightForSet) { "${it.reps} reps" },
-                    volume = measurable.sumOf { (effectiveWeightOf(it, bodyWeightForSet) ?: 0.0) * it.reps },
-                    estimatedOneRm = dayBest?.let { estimateOneRepMax(effectiveWeightOf(it, bodyWeightForSet) ?: 0.0, it.reps) } ?: 0.0
+                    volume = measurableAll.sumOf {
+                        (effectiveWeightOf(it, bodyWeightForSet) ?: 0.0) * it.reps
+                    },
+                    estimatedOneRm = dayBest?.let {
+                        estimateOneRepMax(effectiveWeightOf(it, bodyWeightForSet) ?: 0.0, it.reps)
+                    } ?: 0.0
                 )
             }
 
-        val bestOverall = windowSets
-            .filter { effectiveWeightOf(it, bodyWeightForSet) != null }
-            .maxByOrNull { estimateOneRepMax(effectiveWeightOf(it, bodyWeightForSet) ?: 0.0, it.reps) }
-        val bestOneRm = bestOverall?.let { estimateOneRepMax(effectiveWeightOf(it, bodyWeightForSet) ?: 0.0, it.reps) } ?: 0.0
-        val bestLoadLabel = bestOverall?.let { describeSet(it, weightUnit, bodyWeightForSet) { "${it.reps} reps" } } ?: "n/a"
+        val bestOverall = measurableWorking.maxByOrNull {
+            estimateOneRepMax(effectiveWeightOf(it, bodyWeightForSet) ?: 0.0, it.reps)
+        }
+        val bestOneRm = bestOverall?.let {
+            estimateOneRepMax(effectiveWeightOf(it, bodyWeightForSet) ?: 0.0, it.reps)
+        } ?: 0.0
+        val bestLoadLabel = bestOverall?.let {
+            describeSet(it, weightUnit, bodyWeightForSet) { set -> "${set.reps} reps" }
+        } ?: "n/a"
         val bestSource = bestOverall?.let { set ->
             buildString {
                 append(loadLabel(set, weightUnit, bodyWeightForSet))
                 append(" x ")
-                append(if (set.holdDurationSeconds > 0 && set.reps > 0) {
-                    "${set.reps} reps • ${set.holdDurationSeconds}s hold"
-                } else {
-                    describeLoggedSetEffort(set)
-                })
+                append(WorkoutMetrics.recordedEffortLabel(set, weightUnit))
             }
-        } ?: "no working sets logged"
+        } ?: if (workingSets.isEmpty()) {
+            "no working sets logged"
+        } else {
+            "no rep-based working set logged"
+        }
+
+        val setEntries = windowSets.map { set ->
+            val measurable = effectiveWeightOf(set, bodyWeightForSet) != null
+            MonthlySetDetail(
+                dateLabel = formatter.format(Date(set.timestamp)),
+                setNumber = set.setNumber,
+                loadLabel = loadLabel(set, weightUnit, bodyWeightForSet),
+                effortLabel = WorkoutMetrics.recordedEffortLabel(set, weightUnit),
+                isWarmup = set.isWarmup,
+                isDropSet = set.isDropSet,
+                dropIndex = set.dropIndex,
+                parentSetNumber = if (set.isDropSet) set.setNumber else 0,
+                volume = if (measurable) {
+                    (effectiveWeightOf(set, bodyWeightForSet) ?: 0.0) * set.reps
+                } else {
+                    0.0
+                },
+                estimatedOneRm = if (set.isWarmup || set.isDropSet || !measurable) {
+                    0.0
+                } else {
+                    estimateOneRepMax(
+                        effectiveWeightOf(set, bodyWeightForSet) ?: 0.0,
+                        set.reps
+                    )
+                }
+            )
+        }
 
         return MonthlyExerciseSummary(
             exerciseName = exerciseName,
@@ -240,14 +353,19 @@ object MonthlyExerciseAnalyzer {
             weightUnit = weightUnit,
             daysLogged = dailyEntries.size,
             setCount = windowSets.size,
-            totalVolume = windowSets.sumOf { (effectiveWeightOf(it, bodyWeightForSet) ?: 0.0) * it.reps },
+            totalVolume = windowSets.sumOf {
+                (effectiveWeightOf(it, bodyWeightForSet) ?: 0.0) * it.reps
+            },
             bestOneRm = bestOneRm,
             bestOneRmSource = bestSource,
             bestLoadLabel = bestLoadLabel,
-            maxReps = windowSets.maxOfOrNull { it.reps } ?: 0,
+            maxReps = WorkoutMetrics.maxWorkingReps(windowSets),
             firstDayOneRm = dailyEntries.firstOrNull()?.estimatedOneRm ?: 0.0,
             lastDayOneRm = dailyEntries.lastOrNull()?.estimatedOneRm ?: 0.0,
-            dailyEntries = dailyEntries
+            dailyEntries = dailyEntries,
+            warmupSetCount = warmupSets.size,
+            workingSetCount = workingSets.size,
+            setEntries = setEntries
         )
     }
 

@@ -10,6 +10,7 @@ import com.example.data.ai.AiProviderId
 import com.example.data.ai.AiToolMode
 import com.example.data.model.ChatMessageKind
 import com.example.data.model.ChatMessageStatus
+import com.example.data.model.ExerciseFieldCatalog
 import com.example.data.model.ExerciseType
 import com.example.data.model.Weekday
 import com.example.ui.theme.ThemeMode
@@ -71,6 +72,9 @@ object BackupValidator {
         }
         if (prefs.activeRoutineId != null && prefs.activeRoutineId < 0L) {
             invalid("The active routine identifier is invalid.")
+        }
+        if (prefs.activeScheduleId != null && prefs.activeScheduleId < 0L) {
+            invalid("The active Schedule identifier is invalid.")
         }
         prefs.activeWorkoutDraft?.let { draft ->
             if (draft.isBlank()) invalid("The saved workout draft is empty.")
@@ -200,6 +204,25 @@ object BackupValidator {
             if (exercise.name.isBlank()) invalid("An exercise has no name.")
             if (exercise.category.isBlank()) invalid("An exercise has no category.")
             if (exercise.exerciseType !in ExerciseType.ALL) invalid("An exercise has an unknown type.")
+            if (exercise.supportedFields.isNotBlank()) {
+                val tokens = exercise.supportedFields.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+                if (tokens.isEmpty()) invalid("An exercise has an empty explicit field list.")
+                if (tokens.size != tokens.toSet().size) invalid("An exercise lists a field twice.")
+                val fields = tokens.map { token ->
+                    com.example.data.model.ExerciseField.fromId(token)
+                        ?: invalid("An exercise has an unknown field identifier.")
+                }
+                if (fields.any { it == com.example.data.model.ExerciseField.WEIGHT } &&
+                    fields.any { it == com.example.data.model.ExerciseField.ADDED_WEIGHT }
+                ) {
+                    invalid("An exercise combines weight and added weight.")
+                }
+                if (fields.any { it == com.example.data.model.ExerciseField.HOLD_SECONDS } &&
+                    fields.any { it == com.example.data.model.ExerciseField.TIME_SECONDS }
+                ) {
+                    invalid("An exercise combines hold and time.")
+                }
+            }
             if ((exercise.isCustom || exercise.isAiGenerated) && exercise.mediaPath.isNotBlank()) {
                 invalid("A custom exercise still references an excluded media file.")
             }
@@ -285,6 +308,37 @@ object BackupValidator {
             if (day.weekday !in 1..Weekday.COUNT) invalid("A scheduled day has an invalid weekday.")
             if (day.exerciseCount < 0) invalid("A scheduled day has a negative exercise count.")
             if (day.capturedAt < 0L) invalid("A scheduled day has an invalid timestamp.")
+        }
+
+        val scheduleIds = snapshot.schedules.map { it.id }
+        if (scheduleIds.any { it <= 0L }) invalid("A Schedule has an invalid identifier.")
+        if (scheduleIds.size != scheduleIds.toSet().size) invalid("Two Schedules share an identifier.")
+        for (schedule in snapshot.schedules) {
+            if (schedule.name.isBlank()) invalid("A Schedule has no name.")
+            if (schedule.createdAt < 0L) invalid("A Schedule has an invalid timestamp.")
+        }
+        val routineIds = ids.toSet()
+        val knownSchedules = scheduleIds.toSet()
+        val slotsBySchedule = snapshot.scheduleSlots.groupBy { it.scheduleId }
+        for ((scheduleId, slots) in slotsBySchedule) {
+            if (scheduleId !in knownSchedules) invalid("A Schedule day refers to a missing Schedule.")
+            if (slots.size != Weekday.COUNT || slots.map { it.weekday }.toSet().size != Weekday.COUNT) {
+                invalid("Every Schedule must contain exactly seven distinct weekday slots.")
+            }
+            for (slot in slots) {
+                if (slot.weekday !in 1..Weekday.COUNT) invalid("A Schedule day has an invalid weekday.")
+                val routineId = slot.routineId
+                if (routineId != null && routineId <= 0L) invalid("A Schedule day has an invalid Routine reference.")
+                if (routineId != null && routineId !in routineIds) {
+                    invalid("A Schedule day refers to a Routine that is not in the backup.")
+                }
+            }
+        }
+        // New Schedules must have their seven slots present. Legacy backups have no Schedules yet.
+        for (schedule in snapshot.schedules) {
+            if (slotsBySchedule[schedule.id] == null) {
+                invalid("A Schedule in the backup has no weekday slots.")
+            }
         }
     }
 

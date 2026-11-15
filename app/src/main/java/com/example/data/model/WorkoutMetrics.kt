@@ -50,17 +50,33 @@ object WorkoutMetrics {
      *         bodyweight set with no body weight on record. Such a set is left out rather than
      *         given a made up number.
      */
-    fun effectiveWeightKg(set: LoggedSet, bodyWeightKg: Double?): Double? =
-        when (set.exerciseType) {
+    fun effectiveWeightKg(set: LoggedSet, bodyWeightKg: Double?): Double? {
+        // A cardio row with no recorded load is not lifted. A cardio row that explicitly recorded
+        // a load is a different case: the classification must not hide a real value.
+        if (
+            set.exerciseType == ExerciseType.CARDIO &&
+            set.weight <= 0.0 &&
+            set.addedWeight <= 0.0
+        ) {
+            return null
+        }
+        // Added load is explicit regardless of the classification. A bodyweight pull-up with a
+        // belt and a "weighted push-up" stored under a legacy standard type both mean the same
+        // thing: body weight plus the added load.
+        if (set.addedWeight > 0.0) {
+            // Added load is only total load together with the athlete's body weight. Without a
+            // recorded body weight the total is unknown; returning the added plates alone would
+            // silently understate every weighted pull-up.
+            return bodyWeightKg?.let { it + set.addedWeight }
+        }
+        return when (set.exerciseType) {
             ExerciseType.STANDARD_WEIGHT -> set.weight
             ExerciseType.ADDED_WEIGHT -> bodyWeightKg?.let { it + set.addedWeight }
             ExerciseType.PURE_BODYWEIGHT -> bodyWeightKg
-            ExerciseType.CARDIO -> null
-            // A type from a newer build is not bodyweight by default: doing so invented load for
-            // any future time-based or distance-based type. Its own recorded load is the only safe
-            // reading, and 0 stays 0.
+            ExerciseType.CARDIO -> set.weight
             else -> set.weight
         }
+    }
 
     /**
      * The volume of a set, in kilogram-reps.
@@ -82,6 +98,51 @@ object WorkoutMetrics {
     ): Double = sets.sumOf { setVolume(it, bodyWeightForSet(it)) }
 
     /**
+     * The sets eligible for working-set performance records.
+     *
+     * Warm-up sets and drop sets are real training volume, but they are not working-set PRs, best
+     * sets or estimated 1RM sources. A drop set is deliberately light and high-rep: letting it win
+     * a 1RM comparison would create a record for the easiest part of the set. Every peak-performance
+     * calculation must go through this filter; volume and repetition totals must not.
+     */
+    fun workingSets(sets: List<LoggedSet>): List<LoggedSet> =
+        sets.filter { !it.isWarmup && !it.isDropSet }
+
+    /** Direct drop-set children, for callers that report main and drop counts separately. */
+    fun dropSets(sets: List<LoggedSet>): List<LoggedSet> = sets.filter { it.isDropSet }
+
+    /** Main sets only, without their children. */
+    fun mainSets(sets: List<LoggedSet>): List<LoggedSet> = sets.filter { !it.isDropSet }
+
+    /** The highest rep count in a working set, or 0 when only warm-ups exist. */
+    fun maxWorkingReps(sets: List<LoggedSet>): Int =
+        workingSets(sets).filter { it.reps > 0 }.maxOfOrNull { it.reps } ?: 0
+
+    /**
+     * The rest that applies to a completed set.
+     *
+     * A set override wins only for that set. Null keeps the existing Routine exercise default or
+     * the manual timer behaviour; an explicit 0 means no timer. The global rest setting is never
+     * rewritten by this resolution.
+     */
+    fun effectiveRestSeconds(set: LoggedSet, inheritedDefaultSeconds: Int): Int =
+        (set.restSecondsOverride ?: inheritedDefaultSeconds).coerceAtLeast(0)
+
+    /**
+     * The working set with the highest estimated 1RM, or null when no working set has a known load.
+     *
+     * Warm-up sets can never win this comparison, even when their numbers are larger.
+     */
+    fun bestWorkingSet(
+        sets: List<LoggedSet>,
+        bodyWeightForSet: (LoggedSet) -> Double?
+    ): LoggedSet? = workingSets(sets)
+        .filter { it.reps > 0 && effectiveWeightKg(it, bodyWeightForSet(it)) != null }
+        .maxByOrNull {
+            estimateOneRepMax(effectiveWeightKg(it, bodyWeightForSet(it)) ?: 0.0, it.reps)
+        }
+
+    /**
      * The estimated one rep max of a set, in kilograms.
      *
      * The Epley formula, and the same one the Progress chart and the monthly summary use, so the
@@ -89,7 +150,10 @@ object WorkoutMetrics {
      */
     fun estimateOneRepMax(effectiveWeight: Double, reps: Int): Double = when {
         effectiveWeight <= 0.0 -> 0.0
-        reps <= 1 -> effectiveWeight
+        // A hold-only set has no rep count. Treating it as a one-rep set made a bodyweight plank
+        // report an estimated 1RM equal to the athlete's body weight.
+        reps <= 0 -> 0.0
+        reps == 1 -> effectiveWeight
         else -> effectiveWeight * (36.0 / (37.0 - reps.coerceAtMost(36).toDouble()))
     }
 
@@ -104,12 +168,12 @@ object WorkoutMetrics {
      * @param bodyWeightKg the body weight the set was done at, or null when there is none.
      */
     fun loadLabel(set: LoggedSet, bodyWeightKg: Double?, unit: WeightUnit): String = when {
-        set.exerciseType == ExerciseType.CARDIO -> describeCardioSet(set, unit)
         set.addedWeight > 0.0 -> {
             // The added load, plus the body weight that applied back then.
             val bw = bodyWeightKg?.let { " (+${format(it, unit)} ${unit.suffix} BW)" } ?: ""
             "+${format(set.addedWeight, unit)} ${unit.suffix}$bw"
         }
+        set.exerciseType == ExerciseType.CARDIO -> describeCardioSet(set, unit)
         set.weight > 0.0 -> "${format(set.weight, unit)} ${unit.suffix}"
         // A bodyweight or added weight set with no load: the body weight it was done at.
         ExerciseType.isBodyweight(set.exerciseType) && bodyWeightKg != null ->
@@ -120,6 +184,57 @@ object WorkoutMetrics {
         // A barbell set with no load logged: the load really is zero. An unknown type is treated
         // the same way: inventing the athlete's body weight for it would invent volume too.
         else -> "0 ${unit.suffix}"
+    }
+
+    /**
+     * The work recorded in a set, independent of the four legacy exercise types.
+     *
+     * Reps, duration and distance are included only when actually recorded. Duration is labelled
+     * "hold" for an isometric set and as minutes for a carry/cardio set where distance is present.
+     */
+    fun recordedEffortLabel(set: LoggedSet, unit: WeightUnit): String {
+        val parts = mutableListOf<String>()
+        if (set.reps > 0) parts += "${set.reps} reps"
+        if (set.holdDurationSeconds > 0) {
+            val timedWork = set.distanceKm > 0.0 || set.exerciseType == ExerciseType.CARDIO
+            when {
+                !timedWork -> parts += "${set.holdDurationSeconds}s hold"
+                set.holdDurationSeconds < 60 -> parts += "${set.holdDurationSeconds}s"
+                else -> {
+                    val minutes = set.holdDurationSeconds / 60
+                    val seconds = set.holdDurationSeconds % 60
+                    parts += if (seconds == 0) {
+                        "$minutes min"
+                    } else {
+                        "$minutes:${seconds.toString().padStart(2, '0')} min"
+                    }
+                }
+            }
+        }
+        if (set.distanceKm > 0.0) {
+            parts += DistanceFormat.format(set.distanceKm, unit) + " " + DistanceFormat.suffixFor(unit)
+        }
+        return if (parts.isEmpty()) "-" else parts.joinToString(" · ")
+    }
+
+    /**
+     * A single compact line for history surfaces that have no separate load column.
+     *
+     * A distance/time-only set is described by its effort alone; adding "0 kg" in front of a run
+     * is noise. Everything else keeps the existing "load · work" shape.
+     */
+    fun historyLine(set: LoggedSet, bodyWeightKg: Double?, unit: WeightUnit): String {
+        val effort = recordedEffortLabel(set, unit)
+        val distanceOnly = set.distanceKm > 0.0 &&
+            set.reps <= 0 &&
+            set.weight <= 0.0 &&
+            set.addedWeight <= 0.0
+        val holdOnly = set.holdDurationSeconds > 0 &&
+            set.reps <= 0 &&
+            set.weight <= 0.0 &&
+            set.addedWeight <= 0.0
+        if (distanceOnly || holdOnly) return effort
+        return loadLabel(set, bodyWeightKg, unit) + "  " + effort
     }
 
     /** A weight in the athlete's unit, without the trailing ",0" noise. */

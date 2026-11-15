@@ -55,6 +55,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.data.model.Exercise
+import com.example.data.model.ExerciseField
+import com.example.data.model.ExerciseFieldCatalog
 import com.example.data.model.ExerciseType
 import com.example.data.model.ReservedExerciseNames
 import com.example.data.model.MuscleCategory
@@ -126,7 +128,8 @@ fun CustomExerciseDialog(
         category: String,
         equipment: String,
         exerciseType: String,
-        description: String
+        description: String,
+        supportedFields: String
     ) -> Unit,
     onDismiss: () -> Unit,
     /**
@@ -145,6 +148,15 @@ fun CustomExerciseDialog(
     var categoryInput by remember { mutableStateOf(existingExercise?.category ?: MuscleCategory.CHEST) }
     var equipmentInput by remember { mutableStateOf(existingExercise?.equipment ?: "Bodyweight") }
     var typeInput by remember { mutableStateOf(existingExercise?.exerciseType ?: ExerciseType.STANDARD_WEIGHT) }
+    var supportedFieldsInput by remember {
+        mutableStateOf(
+            existingExercise?.exerciseFields
+                ?: ExerciseFieldCatalog.defaultsForType(ExerciseType.STANDARD_WEIGHT)
+        )
+    }
+    var fieldsCustomized by remember {
+        mutableStateOf(existingExercise?.supportedFields?.isNotBlank() == true)
+    }
     var descriptionInput by remember { mutableStateOf(existingExercise?.description.orEmpty()) }
 
     // An exercise registered by the AI is never presented as if the user had typed it
@@ -344,7 +356,12 @@ fun CustomExerciseDialog(
                                         if (isSelected) accent else DarkBorder,
                                         RoundedCornerShape(8.dp)
                                     )
-                                    .clickable { typeInput = type }
+                                    .clickable {
+                                        typeInput = type
+                                        if (!fieldsCustomized) {
+                                            supportedFieldsInput = suggestedFields(type)
+                                        }
+                                    }
                                     .padding(horizontal = 10.dp, vertical = 8.dp)
                                     .testTag("custom_exercise_type_$type"),
                                 verticalAlignment = Alignment.CenterVertically,
@@ -369,6 +386,26 @@ fun CustomExerciseDialog(
                         }
                     }
                 }
+
+                ExerciseFieldSelector(
+                    selected = supportedFieldsInput,
+                    onToggle = { field ->
+                        fieldsCustomized = true
+                        supportedFieldsInput = if (field in supportedFieldsInput) {
+                            if (supportedFieldsInput.size > 1) {
+                                supportedFieldsInput - field
+                            } else {
+                                supportedFieldsInput
+                            }
+                        } else {
+                            supportedFieldsInput + field
+                        }
+                    },
+                    onUseTypeDefaults = {
+                        fieldsCustomized = false
+                        supportedFieldsInput = suggestedFields(typeInput)
+                    }
+                )
 
                 // ---------------- Equipment (animated drop down) ----------------
                 AnimatedDropdownField(
@@ -483,7 +520,13 @@ fun CustomExerciseDialog(
                                                 categoryInput,
                                                 equipmentInput.trim().ifBlank { "Bodyweight" },
                                                 typeInput,
-                                                descriptionInput.trim()
+                                                descriptionInput.trim(),
+                                                ExerciseFieldCatalog.serialize(
+                                                    ExerciseFieldCatalog.safeExplicit(
+                                                        supportedFieldsInput,
+                                                        typeInput
+                                                    )
+                                                )
                                             )
                                         }
                                         onAttachMedia()
@@ -506,7 +549,13 @@ fun CustomExerciseDialog(
                         categoryInput,
                         equipmentInput.trim().ifBlank { "Bodyweight" },
                         typeInput,
-                        descriptionInput.trim()
+                        descriptionInput.trim(),
+                        ExerciseFieldCatalog.serialize(
+                            ExerciseFieldCatalog.safeExplicit(
+                                supportedFieldsInput,
+                                typeInput
+                            )
+                        )
                     )
                 },
                 enabled = canSave,

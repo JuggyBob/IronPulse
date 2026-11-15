@@ -6,6 +6,7 @@ import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.util.Log
 import androidx.compose.runtime.Immutable
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
@@ -38,6 +39,15 @@ import com.example.data.backup.DataTransferState
 import com.example.data.backup.PreparedImport
 import com.example.data.backup.UserDataBackupManager
 import com.example.data.backup.copyWithLimit
+import com.example.data.backup.cloud.CloudBackupOutcome
+import com.example.data.backup.cloud.CloudBackupPermissions
+import com.example.data.backup.cloud.CloudBackupPreferences
+import com.example.data.backup.cloud.CloudBackupReason
+import com.example.data.backup.cloud.CloudBackupRunner
+import com.example.data.backup.cloud.CloudBackupRuntimeState
+import com.example.data.backup.cloud.CloudBackupScheduler
+import com.example.data.backup.cloud.CloudBackupUiState
+import com.example.data.backup.cloud.CloudBackupWorkState
 import com.example.data.db.AppDatabase
 import com.example.data.model.ActiveRoutineWorkoutState
 import com.example.data.model.ActiveRestTimerState
@@ -49,6 +59,7 @@ import com.example.data.model.ChatMessageKind
 import com.example.data.model.ChatMessageStatus
 import com.example.data.model.ChatSession
 import com.example.data.model.Exercise
+import com.example.data.model.ExerciseFieldCatalog
 import com.example.data.model.ExerciseSearch
 import com.example.data.model.GibberishNameDetector
 import com.example.data.seed.DatasetSeeder
@@ -69,6 +80,7 @@ import com.example.data.model.LoggedSetNumbering
 import com.example.data.model.MonthlyExerciseAnalyzer
 import com.example.data.model.MonthlyExerciseSummary
 import com.example.data.model.ReservedExerciseNames
+import com.example.data.model.RemovedActiveExercise
 import com.example.data.model.MuscleCategory
 import com.example.data.model.MusclePart
 import com.example.data.model.MusclePartResolver
@@ -108,7 +120,10 @@ import com.example.ui.components.ChartPoint
 import com.example.ui.components.HomeWidget
 import com.example.ui.theme.ThemeMode
 import com.example.util.ExerciseMediaStore
+import com.example.util.ExerciseMediaWarmer
 import com.example.util.ApkInstaller
+import com.example.util.LauncherIconOption
+import com.example.util.LauncherIcons
 import com.example.util.VibrationHelper
 import com.example.util.SoundHelper
 import com.example.util.RestTimerScheduler
@@ -125,10 +140,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flatMapLatest
@@ -137,6 +154,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -184,11 +202,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         workoutAiSummaryDao = db.workoutAiSummaryDao()
     )
 
+    private val planRepository = com.example.data.repository.PlanRepository(db)
     private val userPreferencesRepo = UserPreferencesRepository(application)
     private val routineModificationService = com.example.data.ai.RoutineModificationService(db)
 
     private val backupPreferencesStore = BackupPreferencesStore(application)
     private val backupManager = UserDataBackupManager(application, db, backupPreferencesStore)
+
+    // === CLOUD FOLDER BACKUP ===
+    //
+    // Device-local by design: the folder URI is a permission for this installation and is not
+    // written into the .ironpulse archive. The archive itself is the same one manual export writes.
+    private val cloudBackupPreferences = CloudBackupPreferences(application)
+    private val cloudBackupRunner = CloudBackupRunner(application, backupManager, cloudBackupPreferences)
+    private val cloudBackupScheduler = CloudBackupScheduler(application, cloudBackupPreferences)
+    private val cloudBackupPermissionValid = MutableStateFlow(
+        cloudBackupPreferences.folderUri()?.let {
+            CloudBackupPermissions.hasPersistedWrite(application, it)
+        } == true
+    )
+    private val cloudBackupRuntime = MutableStateFlow(CloudBackupRuntimeState())
+
+    private val automaticCloudWorkState = flow {
+        emitAll(cloudBackupScheduler.observeAutomaticWorkState())
+    }.catch { emit(CloudBackupWorkState.IDLE) }
+
+    val cloudBackupState: StateFlow<CloudBackupUiState> = combine(
+        cloudBackupPreferences.config,
+        cloudBackupPermissionValid,
+        cloudBackupRuntime,
+        automaticCloudWorkState
+    ) { config, permissionValid, runtime, workState ->
+        CloudBackupUiState(
+            config = config,
+            permissionValid = permissionValid,
+            runtime = runtime,
+            autoWorkState = workState
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = CloudBackupUiState(
+            config = cloudBackupPreferences.config.value,
+            permissionValid = cloudBackupPermissionValid.value
+        )
+    )
 
     private val appUpdateController = AppUpdateController(
         application = getApplication(),
@@ -205,6 +263,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             resetTransientStateForReplacement()
             reloadPendingWorkoutDraftLater()
         },
+        onImportCompleted = { cloudBackupScheduler.scheduleAfterImport() },
         onWidgetsChanged = { refreshAndroidWidgets() }
     )
 
@@ -227,7 +286,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val aiConfigurationRepository = AiConfigurationRepository(application)
     private val aiService = AiService(
         configurationRepository = aiConfigurationRepository,
-        dataAccess = RepositoryAiDataAccess(repository, userPreferencesRepo)
+        dataAccess = RepositoryAiDataAccess(repository, userPreferencesRepo, planRepository)
     )
     private val workoutSummaryGenerator = WorkoutSummaryGenerator(repository, aiService)
 
@@ -314,6 +373,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             scope = viewModelScope,
             started = SharingStarted.Eagerly,
             initialValue = UserProfile(id = 1)
+        )
+
+    /**
+     * Whether the active provider has enough configuration to answer a request.
+     *
+     * Mirrors [hasGeminiApiKey] but is a flow, so the Settings warning clears the moment a key is
+     * saved and comes back when the key or endpoint is removed. Combining the legacy key and the
+     * profile as well keeps older installations that only have a profile key working.
+     */
+    val hasConfiguredAiKey: StateFlow<Boolean> =
+        combine(aiConfiguration, geminiApiKey, userProfile) { config, _, _ ->
+            if (config.provider.isCustomEndpoint) {
+                config.baseUrl.isNotBlank()
+            } else {
+                config.apiKey.isNotBlank() || fallbackApiKey(config.provider).isNotBlank()
+            }
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = hasGeminiApiKey()
         )
 
     /**
@@ -446,6 +525,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             refreshAndroidWidgets()
+            cloudBackupScheduler.scheduleDebounced()
         }
     }
 
@@ -516,8 +596,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 append("{\n")
                 append("  \"name\": \"$cleanName\",\n")
                 append("  \"category\": \"<one of: Chest, Back, Legs, Shoulders, Arms, Core, Calisthenics>\",\n")
-                append("  \"exerciseType\": \"<one of: STANDARD_WEIGHT, ADDED_WEIGHT, PURE_BODYWEIGHT>\",\n")
+                append("  \"bodyPart\": \"<chest, back, shoulders, upper arms, lower arms, waist, upper legs, lower legs, cardio, neck>\",\n")
+                append("  \"target\": \"<primary muscle, e.g. Pectorals, Lats, Abs, Quadriceps>\",\n")
+                append("  \"secondaryMuscles\": [],\n")
+                append("  \"exerciseType\": \"<one of: STANDARD_WEIGHT, ADDED_WEIGHT, PURE_BODYWEIGHT, CARDIO>\",\n")
+                append("  \"supportedFields\": [\"reps\"],\n")
                 append("  \"equipment\": \"<the equipment needed, e.g. Barbell, Dumbbells, Cable, Machine, Bodyweight, Pull-up Bar, Rings, Resistance Band>\",\n")
+                append("  \"instructions\": \"<2-4 coaching sentences separated by | >\",\n")
                 append("  \"description\": \"<one or two sentences on how the movement is performed>\"\n")
                 append("}\n\n")
                 append("RULES:\n")
@@ -526,9 +611,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         "(pull-up, push-up, dip, bodyweight squat). Choose ADDED_WEIGHT when extra weight is " +
                         "hung on the athlete (weighted pull-up, weighted dip). Choose STANDARD_WEIGHT for barbell " +
                         "or dumbbell work.\n")
-                append("- For a PURE_BODYWEIGHT movement the app logs BOTH reps and hold seconds, so the athlete " +
-                        "can record whichever the movement uses. Never describe it as a timed hold only unless " +
-                        "it really is an isometric hold such as a plank.\n")
+                append("- \"supportedFields\" is the authoritative list of set inputs. Use only: reps, " +
+                        "weight, addedWeight, holdSeconds, timeSeconds, distanceKm. Never combine weight with " +
+                        "addedWeight, or holdSeconds with timeSeconds. A plank uses holdSeconds and may also " +
+                        "use addedWeight. A bodyweight rep movement uses reps and may also use addedWeight. " +
+                        "A run uses timeSeconds and distanceKm. Order the list with the two most important " +
+                        "fields first; those are shown inline and the rest appear in the set's details.\n")
+                append("- For a PURE_BODYWEIGHT movement do not add weight; use ADDED_WEIGHT fields when the " +
+                        "athlete can hang extra load on themselves.\n")
                 append("- Describe ONLY a movement you genuinely know. Never invent one, never rename " +
                         "\"$cleanName\" into something else, and never fill a gap by guessing.\n")
                 append("- If \"$cleanName\" is not a real, recognisable exercise (random keyboard mash, " +
@@ -631,9 +721,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             fun bestEffort(matcher: (String) -> Boolean): BenchmarkRecord {
                 var best: BenchmarkRecord = BenchmarkRecord()
                 for (set in allSets) {
+                    // A combined reps + hold set still has a real rep count. Only a set with no
+                    // repetitions at all (a pure hold) is excluded from a rep benchmark.
                     if (set.reps <= 0) continue
-                    // Hold sets are measured in seconds: the number in `reps` is not a rep count.
-                    if (set.holdDurationSeconds > 0) continue
                     if (!matcher(set.exerciseName.trim().lowercase())) continue
                     val added = set.addedWeight.coerceAtLeast(0.0).toInt()
                     val candidate = BenchmarkRecord(set.reps, added)
@@ -956,7 +1046,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         category: String,
         equipment: String,
         exerciseType: String,
-        description: String
+        description: String,
+        supportedFields: String = ""
     ) {
         val cleanName = name.trim()
         if (cleanName.isBlank()) return
@@ -983,6 +1074,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // body map, and the detail dialog would show no body part at all.
             bodyPart = ExerciseSchema.categoryToBodyPart(validCategory),
             exerciseType = exerciseType,
+            supportedFields = ExerciseFieldCatalog.serialize(
+                ExerciseFieldCatalog.safeExplicit(
+                    ExerciseFieldCatalog.parseStored(supportedFields),
+                    exerciseType
+                )
+            ),
             equipment = equipment.trim().ifBlank { "Bodyweight" },
             description = description.trim(),
             // No media: the dataset has no animation for an exercise the athlete just invented.
@@ -1014,7 +1111,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         category: String,
         equipment: String,
         exerciseType: String,
-        description: String
+        description: String,
+        supportedFields: String = ""
     ) {
         val cleanName = name.trim()
         if (cleanName.isBlank()) return
@@ -1050,6 +1148,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             bodyPart = existing?.bodyPart?.takeIf { it.isNotBlank() }
                 ?: ExerciseSchema.categoryToBodyPart(validCategory),
             exerciseType = exerciseType,
+            supportedFields = ExerciseFieldCatalog.serialize(
+                ExerciseFieldCatalog.safeExplicit(
+                    ExerciseFieldCatalog.parseStored(
+                        supportedFields.ifBlank { existing?.supportedFields.orEmpty() }
+                    ),
+                    exerciseType
+                )
+            ),
             equipment = equipment.trim().ifBlank { "Bodyweight" },
             description = description.trim(),
             isCustom = existing?.isCustom ?: true,
@@ -1230,6 +1336,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val savedRestTimers: StateFlow<List<CustomRestTimer>> get() = restTimerController.savedRestTimers
     val activeRestTimer: StateFlow<ActiveRestTimerState> get() = restTimerController.activeRestTimer
 
+    /** Per-exercise rest defaults used when a workout or routine starts a new set. */
+    val exerciseDefaultRests: StateFlow<Map<Long, Int>> =
+        userPreferencesRepo.exerciseDefaultRestsFlow.stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5_000),
+            emptyMap()
+        )
+
+    fun setExerciseDefaultRest(exerciseId: Long, seconds: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.setExerciseDefaultRest(exerciseId, seconds)
+        }
+    }
+
     fun startRestTimer(seconds: Int, name: String = "Rest Timer") =
         restTimerController.start(seconds, name)
 
@@ -1288,11 +1408,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         scope = viewModelScope,
         currentBodyWeightKg = { currentBodyWeightKg() },
         resolveBodyWeightKg = { resolveBodyWeightKg() },
+        defaultRestForExercise = { id -> exerciseDefaultRests.value[id] ?: 0 },
         stopRestTimer = { stopRestTimer() },
         refreshBenchmarks = { refreshBenchmarkRecords() },
         clearWorkoutDraft = { clearWorkoutDraft() },
         refreshWidgets = { refreshAndroidWidgets() },
-        onSessionSaved = { maybeGenerateWorkoutSummary(it) }
+        onSessionSaved = {
+            maybeGenerateWorkoutSummary(it)
+            cloudBackupScheduler.scheduleAfterWorkout()
+        }
     )
 
     val activeSession: StateFlow<WorkoutSession?> get() = quickWorkoutController.activeSession
@@ -1306,6 +1430,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun addExerciseToActiveSession(exercise: Exercise) = quickWorkoutController.addExercise(exercise)
 
     fun addSetToActiveSession(exercise: Exercise) = quickWorkoutController.addExercise(exercise)
+
+    fun addDropSetToActiveSession(parent: LoggedSet) = quickWorkoutController.addDropSet(parent)
+
+    fun toggleActiveSetCompletion(setToUpdate: LoggedSet, completed: Boolean) =
+        quickWorkoutController.toggleSetCompletion(setToUpdate, completed)
+
+    fun removeExerciseFromActiveSession(exerciseId: Long): RemovedActiveExercise? =
+        quickWorkoutController.removeExercise(exerciseId)
+
+    fun restoreExerciseToActiveSession(snapshot: RemovedActiveExercise) =
+        quickWorkoutController.restoreExercise(snapshot)
+
+    fun moveActiveExercise(fromIndex: Int, toIndex: Int) =
+        quickWorkoutController.moveExercise(fromIndex, toIndex)
 
     fun updateActiveSet(index: Int, updated: LoggedSet) = quickWorkoutController.updateSet(index, updated)
 
@@ -1381,7 +1519,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 dayNote = routine.dayNote,
                 plannedDate = routine.plannedDate,
                 plannedDateKey = routine.plannedDateKey,
-                routineItems = routine.routineItems
+                scheduleId = routine.scheduleId,
+                scheduleGoal = routine.scheduleGoal,
+                routineItems = routine.routineItems,
+                sessionOnlyExerciseIds = routine.sessionOnlyExerciseIds
             )
         } else {
             WorkoutDraft(
@@ -1456,7 +1597,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     dayTitle = draft.dayTitle,
                     dayNote = draft.dayNote,
                     plannedDate = draft.plannedDate,
-                    plannedDateKey = draft.plannedDateKey
+                    plannedDateKey = draft.plannedDateKey,
+                    scheduleId = draft.scheduleId,
+                    scheduleGoal = draft.scheduleGoal,
+                    sessionOnlyExerciseIds = draft.sessionOnlyExerciseIds
                 )
             )
         } else {
@@ -1547,6 +1691,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             // Pick up any bodyweight record logged in a previous session
             refreshBenchmarkRecords()
         }
+
+
 
 
 
@@ -1734,12 +1880,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _unstructuredParseState.value = UnstructuredParseState.Idle
         _customRoutinePromptState.value = CustomRoutinePromptState.Idle
         aiConfigurationController.resetModelDiscovery()
+        _pendingWorkoutDraft.value = null
+        _workoutSummaryState.value = WorkoutSummaryState.Idle
+        _monthlySummaryState.value = MonthlySummaryState.Idle
 
         viewModelScope.launch(Dispatchers.IO) {
+            // Clear the normalized Schedule layer first: its slots reference the routines that
+            // are removed next, and the active Schedule must never survive a complete wipe.
+            planController.clearAllPlans()
             repository.clearAllUserData()
             // Hold the photo lock so a picker result cannot land after the wipe and write a new
             // widget photo path into preferences that were just cleared.
             widgetPhotoMutex.withLock {
+                userPreferencesRepo.setActiveScheduleId(0L)
                 userPreferencesRepo.clearAllPreferences()
                 // The profile picture is a file in the app's own storage, not a row in the
                 // database, so the database wipe does not touch it. It has to go explicitly, or
@@ -1774,6 +1927,196 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun cancelDataTransfer() = dataTransferController.cancelDataTransfer()
 
     fun dismissDataTransferMessage() = dataTransferController.dismissDataTransferMessage()
+
+    // === CLOUD FOLDER BACKUP ===
+
+    fun refreshCloudBackupStatus() {
+        val uri = cloudBackupPreferences.folderUri()
+        cloudBackupPermissionValid.value = uri != null &&
+            CloudBackupPermissions.hasPersistedWrite(getApplication(), uri)
+    }
+
+    fun selectCloudBackupFolder(
+        uri: Uri,
+        enableAuto: Boolean = false,
+        scheduleInitialBackup: Boolean = true
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                CloudBackupPermissions.takePersistableWrite(getApplication(), uri)
+                val folder = DocumentFile.fromTreeUri(getApplication(), uri)
+                    ?: throw IllegalStateException("The selected folder is not available.")
+                if (!folder.exists() || !folder.isDirectory || !folder.canWrite()) {
+                    throw IllegalStateException("The selected folder cannot be written to.")
+                }
+                val previous = cloudBackupPreferences.folderUri()
+                val folderName = folder.name?.takeIf { it.isNotBlank() } ?: "Selected folder"
+                val saved = cloudBackupPreferences.saveFolder(uri, folderName, uri.authority)
+                if (!saved) throw IllegalStateException("The folder could not be saved.")
+                if (previous != null && previous != uri) {
+                    CloudBackupPermissions.release(getApplication(), previous)
+                }
+                cloudBackupPermissionValid.value = true
+                val autoEnabled = enableAuto || cloudBackupPreferences.config.value.autoBackupEnabled
+                if (autoEnabled) {
+                    cloudBackupPreferences.setAutoEnabled(true)
+                    cloudBackupScheduler.setAutoEnabled(true, scheduleInitial = scheduleInitialBackup)
+                } else {
+                    cloudBackupScheduler.cancelAutomatic()
+                }
+                cloudBackupRuntime.update {
+                    it.copy(
+                        message = if (autoEnabled) {
+                            "Folder connected. Automatic backups are on."
+                        } else {
+                            "Folder connected. Turn on automatic backups when you are ready."
+                        },
+                        messageIsError = false
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (cloudBackupPreferences.folderUri()?.toString() != uri.toString()) {
+                    CloudBackupPermissions.release(getApplication(), uri)
+                }
+                cloudBackupPermissionValid.value = false
+                cloudBackupRuntime.update {
+                    it.copy(
+                        message = "That folder could not be used. Choose another folder.",
+                        messageIsError = true
+                    )
+                }
+            }
+        }
+    }
+
+    fun disconnectCloudBackup() {
+        if (cloudBackupRuntime.value.isRunning) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val previous = cloudBackupPreferences.folderUri()
+            cloudBackupPreferences.clearFolder()
+            previous?.let { CloudBackupPermissions.release(getApplication(), it) }
+            cloudBackupScheduler.cancelAutomatic()
+            cloudBackupPermissionValid.value = false
+            cloudBackupRuntime.update {
+                CloudBackupRuntimeState(
+                    message = "Cloud backup disconnected.",
+                    messageIsError = false
+                )
+            }
+        }
+    }
+
+    fun setCloudBackupAutoEnabled(enabled: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (enabled) {
+                val uri = cloudBackupPreferences.folderUri()
+                if (uri == null) {
+                    cloudBackupRuntime.update {
+                        it.copy(message = "Choose a folder before turning on automatic backups.", messageIsError = true)
+                    }
+                    return@launch
+                }
+                if (!CloudBackupPermissions.hasPersistedWrite(getApplication(), uri)) {
+                    cloudBackupPermissionValid.value = false
+                    cloudBackupRuntime.update {
+                        it.copy(
+                            message = "IronPulse no longer has permission to write to this folder. Choose it again or pick another folder.",
+                            messageIsError = true
+                        )
+                    }
+                    return@launch
+                }
+                cloudBackupPreferences.setAutoEnabled(true)
+                cloudBackupScheduler.setAutoEnabled(true)
+                cloudBackupRuntime.update {
+                    it.copy(message = "Automatic backups are on.", messageIsError = false)
+                }
+            } else {
+                cloudBackupPreferences.setAutoEnabled(false)
+                cloudBackupScheduler.setAutoEnabled(false)
+                cloudBackupRuntime.update {
+                    it.copy(message = "Automatic backups are off. Manual backups still work.", messageIsError = false)
+                }
+            }
+        }
+    }
+
+    fun backupNow() {
+        if (cloudBackupRuntime.value.isRunning) return
+        val config = cloudBackupPreferences.config.value
+        if (!config.isConfigured) {
+            cloudBackupRuntime.update {
+                it.copy(message = "Choose a backup folder first.", messageIsError = true)
+            }
+            return
+        }
+        val uri = cloudBackupPreferences.folderUri()
+        if (uri == null || !CloudBackupPermissions.hasPersistedWrite(getApplication(), uri)) {
+            cloudBackupPermissionValid.value = false
+            cloudBackupRuntime.update {
+                it.copy(
+                    message = "IronPulse no longer has permission to write to this folder. Choose it again or pick another folder.",
+                    messageIsError = true
+                )
+            }
+            return
+        }
+        cloudBackupRuntime.value = CloudBackupRuntimeState(
+            isRunning = true,
+            progressLabel = "Preparing",
+            progressFraction = 0f
+        )
+        viewModelScope.launch(Dispatchers.IO) {
+            val outcome = cloudBackupRunner.run(CloudBackupReason.MANUAL) { progress ->
+                cloudBackupRuntime.update {
+                    it.copy(
+                        isRunning = true,
+                        progressLabel = progress.label,
+                        progressFraction = progress.fraction
+                    )
+                }
+            }
+            refreshCloudBackupStatus()
+            cloudBackupRuntime.update {
+                when (outcome) {
+                    is CloudBackupOutcome.Success -> it.copy(
+                        isRunning = false,
+                        progressLabel = null,
+                        progressFraction = null,
+                        message = "Backup saved as ${outcome.fileName}.",
+                        messageIsError = false
+                    )
+
+                    is CloudBackupOutcome.Skipped -> it.copy(
+                        isRunning = false,
+                        progressLabel = null,
+                        progressFraction = null,
+                        message = outcome.reason,
+                        messageIsError = false
+                    )
+
+                    is CloudBackupOutcome.Failed -> it.copy(
+                        isRunning = false,
+                        progressLabel = null,
+                        progressFraction = null,
+                        message = outcome.message,
+                        messageIsError = true
+                    )
+                }
+            }
+        }
+    }
+
+    fun dismissCloudBackupMessage() {
+        cloudBackupRuntime.update {
+            it.copy(message = null, messageIsError = false)
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            cloudBackupPreferences.clearFailure()
+        }
+    }
 
     private suspend fun resetTransientStateForReplacement() {
         stopRestTimer()
@@ -2143,6 +2486,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
             append("LOGGED DATA FOR THE EXERCISE (already computed by the app, treat it as the single source of truth):\n")
             append(data)
+            append("\nSET-TYPE RULES: Warm-up sets are preparation, not working-set performance. They ARE included in total volume and total set counts. They are NOT eligible for best estimated 1RM, highest working-set reps, working-set PRs or best working-set comparisons. Drop sets are direct children of a main set: their reps and volume count, but they are NOT eligible for 1RM or working-set records either. Every individual set below carries explicit isWarmup and isDropSet flags; never present a warm-up or drop set as a new maximum or a PR.\n")
             append("\nWRITTEN TREND (computed from the data above): ").append(change).append("\n\n")
 
             append("YOUR TASK:\n")
@@ -2162,7 +2506,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             append("## Trend\n")
             append("One short paragraph (2-3 sentences) stating whether strength is trending up, down or holding steady, and the single biggest reason why.\n")
             append("## Key Numbers\n")
-            append("4 to 6 bullets covering: training days, total sets, total volume, best estimated 1RM with the set it came from, and the change across the period.\n")
+            append("4 to 6 bullets covering: training days, total sets, total volume, best estimated 1RM with the set it came from, and the change across the period. Mention the warm-up set count when it is non-zero.\n")
             append("## Session Log\n")
             append("3 to 8 bullets, one per training day, in the format \"- Mar 3 ÔÇö 4 sets, best set 80kg x 5, est. 1RM 93kg\". Cover the most representative days, not necessarily all of them.\n")
             append("## What The Numbers Say\n")
@@ -2277,6 +2621,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val savedCustomAccents: StateFlow<List<String>> = userPreferencesRepo.savedCustomAccentsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /**
+     * The selected launcher icon key, applied to the activity aliases on change and on start.
+     *
+     * The initial value is blank, not "default": applying the placeholder before DataStore emits
+     * would briefly disable the saved alias every time the app starts.
+     */
+    val launcherIcon: StateFlow<String> = userPreferencesRepo.launcherIconFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), "")
+
+    fun setLauncherIcon(key: String) {
+        val option = LauncherIconOption.fromKey(key)
+        viewModelScope.launch(Dispatchers.IO) {
+            userPreferencesRepo.setLauncherIcon(option.key)
+            LauncherIcons.apply(getApplication(), option)
+        }
+    }
 
     fun saveCustomAccent(hex: String) {
         viewModelScope.launch(Dispatchers.IO) {
@@ -2598,6 +2959,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             completeOnboarding()
+            cloudBackupScheduler.scheduleDebounced()
         }
     }
 
@@ -2614,9 +2976,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // === SAVED ROUTINES ===
-    val savedRoutines: StateFlow<List<SavedRoutine>> = repository.getAllSavedRoutines()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    // === ROUTINES, SCHEDULES AND HOME PLAN ===
+
+    private val planController = PlanController(
+        repository = repository,
+        planRepository = planRepository,
+        preferences = userPreferencesRepo,
+        allExercises = allExercises,
+        weekStartsOnMonday = weekStartFlow,
+        scope = viewModelScope,
+        onPlanChanged = { refreshAndroidWidgets() },
+        isImportApplying = { dataTransferController.isImportApplying() }
+    )
+
+    val savedRoutines: StateFlow<List<SavedRoutine>> get() = planController.routines
+    val schedules: StateFlow<List<com.example.data.model.SchedulePlan>> get() = planController.schedules
+    val scheduleSlots: StateFlow<List<com.example.data.model.ScheduleDaySlot>> get() = planController.scheduleSlots
+    val activeRoutineId: StateFlow<Long> get() = planController.activeScheduleId
+    val activeRoutine: StateFlow<com.example.data.model.SchedulePlan?> get() = planController.activeSchedule
+    val activeRoutineDays: StateFlow<List<RoutineDay>> get() = planController.activeScheduleDays
+    val streakSummary: StateFlow<StreakSummary> get() = planController.streakSummary
+
+    /**
+     * Keeps the images of routine exercises available offline.
+     *
+     * The Exercises tab already loads pictures only for the rows it composes, so the catalog is
+     * never downloaded in bulk. Routine exercises are the important exception: they can be far
+     * outside the visible slice when the athlete opens their plan. Only those exercises are
+     * warmed, the warmer is rate-limited, and Coil serves anything already on disk.
+     */
+    init {
+        viewModelScope.launch(Dispatchers.Default) {
+            combine(savedRoutines, allExercises) { routines, exercises ->
+                val referenced = routines.asSequence()
+                    .mapNotNull { routine ->
+                        runCatching {
+                            RoutineParser.parseSingleWorkout(routine.exercisesJson, exercises)
+                        }.getOrNull()
+                    }
+                    .flatMap { it.asSequence() }
+                    .map { it.exerciseId }
+                    .toSet()
+                exercises.filter { it.id in referenced }
+            }
+                .distinctUntilChanged()
+                .collect { routineExercises ->
+                    ExerciseMediaWarmer.warmRoutineImages(getApplication(), routineExercises)
+                }
+        }
+    }
 
     private val _homeStreakFocusRequest = MutableStateFlow(0)
     val homeStreakFocusRequest: StateFlow<Int> = _homeStreakFocusRequest.asStateFlow()
@@ -2628,36 +3036,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** Starts today's scheduled routine day from the launcher widget. */
     fun startTodayWorkoutFromWidget() {
         viewModelScope.launch(Dispatchers.IO) {
-            val activeId = userPreferencesRepo.activeRoutineIdFlow.first()
-            val routine = repository.getSavedRoutineById(activeId) ?: return@launch
-            val exercises = repository.getAllExercisesOnce()
-            val days = com.example.data.model.RoutineParser.parseWeek(
-                routine.exercisesJson,
-                exercises,
-                weekStartsOnMonday = userPreferencesRepo.appSettingsFlow.first().weekStartsOnMonday
-            )
+            val schedule = planController.activeSchedule.value ?: return@launch
             val today = com.example.data.model.LocalDateKey.isoDayOfWeek(
                 com.example.data.model.LocalDateKey.keyOf(System.currentTimeMillis())
             )
-            val day = days.firstOrNull { it.weekday == today && it.exercises.isNotEmpty() }
-                ?: return@launch
+            val day = planController.activeScheduleDays.value.firstOrNull {
+                it.weekday == today && !it.isRestDay
+            } ?: return@launch
+            val routine = planRepository.getRoutine(day.routineId) ?: return@launch
             withContext(Dispatchers.Main) {
-                startRoutineWorkout(routine, targetWeekday = day.weekday)
+                startScheduledWorkout(
+                    routine = routine,
+                    schedule = schedule,
+                    weekday = today,
+                    plannedDate = com.example.data.model.ActivityHeatmap.startOfDay(
+                        System.currentTimeMillis()
+                    )
+                )
             }
         }
     }
 
-    // === HOME DASHBOARD ===
+    // === HOME DASHBOARD HISTORY ===
 
     private val homeDashboardController = HomeDashboardController(
         repository = repository,
-        preferences = userPreferencesRepo,
         scope = viewModelScope,
         userProfile = userProfile,
-        allExercises = allExercises,
-        savedRoutines = savedRoutines,
-        weekStartFlow = weekStartFlow,
-        refreshWidgets = { refreshAndroidWidgets() }
+        weekStartFlow = weekStartFlow
     )
 
     val activityDays: StateFlow<List<ActivityDay>> get() = homeDashboardController.activityDays
@@ -2666,24 +3072,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val lifetimeTrainingDays: StateFlow<Int> get() = homeDashboardController.lifetimeTrainingDays
     val weekTotals: StateFlow<HomeDashboard.WeekTotals> get() = homeDashboardController.weekTotals
     val recentWorkout: StateFlow<SessionWithSets?> get() = homeDashboardController.recentWorkout
-    val activeRoutineId: StateFlow<Long> get() = homeDashboardController.activeRoutineId
-    val activeRoutine: StateFlow<SavedRoutine?> get() = homeDashboardController.activeRoutine
-    val activeRoutineDays: StateFlow<List<RoutineDay>> get() = homeDashboardController.activeRoutineDays
-    val scheduleDays: StateFlow<List<ScheduledWorkoutDay>> get() = homeDashboardController.scheduleDays
-    val streakSummary: StateFlow<StreakSummary> get() = homeDashboardController.streakSummary
 
-    /** Schedules a routine as the athlete's week, or clears it with 0. */
-    fun setActiveRoutine(routineId: Long) {
+    fun setActiveSchedule(scheduleId: Long) {
         viewModelScope.launch(Dispatchers.IO) {
-            userPreferencesRepo.setActiveRoutineId(routineId)
-            refreshAndroidWidgets()
+            planController.setActiveSchedule(scheduleId)
         }
     }
 
-    fun saveRoutine(routine: SavedRoutine) {
+    fun saveRoutine(routine: SavedRoutine, onSaved: (Long) -> Unit = {}) {
         viewModelScope.launch(Dispatchers.IO) {
-            repository.saveRoutine(routine)
-            refreshAndroidWidgets()
+            val id = planController.saveRoutine(
+                routine.copy(
+                    daysPerWeek = 1,
+                    modelVersion = 2,
+                    scheduleVersion = 1
+                )
+            )
+            withContext(Dispatchers.Main) { onSaved(id) }
         }
     }
 
@@ -2692,37 +3097,159 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         description: String,
         daysPerWeek: Int,
         goal: String,
-        exercises: List<RoutineExerciseItem>
+        exercises: List<RoutineExerciseItem>,
+        onSaved: (Long) -> Unit = {}
     ) {
         viewModelScope.launch(Dispatchers.IO) {
-            val exercisesJson = RoutineParser.serializeExercises(exercises)
-            val routine = SavedRoutine(
-                name = name.trim(),
-                description = description.trim(),
-                daysPerWeek = daysPerWeek,
-                goal = goal.trim(),
-                exercisesJson = exercisesJson
+            val id = planRepository.createRoutine(
+                name = name,
+                description = description,
+                goal = goal,
+                items = exercises
             )
-            repository.saveRoutine(routine)
             refreshAndroidWidgets()
+            withContext(Dispatchers.Main) { onSaved(id) }
         }
     }
 
     fun deleteRoutine(routine: SavedRoutine) {
         viewModelScope.launch(Dispatchers.IO) {
-            repository.deleteRoutine(routine)
-            refreshAndroidWidgets()
+            planController.deleteRoutine(routine.id)
+        }
+    }
+
+    fun deleteRoutines(routines: Collection<SavedRoutine>, onDone: () -> Unit = {}) {
+        viewModelScope.launch(Dispatchers.IO) {
+            planController.deleteRoutines(routines.map { it.id })
+            withContext(Dispatchers.Main) { onDone() }
+        }
+    }
+
+    fun saveEditedRoutine(routine: SavedRoutine, onSaved: () -> Unit = {}) {
+        viewModelScope.launch(Dispatchers.IO) {
+            planController.saveRoutine(
+                routine.copy(
+                    daysPerWeek = 1,
+                    modelVersion = 2,
+                    scheduleVersion = 1
+                )
+            )
+            withContext(Dispatchers.Main) { onSaved() }
+        }
+    }
+
+    fun duplicateRoutine(routine: SavedRoutine) {
+        viewModelScope.launch(Dispatchers.IO) {
+            planController.duplicateRoutine(routine.id)
+        }
+    }
+
+    fun createSchedule(name: String, description: String, goal: String, onCreated: (Long) -> Unit = {}) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val id = planController.createSchedule(name, description, goal)
+            withContext(Dispatchers.Main) { onCreated(id) }
+        }
+    }
+
+    fun updateSchedule(schedule: com.example.data.model.SchedulePlan) {
+        viewModelScope.launch(Dispatchers.IO) { planController.updateSchedule(schedule) }
+    }
+
+    fun deleteSchedule(scheduleId: Long) {
+        viewModelScope.launch(Dispatchers.IO) { planController.deleteSchedule(scheduleId) }
+    }
+
+    fun deleteSchedules(scheduleIds: Collection<Long>, onDone: () -> Unit = {}) {
+        viewModelScope.launch(Dispatchers.IO) {
+            planController.deleteSchedules(scheduleIds)
+            withContext(Dispatchers.Main) { onDone() }
+        }
+    }
+
+    fun setScheduleDay(scheduleId: Long, weekday: Int, routineId: Long?) {
+        viewModelScope.launch(Dispatchers.IO) {
+            planController.setDay(scheduleId, weekday, routineId)
+        }
+    }
+
+    fun duplicateSchedule(scheduleId: Long, onCopied: (Long) -> Unit = {}) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val id = planController.copySchedule(scheduleId)
+            if (id != null) withContext(Dispatchers.Main) { onCopied(id) }
         }
     }
 
     /**
-     * Copies one of the starter templates into the athlete's own routines.
-     *
-     * The copy is an ordinary [SavedRoutine], not a reference back to the template, so the athlete
-     * can edit or delete it freely afterwards. Template movements are resolved against the real
-     * catalog first, so the adopted routine carries real exercise ids and opens in the editor
-     * populated rather than as a list of names to retype.
+     * Converts a generated multi-day plan into standalone Routines plus a Schedule. A single
+     * workout remains one independent Routine and does not create a Schedule.
      */
+    fun createPlanFromItems(
+        name: String,
+        description: String,
+        goal: String,
+        items: List<RoutineExerciseItem>,
+        onCreated: ((com.example.data.repository.PlanRepository.CreatedPlan) -> Unit)? = null
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = planController.createPlan(name, description, goal, items)
+            withContext(Dispatchers.Main) { onCreated?.invoke(result) }
+        }
+    }
+
+    fun copyScheduleTemplate(
+        template: com.example.data.model.ScheduleTemplate,
+        onCopied: (com.example.data.repository.PlanRepository.CreatedPlan) -> Unit = {},
+        onFailed: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val catalog = allExercises.value
+                val items = template.days.flatMap { day ->
+                    day.exercises.map { planned ->
+                        val match = RoutineParser.findMatchingExercise(planned.name, catalog)
+                        RoutineExerciseItem(
+                            exerciseId = match?.id ?: 0L,
+                            exerciseName = match?.name ?: planned.name,
+                            exerciseType = match?.exerciseType ?: ExerciseType.STANDARD_WEIGHT,
+                            category = match?.category.orEmpty(),
+                            equipment = match?.equipment.orEmpty(),
+                            targetSets = planned.sets,
+                            targetReps = planned.reps,
+                            targetHoldSeconds = planned.holdSeconds,
+                            restSeconds = planned.restSeconds,
+                            prescription = if (planned.holdSeconds > 0) {
+                                "${planned.sets} sets x ${planned.holdSeconds}s"
+                            } else {
+                                "${planned.sets} sets x ${planned.reps} reps"
+                            },
+                            weekday = day.weekday,
+                            dayTitle = day.focus
+                        )
+                    }
+                }
+                val result = planRepository.createPlanFromItems(
+                    name = template.name,
+                    description = template.description,
+                    goal = template.goal,
+                    items = items
+                )
+                if (result.scheduleId == null) {
+                    error("The starter schedule did not produce a Schedule.")
+                }
+                refreshAndroidWidgets()
+                withContext(Dispatchers.Main) { onCopied(result) }
+            } catch (t: Throwable) {
+                withContext(Dispatchers.Main) {
+                    onFailed(
+                        t.message?.takeIf { it.isNotBlank() }
+                            ?: "The starter schedule could not be copied. Please try again."
+                    )
+                }
+            }
+        }
+    }
+
+    /** Kept for the legacy starter-routine sheet; it now creates a real Schedule. */
     fun adoptPredefinedRoutine(template: PredefinedRoutines.Template) {
         viewModelScope.launch(Dispatchers.IO) {
             val catalog = allExercises.value
@@ -2743,53 +3270,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             }
-            repository.saveRoutine(
-                PredefinedRoutines.toSavedRoutine(template).copy(
-                    exercisesJson = RoutineParser.serializeExercises(resolved)
-                )
+            planRepository.createPlanFromItems(
+                name = template.name,
+                description = template.description,
+                goal = template.goal,
+                items = resolved
             )
-            refreshAndroidWidgets()
-        }
-    }
-
-    /**
-     * Saves the changes made in the "Create New Routine" screen while editing an existing routine.
-     * Reusing the same id makes Room replace the row instead of creating a second routine.
-     */
-    fun saveEditedRoutine(routine: SavedRoutine) {
-        viewModelScope.launch(Dispatchers.IO) {
-            repository.saveRoutine(routine)
-            refreshAndroidWidgets()
-        }
-    }
-
-    /**
-     * Duplicates a saved routine as an exact copy (same name, description, goal, days and the
-     * exact same serialised exercise list) under a brand new id.
-     */
-    fun duplicateRoutine(routine: SavedRoutine) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val copy = routine.copy(
-                id = 0L,
-                createdAt = System.currentTimeMillis()
-            )
-            repository.saveRoutine(copy)
             refreshAndroidWidgets()
         }
     }
 
     fun loadRoutineIntoActiveSession(routine: SavedRoutine) {
         startNewSession(routine.name)
-        // Parse exercise lines from routine text
-        val lines = routine.exercisesJson.lines()
         val allEx = allExercises.value
         val exMap = allEx.associateBy { it.name.lowercase().trim() }
-        lines.forEach { line ->
-            val cleanName = line.substringBefore("(").trim().lowercase()
-            val matchedEx = exMap[cleanName]
-            if (matchedEx != null) {
-                addExerciseToActiveSession(matchedEx)
-            }
+        RoutineParser.parseSingleWorkout(routine.exercisesJson, allEx).forEach { item ->
+            val matched = exMap[item.exerciseName.trim().lowercase()]
+                ?: RoutineParser.findMatchingExercise(item.exerciseName, allEx)
+            if (matched != null) addExerciseToActiveSession(matched)
         }
     }
 
@@ -2802,11 +3300,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         weekStartsOnMonday = { weekStartsOnMonday() },
         currentBodyWeightKg = { currentBodyWeightKg() },
         resolveBodyWeightKg = { resolveBodyWeightKg() },
+        defaultRestForExercise = { id -> exerciseDefaultRests.value[id] ?: 0 },
         stopRestTimer = { stopRestTimer() },
         clearQuickWorkout = { quickWorkoutController.clearLiveState() },
         clearWorkoutDraft = { clearWorkoutDraft() },
         refreshWidgets = { refreshAndroidWidgets() },
-        onSessionSaved = { maybeGenerateWorkoutSummary(it) }
+        onSessionSaved = {
+            maybeGenerateWorkoutSummary(it)
+            cloudBackupScheduler.scheduleAfterWorkout()
+        }
     )
 
     val activeRoutineWorkout: StateFlow<ActiveRoutineWorkoutState?>
@@ -2815,16 +3317,72 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun startRoutineWorkout(routine: SavedRoutine, targetWeekday: Int? = null) =
         routineWorkoutController.start(routine, targetWeekday)
 
+    fun startRoutineById(routineId: Long, onStarted: () -> Unit = {}) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val routine = planRepository.getRoutine(routineId) ?: return@launch
+            withContext(Dispatchers.Main) {
+                startRoutineWorkout(routine)
+                onStarted()
+            }
+        }
+    }
+
+    fun startScheduledWorkout(
+        routine: SavedRoutine,
+        schedule: com.example.data.model.SchedulePlan,
+        weekday: Int,
+        plannedDate: Long
+    ) = routineWorkoutController.start(
+        routine = routine,
+        targetWeekday = weekday,
+        scheduleId = schedule.id,
+        scheduleGoal = schedule.goal,
+        plannedDate = plannedDate
+    )
+
+    /** Loads the referenced Routine and starts the Schedule workout for [weekday]. */
+    fun startScheduledWorkout(routineId: Long, weekday: Int, plannedDate: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val schedule = planController.activeSchedule.value ?: return@launch
+            val routine = planRepository.getRoutine(routineId) ?: return@launch
+            withContext(Dispatchers.Main) {
+                startScheduledWorkout(routine, schedule, weekday, plannedDate)
+            }
+        }
+    }
+
     fun addSetToRoutineWorkout(exercise: Exercise) = routineWorkoutController.addSet(exercise)
 
     fun updateRoutineWorkoutSet(index: Int, updated: LoggedSet) =
         routineWorkoutController.updateSet(index, updated)
 
+    fun updateRoutineWorkoutSet(setToUpdate: LoggedSet, updated: LoggedSet) =
+        routineWorkoutController.updateSet(setToUpdate, updated)
+
     fun deleteRoutineWorkoutSet(index: Int) = routineWorkoutController.deleteSet(index)
+
+    fun deleteRoutineWorkoutSet(setToDelete: LoggedSet) =
+        routineWorkoutController.deleteSet(setToDelete)
 
     fun stopRoutineWorkout() = routineWorkoutController.stop()
 
     fun finishRoutineWorkout(notes: String) = routineWorkoutController.finish(notes)
+
+    fun addExerciseToRoutineWorkout(exercise: Exercise) = routineWorkoutController.addExercise(exercise)
+
+    fun addDropSetToRoutineWorkout(parent: LoggedSet) = routineWorkoutController.addDropSet(parent)
+
+    fun toggleRoutineWorkoutSetCompletion(setToUpdate: LoggedSet, completed: Boolean) =
+        routineWorkoutController.toggleSetCompletion(setToUpdate, completed)
+
+    fun removeExerciseFromRoutineWorkout(exerciseId: Long): RemovedActiveExercise? =
+        routineWorkoutController.removeExercise(exerciseId)
+
+    fun restoreExerciseToRoutineWorkout(snapshot: RemovedActiveExercise) =
+        routineWorkoutController.restoreExercise(snapshot)
+
+    fun moveRoutineExercise(fromIndex: Int, toIndex: Int) =
+        routineWorkoutController.moveExercise(fromIndex, toIndex)
 
     // === AI FITNESS ASSISTANT (GEMINI) ===
     val chatSessions: StateFlow<List<ChatSession>> = repository.getAllChatSessions()
@@ -3044,11 +3602,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch(Dispatchers.IO) {
             val enabled = userPreferencesRepo.aiWorkoutDataAccessFlow.first()
-            val activeRoutineId = userPreferencesRepo.activeRoutineIdFlow.first()
+            val routineExists = planRepository.getRoutine(proposal.routineId) != null
             val result = if (!enabled) {
                 Result.failure(IllegalStateException("AI workout-data access is disabled."))
-            } else if (proposal.routineId != activeRoutineId) {
-                Result.failure(IllegalStateException("The active routine changed after this proposal was created."))
+            } else if (!routineExists) {
+                Result.failure(IllegalStateException("The Routine no longer exists."))
             } else {
                 routineModificationService.apply(proposal, accessEnabled = true)
             }
@@ -3287,24 +3845,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 - get_exercise_details(exerciseId or name): category, target muscles, equipment and
                   instructions for one catalog exercise.
                 - list_exercises(category, equipment, limit, offset): browse one page of the catalog.
-                - get_current_routine(): the active weekly schedule, including rest days, day titles
-                  and every prescribed exercise. Use this for "my routine", "my plan" or "what am I
-                  training this week".
-                - list_routines(limit): the athlete's saved routines.
-                - get_routine(routineId or name): one saved routine with its full prescription.
+                - get_current_routine(): the active weekly Schedule, including rest days and the
+                  standalone Routine assigned to each weekday. Use this for "my plan", "my schedule"
+                  or "what am I training this week".
+                - get_active_workout(): the workout currently in progress, with every set, its
+                  completion/warm-up state and explicit drop-set parent UIDs and local order. Returns
+                  found=false when no workout is running. Use it for "this workout", "my current set"
+                  or "how many drop sets have I done today".
+                - list_routines(limit): the athlete's saved standalone Routines.
+                - get_routine(routineId or name): one standalone Routine with its full prescription.
                 - search_recent_workouts(daysBack, exerciseName?, limit, offset): completed sessions
                   in a date range, with dates, duration, order and completed sets. Use it for "what
                   did I train last week" or training-frequency questions.
                 - search_exercise_history(exerciseName, daysBack, limit): completed sets for ONE
                   exercise, newest first. Use it for progress, PRs and improvement comparisons.
-                - propose_routine_modification(...): propose ONE exercise replacement. It never
-                  changes data; the app shows an approval card.
-                - propose_new_routine(...): propose a complete new weekly routine. It never saves
-                  anything; the app shows the full plan and creates it only after approval.
+                - propose_routine_modification(...): propose ONE exercise replacement in a
+                  standalone Routine. It never changes data; the app shows an approval card, and
+                  every Schedule that references the Routine sees the approved change.
+                - propose_new_routine(...): propose a complete weekly plan. A Routine is ONE workout;
+                  repeated workout days must reuse one Routine. The app creates each unique Routine
+                  once, then a Schedule with seven weekday references, and never activates it without
+                  the athlete's explicit request.
 
                 HOW TO USE THEM
-                - Never answer a question about the athlete's history, schedule, routine, exercise
-                  catalog or progress from memory. Call the relevant tool first.
+                - Never answer a question about the athlete's current workout, history, schedule,
+                  routine, exercise catalog or progress from memory. Call the relevant tool first.
                 - For progress questions, resolve the exercise name first when it may be ambiguous,
                   then call search_exercise_history with a real catalog name. Pass the athlete's
                   wording when it is already clear; the app normalizes case, punctuation, spacing
@@ -3394,7 +3959,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return all
             .groupBy { it.category.ifBlank { MuscleCategory.CALISTHENICS } }
             .toSortedMap()
-            .map { (category, list) -> "[$category]: " + list.joinToString(", ") { it.name } }
+            .map { (category, list) ->
+                "[$category]: " + list.joinToString(", ") { it.catalogPromptName() }
+            }
             .joinToString("\n")
     }
 
@@ -3419,7 +3986,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         val kept = LinkedHashMap<String, MutableList<String>>()
         for ((category, list) in custom) {
-            kept.getOrPut(category) { mutableListOf() }.addAll(list.map { it.name })
+            kept.getOrPut(category) { mutableListOf() }.addAll(list.map { it.catalogPromptName() })
         }
 
         var used = kept.entries.sumOf { (category, names) ->
@@ -3427,7 +3994,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val libraryByCategory = byCategory
             .filterKeys { it !in custom }
-            .mapValues { (_, list) -> list.map { it.name } }
+            .mapValues { (_, list) -> list.map { it.catalogPromptName() } }
             // Largest groups first: dropping them buys the most characters per removed entry.
             .toList()
             .sortedByDescending { (_, names) -> names.sumOf { name -> name.length } }
@@ -3443,6 +4010,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         return kept.entries.joinToString("\n") { (category, names) ->
             "[$category]: " + names.joinToString(", ")
+        }
+    }
+
+    /**
+     * A catalog name plus the explicit fields when they differ from the type default.
+     *
+     * The full field list on 1,334 rows would consume too much of the prompt budget, but a model
+     * must not assume every bodyweight movement has the same inputs. Only non-default
+     * configurations are marked, e.g. "Weighted Plank [holdSeconds,addedWeight]".
+     */
+    private fun Exercise.catalogPromptName(): String {
+        val explicit = exerciseFields.map { it.id }
+        val defaults = ExerciseFieldCatalog.defaultsForType(exerciseType).map { it.id }
+        // Prompt order is not meaningful; compare the supported set so the 101 rows that only
+        // changed inline order do not consume the catalog budget with redundant markers.
+        return if (explicit.toSet() == defaults.toSet()) {
+            name
+        } else {
+            "$name [${explicit.joinToString(",")}]"
         }
     }
 
@@ -3473,6 +4059,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 append("1. ALWAYS prefer an exercise that already exists in the complete local database list below, and use its exact name.\n")
                 append("2. If the routine genuinely needs a movement that is NOT in the list, do NOT force-map it to an unrelated exercise. Put it in \"new_exercises_to_create\" and use the same exact name in the day's \"exercises\" array. The app creates it locally.\n")
                 append("3. Never substitute a biomechanically different movement just because it shares a word.\n")
+                append("3b. A catalog name followed by [?] lists its authoritative set fields. Generate only those values; omit unsupported fields.\n")
                 append("4. The list includes the IronPulse library, exercises previously generated by the AI and custom exercises created by the user: if one already matches what you need, reuse that exact name.\n")
                 append("COMPLETE LOCAL DATABASE CATALOG (ALL EXERCISES IN THE APP):\n$candidates\n\n")
 
@@ -3497,7 +4084,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 append("          \"reps\": 8,\n")
                 append("          \"weight\": 0.0,\n")
                 append("          \"holdSeconds\": 0,\n")
-                append("          \"prescription\": \"4 sets x 8 reps\"\n")
+                append("          \"distanceKm\": 0.0,\n")
+                append("          \"prescription\": \"4 sets x 8 reps\",\n")
+                append("          \"dropSets\": []\n")
                 append("        }\n")
                 append("      ]\n")
                 append("    }\n")
@@ -3506,7 +4095,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
                 append("FIELD RULES:\n")
                 append("- \"name\" MUST be copied character for character from the catalog, or match a name in \"new_exercises_to_create\". Never write a sentence there.\n")
-                append("- \"new_exercises_to_create\" MUST be an array, empty when every exercise exists. Each entry needs: \"name\", \"category\" (Chest, Back, Legs, Shoulders, Arms, Core, Calisthenics), \"bodyPart\" (chest, back, shoulders, upper arms, lower arms, waist, upper legs, lower legs, cardio, neck), \"target\", \"secondaryMuscles\" (array), \"equipment\", \"exerciseType\" (STANDARD_WEIGHT, ADDED_WEIGHT, PURE_BODYWEIGHT) and \"instructions\" (2-4 coaching sentences separated by ' | '). Every created name MUST also appear verbatim in the routine days.\n")
+                append("- \"new_exercises_to_create\" MUST be an array, empty when every exercise exists. Each entry needs: \"name\", \"category\" (Chest, Back, Legs, Shoulders, Arms, Core, Calisthenics), \"bodyPart\" (chest, back, shoulders, upper arms, lower arms, waist, upper legs, lower legs, cardio, neck), \"target\", \"secondaryMuscles\" (array), \"equipment\", \"exerciseType\" (STANDARD_WEIGHT, ADDED_WEIGHT, PURE_BODYWEIGHT, CARDIO), \"supportedFields\" (optional array from: reps, weight, addedWeight, holdSeconds, timeSeconds, distanceKm) and \"instructions\" (2-4 coaching sentences separated by ' | '). Every created name MUST also appear verbatim in the routine days.\n")
+                append("- \"distanceKm\": use it for carries, cardio and any exercise whose field list includes distanceKm.\n")
                 append("- \"holdSeconds\": use a value > 0 ONLY for isometric holds (plank, hollow hold). For a rep based movement such as an explosive pull-up it MUST be 0 and \"reps\" MUST carry the rep count.\n")
                 append("- \"reps\": use 0 ONLY when \"holdSeconds\" > 0. Never leave both at 0.\n")
                 append("- \"prescription\" MUST be exactly '<sets> sets x <reps> reps' and NOTHING else (e.g. '4 sets x 8 reps'). For an isometric hold use '<sets> sets x <seconds>s' (e.g. '3 sets x 30s').\n")
@@ -3514,6 +4104,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 append("- \"weight\" is the external load in kg for the movement. Use 0.0 for every bodyweight movement and NEVER the athlete's body weight there. Only put a number for a movement that is genuinely loaded with weight.\n")
                 append("- NEVER put equipment ('Barbell', 'Dumbbells', 'with Barbell', ...) in \"prescription\".\n")
                 append("- NEVER add any commentary, notes, tempo, rest or technique hints to \"prescription\".\n")
+                append("- \"dropSets\": optional array of direct children of a main set. Add them only when the plan calls for drop sets; never list a drop as a top-level exercise. Each child is {\"mainSet\": 1-based main set, \"drop\": 1-based order, \"reps\": 8, \"weight\": 30.0, \"holdSeconds\": 0, \"restSeconds\": 0}.\n")
                 append("- Order the exercises day by day, exactly as the athlete should perform them.\n")
                 append(weekdayPromptRules())
             }
@@ -3624,7 +4215,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return buildString {
             append("\nSCHEDULE RULES:\n")
             if (usesDaysArray) {
-                append("- The routine is a week of seven days. Use the \"days\" array, with one entry per training day.\n")
+                append("- A Routine is exactly ONE workout. A Schedule is seven weekday references. Use the \"days\" array with one entry per training day; the app will create one standalone Routine per unique workout configuration and then build the Schedule.\n")
+                append("- Monday and Thursday with the same workout configuration must become ONE Routine referenced twice, not two Routines.\n")
                 append("- \"weekday\" MUST be the full name of the day of the week: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday or Sunday. Never write a number and never write \"Day 1\".\n")
                 append("- \"focus\" is a short label for the day, e.g. \"Upper Body Push\". Never put the weekday name in it.\n")
                 append("- \"note\" is one short motivating sentence for the day, or an empty string.\n")
@@ -3755,6 +4347,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 COMPLETE LOCAL DATABASE CATALOG (ALL EXERCISES IN LOCAL APP, INCLUDING THE ONES CREATED BY THE USER):
                 $candidateSummary
 
+                FIELD MARKERS: a catalog name followed by [?] lists that exercise's authoritative set fields
+                (reps, weight, addedWeight, holdSeconds, timeSeconds, distanceKm). Use only those fields for
+                that exercise. A name with no marker uses its classification defaults.
+
                 CRITICAL PARSING RULES:
                 1. GIBBERISH / UNREADABLE CHECK:
                    - If the text is pure gibberish (e.g. keyboard mashing like "asdfghjkl", random unreadable characters, meaningless noise, or text that has nothing to do with physical exercises, movements, or training), you MUST set "is_gibberish": true and explain why in "error_reason".
@@ -3777,7 +4373,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                       - "target": String (primary muscle worked, e.g. "Pectorals", "Lats", "Abs", "Quadriceps")
                       - "secondaryMuscles": array of strings (synergist muscles, e.g. ["Triceps", "Shoulders"])
                       - "instructions": String (REQUIRED: 2 to 4 short sentences, one per step, written as coaching cues. Say how to set up, how to move through the rep, and what not to do. Separate the steps with " | ", e.g. "Set the bar on your upper back and brace your core. | Squat to parallel while keeping your heels down. | Drive up without letting your knees cave in.". NEVER leave this empty, blank or null.)
-                     - "exerciseType": String (must strictly be one of: "STANDARD_WEIGHT", "ADDED_WEIGHT", "PURE_BODYWEIGHT")
+                     - "exerciseType": String (must strictly be one of: "STANDARD_WEIGHT", "ADDED_WEIGHT", "PURE_BODYWEIGHT", "CARDIO")
+                      - "supportedFields": optional array of the set fields this exercise records, from: "reps", "weight", "addedWeight", "holdSeconds", "timeSeconds", "distanceKm". Omit to use the classification defaults. Never combine "weight" with "addedWeight", or "holdSeconds" with "timeSeconds".
                      - "equipment": String (e.g. "Barbell", "Dumbbell", "Cable", "Bodyweight", "Resistance Band", "Pull-up Bar", "Rings")
                      - "description": String (concise description)
                    - In the "exercises" list, use that exact same name for the newly created exercise.
@@ -3814,7 +4411,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                       "sets": 3,
                       "reps": 10,
                       "weight": 0.0,
+                      "addedWeight": 0.0,
                       "holdSeconds": 0,
+                      "distanceKm": 0.0,
                       "prescription": "3 sets x 10 reps",
                       "day": 1,
                       "dayTitle": "Day 1"
@@ -3849,24 +4448,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             val name = obj.optString("name").trim()
                             if (name.isBlank() || existingByName.containsKey(name.lowercase())) continue
 
-                            val category = obj.optString("category", "Calisthenics")
-                            val validCategory = if (MuscleCategory.ALL.contains(category)) category else "Calisthenics"
-                            val type = obj.optString("exerciseType", ExerciseType.STANDARD_WEIGHT)
-                            val validType = when (type) {
-                                ExerciseType.ADDED_WEIGHT -> ExerciseType.ADDED_WEIGHT
-                                ExerciseType.PURE_BODYWEIGHT -> ExerciseType.PURE_BODYWEIGHT
-                                else -> ExerciseType.STANDARD_WEIGHT
-                            }
-                            val equipment = obj.optString("equipment", "Bodyweight")
-                            val desc = obj.optString("description", "")
-
-                            val newEx = Exercise(
-                                name = name,
-                                category = validCategory,
-                                exerciseType = validType,
-                                equipment = equipment,
-                                description = desc
-                            )
+                            // The same validated factory the routine tools use: it keeps the
+                            // model's body part, target, muscles, instructions and explicit
+                            // supported fields instead of rebuilding a bare row and losing them.
+                            val newEx = AiExerciseFactory.fromJsonObject(obj, fallbackName = name)
+                                ?: continue
                             val insertedId = insertCustomExercise(newEx)
                             val created = newEx.copy(id = insertedId)
                             newlyCreatedExercises.add(created)
@@ -3899,9 +4485,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 val fallbackEx = Exercise(
                                     name = name,
                                     category = "Calisthenics",
+                                    bodyPart = ExerciseSchema.categoryToBodyPart("Calisthenics"),
                                     exerciseType = ExerciseType.STANDARD_WEIGHT,
                                     equipment = "Bodyweight",
-                                    description = "Imported custom exercise"
+                                    description = "Imported custom exercise",
+                                    supportedFields = ExerciseFieldCatalog.serialize(
+                                        ExerciseFieldCatalog.defaultsForType(
+                                            ExerciseType.STANDARD_WEIGHT
+                                        )
+                                    )
                                 )
                                 val id = insertCustomExercise(fallbackEx)
                                 val created = fallbackEx.copy(id = id)
@@ -3929,16 +4521,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val goal = parsed.routineGoal.ifBlank { "Custom Workout" }
                     val daysCount = parsed.trainingDays.coerceAtLeast(1)
 
-                    val savedRoutine = SavedRoutine(
+                    val createdPlan = planRepository.createPlanFromItems(
                         name = finalTitle,
-                        description = "AI Parsed Program ÔÇó ${routineItems.size} exercises ÔÇó $daysCount training day${if (daysCount > 1) "s" else ""}",
-                        daysPerWeek = daysCount,
+                        description = "AI Parsed Program: ${routineItems.size} exercises, $daysCount training day${if (daysCount > 1) "s" else ""}",
                         goal = goal,
-                        exercisesJson = RoutineParser.serializeExercises(routineItems)
+                        items = routineItems
                     )
-                    val routineId = repository.saveRoutine(savedRoutine)
+                    val firstId = createdPlan.routineIds.firstOrNull()
+                        ?: error("The parsed plan contains no Routine.")
+                    val savedRoutine = planRepository.getRoutine(firstId)
+                        ?: error("The saved Routine could not be read back.")
                     _unstructuredParseState.value = UnstructuredParseState.Success(
-                        routine = savedRoutine.copy(id = routineId),
+                        routine = savedRoutine,
                         newExercisesCreated = newlyCreatedExercises,
                         exerciseCount = routineItems.size
                     )
@@ -3970,16 +4564,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveCustomPromptRoutine(routine: SavedRoutine, onSaved: ((Long) -> Unit)? = null) {
         viewModelScope.launch(Dispatchers.IO) {
-            val id = repository.saveRoutine(routine)
+            val items = RoutineParser.parseExercises(
+                routine.exercisesJson,
+                allExercises.value,
+                weekStartsOnMonday = weekStartsOnMonday()
+            )
+            val created = planRepository.createPlanFromItems(
+                name = routine.name,
+                description = routine.description,
+                goal = routine.goal,
+                items = items
+            )
+            val firstId = created.routineIds.firstOrNull()
+                ?: error("The generated plan contains no Routine.")
+            val first = planRepository.getRoutine(firstId) ?: routine.copy(id = firstId)
             withContext(Dispatchers.Main) {
                 val current = _customRoutinePromptState.value
                 if (current is CustomRoutinePromptState.Success) {
                     _customRoutinePromptState.value = current.copy(
-                        routine = routine.copy(id = id),
+                        routine = first,
                         isSaved = true
                     )
                 }
-                onSaved?.invoke(id)
+                onSaved?.invoke(firstId)
             }
         }
     }
@@ -4032,6 +4639,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 COMPLETE LOCAL DATABASE CATALOG (ALL EXERCISES IN LOCAL APP, INCLUDING THE ONES CREATED BY THE USER):
                 $candidateSummary
 
+                FIELD MARKERS: a catalog name followed by [?] lists that exercise's authoritative set fields
+                (reps, weight, addedWeight, holdSeconds, timeSeconds, distanceKm). Use only those fields for
+                that exercise. A name with no marker uses its classification defaults.
+
                 CRITICAL ROUTINE GENERATION & FORMATTING RULES:
                 1. GIBBERISH / VAGUE REQUEST VALIDATION:
                    - If the user's prompt is pure gibberish (e.g. keyboard mashing like "asdfghjkl", random unreadable characters, meaningless noise, or text that has nothing to do with physical exercises, movements, fitness, or workout routines), you MUST set "is_valid_request": false and explain why in "error_reason".
@@ -4052,7 +4663,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                       - "target": String (primary muscle worked, e.g. "Pectorals", "Lats", "Abs", "Quadriceps")
                       - "secondaryMuscles": array of strings (synergist muscles, e.g. ["Triceps", "Shoulders"])
                       - "instructions": String (REQUIRED: 2 to 4 short sentences, one per step, written as coaching cues. Say how to set up, how to move through the rep, and what not to do. Separate the steps with " | ", e.g. "Set the bar on your upper back and brace your core. | Squat to parallel while keeping your heels down. | Drive up without letting your knees cave in.". NEVER leave this empty, blank or null.)
-                     - "exerciseType": String (must strictly be one of: "STANDARD_WEIGHT", "ADDED_WEIGHT", "PURE_BODYWEIGHT")
+                     - "exerciseType": String (must strictly be one of: "STANDARD_WEIGHT", "ADDED_WEIGHT", "PURE_BODYWEIGHT", "CARDIO")
+                      - "supportedFields": optional array of the set fields this exercise records, from: "reps", "weight", "addedWeight", "holdSeconds", "timeSeconds", "distanceKm". Omit to use the classification defaults. Never combine "weight" with "addedWeight", or "holdSeconds" with "timeSeconds".
                      - "equipment": String (e.g. "Barbell", "Dumbbell", "Cable", "Bodyweight", "Resistance Band", "Pull-up Bar", "Rings")
                      - "description": String (concise biomechanical coaching cue or description)
                    - In the "exercises" list, use that exact same name for the newly created exercise.
@@ -4096,7 +4708,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                           "sets": 4,
                           "reps": 8,
                           "weight": 0.0,
+                          "addedWeight": 0.0,
                           "holdSeconds": 0,
+                          "distanceKm": 0.0,
                           "prescription": "4 sets x 8 reps"
                         }
                       ]
@@ -4132,24 +4746,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             val name = obj.optString("name").trim()
                             if (name.isBlank() || existingByName.containsKey(name.lowercase())) continue
 
-                            val category = obj.optString("category", "Calisthenics")
-                            val validCategory = if (MuscleCategory.ALL.contains(category)) category else "Calisthenics"
-                            val type = obj.optString("exerciseType", ExerciseType.STANDARD_WEIGHT)
-                            val validType = when (type) {
-                                ExerciseType.ADDED_WEIGHT -> ExerciseType.ADDED_WEIGHT
-                                ExerciseType.PURE_BODYWEIGHT -> ExerciseType.PURE_BODYWEIGHT
-                                else -> ExerciseType.STANDARD_WEIGHT
-                            }
-                            val equipment = obj.optString("equipment", "Bodyweight")
-                            val desc = obj.optString("description", "AI registered exercise")
-
-                            val newEx = Exercise(
-                                name = name,
-                                category = validCategory,
-                                exerciseType = validType,
-                                equipment = equipment,
-                                description = desc
-                            )
+                            val newEx = AiExerciseFactory.fromJsonObject(obj, fallbackName = name)
+                                ?: continue
                             val insertedId = insertCustomExercise(newEx)
                             val created = newEx.copy(id = insertedId)
                             newlyCreatedExercises.add(created)
@@ -4169,9 +4767,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 val fallbackEx = Exercise(
                                     name = name,
                                     category = "Calisthenics",
+                                    bodyPart = ExerciseSchema.categoryToBodyPart("Calisthenics"),
                                     exerciseType = ExerciseType.STANDARD_WEIGHT,
                                     equipment = "Bodyweight",
-                                    description = "Imported custom exercise"
+                                    description = "Imported custom exercise",
+                                    supportedFields = ExerciseFieldCatalog.serialize(
+                                        ExerciseFieldCatalog.defaultsForType(
+                                            ExerciseType.STANDARD_WEIGHT
+                                        )
+                                    )
                                 )
                                 val id = insertCustomExercise(fallbackEx)
                                 val created = fallbackEx.copy(id = id)

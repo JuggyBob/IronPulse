@@ -61,6 +61,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.Exercise
 import com.example.data.model.ExerciseSchema
+import com.example.data.model.ExerciseField
+import com.example.data.model.ExerciseFieldCatalog
 import com.example.data.model.ExerciseType
 import com.example.data.seed.toJsonArray
 import com.example.ui.components.AnimatedDropdownField
@@ -115,6 +117,10 @@ fun ExerciseEditorDialog(
     var name by remember { mutableStateOf(exercise.name) }
     var category by remember { mutableStateOf(exercise.category) }
     var type by remember { mutableStateOf(exercise.exerciseType) }
+    var supportedFields by remember { mutableStateOf(exercise.exerciseFields) }
+    // A non-empty stored configuration is an explicit athlete/library choice. Until they touch a
+    // field chip, changing the type only changes the suggestion.
+    var fieldsCustomized by remember { mutableStateOf(exercise.supportedFields.isNotBlank()) }
     var equipment by remember { mutableStateOf(exercise.equipment) }
     // Old library rows can still carry the dataset's lower case spelling until the reseed touches
     // them; canonicalising here means the dropdown shows the selected option even for those rows.
@@ -142,10 +148,6 @@ fun ExerciseEditorDialog(
     // vanishing the instant the athlete presses Save: a dialog that disappears gives no proof the
     // change landed, and this one holds fields the athlete typed.
     var saved by remember { mutableStateOf(false) }
-
-    // The fields that follow from the type, so the athlete sees the consequence of the change while
-    // they are making it rather than after they have saved.
-    val previewFields = remember(type) { MusclePartResolver.trackedFields(type) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -221,7 +223,7 @@ fun ExerciseEditorDialog(
                 // The whole reason this screen exists: the type decides which fields the logging
                 // screen offers, and a wrong one is what made a run ask for barbell weight.
                 EditorSectionLabel("EXERCISE TYPE")
-                EditorSectionHint("This chooses the fields you log: ${previewFields.joinToString(" • ")}")
+                EditorSectionHint("Classification and badge. Supported input fields are configured separately below.")
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     ExerciseType.ALL.forEach { option ->
                         val isSelected = type == option
@@ -243,7 +245,12 @@ fun ExerciseEditorDialog(
                                     if (isSelected) accent else DarkBorder,
                                     RoundedCornerShape(10.dp)
                                 )
-                                .clickable { type = option }
+                                .clickable {
+                                    type = option
+                                    if (!fieldsCustomized) {
+                                        supportedFields = suggestedFields(option)
+                                    }
+                                }
                                 .padding(horizontal = 10.dp, vertical = 8.dp)
                                 .testTag("exercise_editor_type_$option"),
                             verticalAlignment = Alignment.CenterVertically,
@@ -274,6 +281,22 @@ fun ExerciseEditorDialog(
                         }
                     }
                 }
+
+                ExerciseFieldSelector(
+                    selected = supportedFields,
+                    onToggle = { field ->
+                        fieldsCustomized = true
+                        supportedFields = if (field in supportedFields) {
+                            if (supportedFields.size > 1) supportedFields - field else supportedFields
+                        } else {
+                            supportedFields + field
+                        }
+                    },
+                    onUseTypeDefaults = {
+                        fieldsCustomized = false
+                        supportedFields = suggestedFields(type)
+                    }
+                )
 
                 // ---------------- Equipment ----------------
                 // A dropdown, matching the create screen. Free text made it far too easy to type a
@@ -422,7 +445,10 @@ fun ExerciseEditorDialog(
                         if (isLibrary) {
                             confirmLibraryEdit = true
                         } else {
-                            onSave(buildEditedExercise(exercise, name, category, type, equipment, bodyPart, target, secondary, guidance))
+                            onSave(buildEditedExercise(
+                            exercise, name, category, type, equipment, bodyPart, target,
+                            secondary, guidance, supportedFields
+                        ))
                             saved = true
                         }
                     },
@@ -461,7 +487,8 @@ fun ExerciseEditorDialog(
                 confirmLibraryEdit = false
                 onSave(
                     buildEditedExercise(
-                        exercise, name, category, type, equipment, bodyPart, target, secondary, guidance
+                        exercise, name, category, type, equipment, bodyPart, target,
+                        secondary, guidance, supportedFields
                     )
                 )
                 saved = true
@@ -619,11 +646,15 @@ private fun buildEditedExercise(
     bodyPart: String,
     target: String,
     secondary: List<String>,
-    guidance: String
+    guidance: String,
+    supportedFields: List<ExerciseField>
 ): Exercise = original.copy(
     name = name.trim(),
     category = category,
     exerciseType = type,
+    supportedFields = ExerciseFieldCatalog.serialize(
+        ExerciseFieldCatalog.safeExplicit(supportedFields, type)
+    ),
     equipment = equipment.trim().ifBlank { "Bodyweight" },
     bodyPart = bodyPart.trim(),
     target = target.trim(),
@@ -645,10 +676,10 @@ internal fun exerciseTypeLabel(type: String): String = when (type) {
 
 /** What this type logs, so the consequence of the choice is visible before saving. */
 private fun exerciseTypeFieldSummary(type: String): String = when (type) {
-    ExerciseType.ADDED_WEIGHT -> "Sets • Reps • Added weight (+kg / +lbs)"
-    ExerciseType.PURE_BODYWEIGHT -> "Sets • Reps • Hold (seconds)"
-    ExerciseType.CARDIO -> "Sets • Time (minutes) • Distance"
-    else -> "Sets • Reps • Weight"
+    ExerciseType.ADDED_WEIGHT -> "Defaults: Added weight + Reps"
+    ExerciseType.PURE_BODYWEIGHT -> "Defaults: Reps + Hold"
+    ExerciseType.CARDIO -> "Defaults: Time + Distance"
+    else -> "Defaults: Weight + Reps"
 }
 
 @Composable

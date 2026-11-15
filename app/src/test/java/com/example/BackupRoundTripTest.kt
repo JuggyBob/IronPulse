@@ -45,6 +45,8 @@ class BackupRoundTripTest {
         assertEquals(original.sets, restored.sets)
         assertEquals(original.routines, restored.routines)
         assertEquals(original.scheduleDays, restored.scheduleDays)
+        assertEquals(original.schedules, restored.schedules)
+        assertEquals(original.scheduleSlots, restored.scheduleSlots)
         assertEquals(original.bodyWeightLogs, restored.bodyWeightLogs)
         assertEquals(original.chatSessions, restored.chatSessions)
         assertEquals(original.chatMessages, restored.chatMessages)
@@ -73,4 +75,37 @@ class BackupRoundTripTest {
         assertEquals(null, restored.widgetPhoto)
         assertFalse(restored.dashboard.photoPresent)
     }
+    @Test
+    fun `archive round trip preserves drop-set parent links and order`() {
+        val original = BackupTestFixtures.sampleSnapshot()
+        val parent = original.sets.first().copy(
+            id = 998L,
+            setUid = "round-trip-main",
+            parentSetUid = null,
+            dropIndex = 0
+        )
+        val child = parent.copy(
+            id = 999L,
+            setUid = "round-trip-child",
+            parentSetUid = "round-trip-main",
+            dropIndex = 1,
+            weight = 30.0,
+            reps = 8
+        )
+        val snapshot = original.copy(sets = original.sets + listOf(parent, child))
+        val file = temp.newFile("drop-sets.ironpulse")
+        BackupTestFixtures.writeArchive(snapshot, file)
+
+        val restored = BackupMapper.fromPayload(BackupArchiveReader(file).read())
+        BackupValidator.validate(restored)
+
+        val restoredParent = restored.sets.single { it.id == parent.id }
+        val restoredChild = restored.sets.single { it.id == 999L }
+        assertEquals("round-trip-main", restoredParent.setUid)
+        org.junit.Assert.assertNull(restoredParent.parentSetUid)
+        assertEquals("round-trip-main", restoredChild.parentSetUid)
+        assertEquals(1, restoredChild.dropIndex)
+        assertEquals(30.0, restoredChild.weight, 0.0)
+    }
+
 }

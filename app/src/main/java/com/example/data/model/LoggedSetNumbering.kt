@@ -37,4 +37,24 @@ object LoggedSetNumbering {
             }
         return positions
     }
+
+    /**
+     * The same day-local numbering, but only main sets receive a top-level number.
+     *
+     * Drop sets are children of their parent and carry a local D-number instead. Counting them in
+     * this map made Progress show "Set 2, D1, D2, Set 5, Set 6" for three main sets.
+     */
+    fun mainSetPositionsBySetId(sets: List<LoggedSet>): Map<Long, Int> =
+        positionsBySetId(sets.filter { !it.isDropSet })
+
+    /**
+     * Main-set numbering per workout session, not per calendar day.
+     *
+     * Two workouts on the same date each restart at set 1 and keep their own drop branches. This
+     * is the numbering the Progress cards show.
+     */
+    fun mainSetPositionsBySession(sets: List<LoggedSet>): Map<Long, Int> =
+        sets.groupBy { it.sessionId }
+            .flatMap { (_, sessionSets) -> mainSetPositionsBySetId(sessionSets).entries }
+            .associate { it.key to it.value }
 }

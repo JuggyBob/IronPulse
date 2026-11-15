@@ -67,6 +67,14 @@ class AiRoutineScheduleTest {
             equipment = "Barbell"
         ),
         Exercise(
+            id = 8,
+            name = "Treadmill Run",
+            category = "Calisthenics",
+            exerciseType = ExerciseType.CARDIO,
+            equipment = "Treadmill",
+            supportedFields = "timeSeconds,distanceKm"
+        ),
+        Exercise(
             id = 7,
             name = "Chest Dip",
             category = "Chest",
@@ -466,5 +474,31 @@ class AiRoutineScheduleTest {
         assertEquals("Push Pull Legs", parsed.routineName)
         assertEquals("Hypertrophy", parsed.routineGoal)
         assertNotNull(parsed.days.firstOrNull { it.weekday == Weekday.MONDAY })
+    }
+
+    @Test
+    fun `cardio distance is carried into the main set and its drop set`() {
+        val json = """
+            {"routine_name": "Cardio",
+             "days": [
+               {"weekday": "Monday", "exercises": [
+                 {"name": "Treadmill Run", "sets": 1, "reps": 0, "holdSeconds": 1800,
+                  "distanceKm": 5.0, "prescription": "1 set x 30 min / 5 km",
+                  "dropSets": [
+                    {"mainSet": 1, "drop": 1, "reps": 0, "holdSeconds": 600,
+                     "weightKg": 0.0, "addedWeightKg": 0.0, "distanceKm": 1.0}
+                  ]}
+               ]}
+             ]}
+        """.trimIndent()
+
+        val parsed = parse(json)
+        assertTrue(parsed.isValid)
+        val item = parsed.days.first { !it.isRestDay }.exercises.single()
+        assertEquals(1800, item.targetHoldSeconds)
+        assertEquals(5.0, item.targetDistanceKm, 0.001)
+        assertEquals(1, item.dropSets.size)
+        assertEquals(600, item.dropSets.single().targetHoldSeconds)
+        assertEquals(1.0, item.dropSets.single().targetDistanceKm, 0.001)
     }
 }

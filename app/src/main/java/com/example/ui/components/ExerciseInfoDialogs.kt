@@ -3,6 +3,7 @@ package com.example.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,9 +27,13 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -275,7 +280,12 @@ fun MuscleSelectorDialog(
 fun ExerciseDetailDialog(
     exercise: Exercise,
     unit: String,
-    onAddSet: () -> Unit,
+    /**
+     * Null makes this a read-only detail sheet: the routine editor opens it to inspect an exercise,
+     * where adding a live set is not what the button would mean.
+     */
+    onAddSet: (() -> Unit)?,
+    addLabel: String = "Add Set",
     onDismiss: () -> Unit,
     /** Drives the "Autoplay exercise demos" setting. See [ExerciseGif]. */
     autoplayDemos: Boolean = true,
@@ -293,13 +303,17 @@ fun ExerciseDetailDialog(
      * and an athlete who can see the mistake has to be able to fix it; the editor itself shows the
      * warning before anything is written. See [ExerciseEditorDialog].
      */
-    onEdit: (() -> Unit)? = null
+    onEdit: (() -> Unit)? = null,
+    /** The exercise's saved default rest, shown under Targets when [onDefaultRestChange] exists. */
+    defaultRestSeconds: Int = 0,
+    /** Persists a new default rest for this exercise, in seconds; 0 turns it off. */
+    onDefaultRestChange: ((Int) -> Unit)? = null
 ) {
     val muscle = remember(exercise.id, exercise.category, exercise.equipment, exercise.name) {
         MusclePartResolver.resolve(exercise)
     }
-    val fields = remember(exercise.exerciseType) {
-        MusclePartResolver.trackedFields(exercise.exerciseType)
+    val fields = remember(exercise.supportedFields, exercise.exerciseType) {
+        MusclePartResolver.trackedFields(exercise)
     }
 
     Dialog(
@@ -397,11 +411,13 @@ fun ExerciseDetailDialog(
                         text = when (exercise.exerciseType) {
                             ExerciseType.ADDED_WEIGHT -> "Added weight"
                             ExerciseType.PURE_BODYWEIGHT -> "Bodyweight"
+                            ExerciseType.CARDIO -> "Cardio"
                             else -> "Standard weight"
                         },
                         color = when (exercise.exerciseType) {
                             ExerciseType.ADDED_WEIGHT -> CoralOrange
                             ExerciseType.PURE_BODYWEIGHT -> MintGreen
+                            ExerciseType.CARDIO -> GoldenAmber
                             else -> ElectricCyan
                         }
                     )
@@ -567,6 +583,15 @@ fun ExerciseDetailDialog(
                     }
                 }
 
+                // ---------------- Default rest ----------------
+                if (onDefaultRestChange != null) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    DefaultRestSection(
+                        seconds = defaultRestSeconds,
+                        onChange = onDefaultRestChange
+                    )
+                }
+
                 // ---------------- Body ----------------
                 Spacer(modifier = Modifier.height(14.dp))
                 SectionTitle("BODY PARTS TRAINED")
@@ -574,29 +599,167 @@ fun ExerciseDetailDialog(
                 MuscleBodyMap(highlighted = muscle, onSelect = null, maxFigureHeight = 230.dp)
 
                 // ---------------- Add set ----------------
-                Spacer(modifier = Modifier.height(16.dp))
-                Button(
-                    onClick = onAddSet,
-                    colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(vertical = 14.dp),
+                // Read-only views (the routine editor) pass null and keep the sheet purely
+                // informational; there is no live workout to add a set to there.
+                if (onAddSet != null) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(
+                        onClick = onAddSet,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MintGreen,
+                            contentColor = OnAccent
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(vertical = 14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .testTag("exercise_detail_add_set_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            tint = OnAccent,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = addLabel,
+                            style = MaterialTheme.typography.titleSmall.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = OnAccent
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The per-exercise rest default, kept next to the exercise's targets rather than in a separate
+ * overflow menu. It belongs to the exercise, not to a routine entry.
+ */
+@Composable
+private fun DefaultRestSection(
+    seconds: Int,
+    onChange: (Int) -> Unit
+) {
+    SectionTitle("DEFAULT REST")
+    Spacer(modifier = Modifier.height(6.dp))
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("exercise_default_rest_section"),
+        color = DarkBg,
+        shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                        .testTag("exercise_detail_add_set_button")
+                        .size(28.dp)
+                        .background(MintGreen.copy(alpha = 0.15f), CircleShape),
+                    contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Add,
+                        imageVector = Icons.Default.Timer,
                         contentDescription = null,
-                        tint = OnAccent,
-                        modifier = Modifier.size(20.dp)
+                        tint = MintGreen,
+                        modifier = Modifier.size(16.dp)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Add Set",
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = OnAccent
+                        text = if (seconds > 0) {
+                            "Rest ${seconds}s after each set"
+                        } else {
+                            "No automatic rest"
+                        },
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = TextWhite
                     )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Used when this exercise starts a quick workout or a new routine. " +
+                            "A saved routine's own rest setting still wins.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = TextMuted,
+                        lineHeight = 15.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            // One row, scrollable horizontally. Wrapping 180s onto a second row left an empty
+            // band above the stepper and made the card unnecessarily tall.
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(0, 30, 60, 90, 120, 180).forEach { preset ->
+                    FilterChip(
+                        selected = seconds == preset,
+                        onClick = { onChange(preset) },
+                        label = {
+                            Text(if (preset == 0) "Off" else "${preset}s")
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MintGreen.copy(alpha = 0.16f),
+                            selectedLabelColor = MintGreen
+                        ),
+                        modifier = Modifier.testTag("exercise_default_rest_preset_$preset")
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "15-second steps",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted
+                )
+                Row(
+                    modifier = Modifier
+                        .background(DarkSurface, RoundedCornerShape(8.dp))
+                        .border(1.dp, DarkBorder, RoundedCornerShape(8.dp)),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = { onChange((seconds - 15).coerceAtLeast(0)) },
+                        modifier = Modifier
+                            .size(32.dp)
+                            .testTag("exercise_default_rest_decrease")
+                    ) {
+                        Text("-", color = TextWhite, fontWeight = FontWeight.Bold)
+                    }
+                    Text(
+                        text = if (seconds > 0) "${seconds}s" else "Off",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                        color = if (seconds > 0) MintGreen else TextMuted,
+                        modifier = Modifier
+                            .width(58.dp)
+                            .testTag("exercise_default_rest_value"),
+                        textAlign = TextAlign.Center
+                    )
+                    IconButton(
+                        onClick = { onChange((seconds + 15).coerceAtMost(3600)) },
+                        modifier = Modifier
+                            .size(32.dp)
+                            .testTag("exercise_default_rest_increase")
+                    ) {
+                        Text("+", color = TextWhite, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }

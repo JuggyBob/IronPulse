@@ -13,6 +13,8 @@ import com.example.data.model.Exercise
 import com.example.data.model.GeminiSummary
 import com.example.data.model.LoggedSet
 import com.example.data.model.SavedRoutine
+import com.example.data.model.ScheduleDaySlot
+import com.example.data.model.SchedulePlan
 import com.example.data.model.ScheduledWorkoutDay
 import com.example.data.model.WorkoutAiSummary
 import com.example.data.model.WorkoutSession
@@ -45,11 +47,16 @@ object BackupMapper {
             ExerciseSectionV1::class.java
         )
         result[BackupFormat.SECTION_WORKOUTS] = BackupJson.toBytes(
-            WorkoutsSectionV1(sessions = snapshot.sessions, sets = snapshot.sets),
-            WorkoutsSectionV1::class.java
+            WorkoutsSectionV2(sessions = snapshot.sessions, sets = snapshot.sets),
+            WorkoutsSectionV2::class.java
         )
         result[BackupFormat.SECTION_ROUTINES] = BackupJson.toBytes(
-            RoutinesSectionV1(routines = snapshot.routines, scheduleDays = snapshot.scheduleDays),
+            RoutinesSectionV1(
+                routines = snapshot.routines,
+                scheduleDays = snapshot.scheduleDays,
+                schedules = snapshot.schedules,
+                scheduleSlots = snapshot.scheduleSlots
+            ),
             RoutinesSectionV1::class.java
         )
         result[BackupFormat.SECTION_PROGRESS] = BackupJson.toBytes(
@@ -84,7 +91,7 @@ object BackupMapper {
         )
         val dashboard = BackupJson.parse(payload.sections.getValue(BackupFormat.SECTION_DASHBOARD), DashboardSectionV1::class.java)
         val exerciseSection = BackupJson.parse(payload.sections.getValue(BackupFormat.SECTION_EXERCISES), ExerciseSectionV1::class.java)
-        val workouts = BackupJson.parse(payload.sections.getValue(BackupFormat.SECTION_WORKOUTS), WorkoutsSectionV1::class.java)
+        val workouts = BackupJson.parse(payload.sections.getValue(BackupFormat.SECTION_WORKOUTS), WorkoutsSectionV2::class.java)
         val routines = BackupJson.parse(payload.sections.getValue(BackupFormat.SECTION_ROUTINES), RoutinesSectionV1::class.java)
         val progress = BackupJson.parse(payload.sections.getValue(BackupFormat.SECTION_PROGRESS), ProgressSectionV1::class.java)
         val ai = BackupJson.parse(payload.sections.getValue(BackupFormat.SECTION_AI), AiSectionV1::class.java)
@@ -126,6 +133,8 @@ object BackupMapper {
             sets = workouts.sets,
             routines = routines.routines,
             scheduleDays = routines.scheduleDays,
+            schedules = routines.schedules,
+            scheduleSlots = routines.scheduleSlots,
             bodyWeightLogs = progress.bodyWeightLogs,
             chatSessions = ai.chatSessions,
             chatMessages = ai.chatMessages,
@@ -152,7 +161,8 @@ object BackupMapper {
         mediaPath = if (exercise.isCustom || exercise.isAiGenerated) "" else exercise.mediaPath,
         sourceId = exercise.sourceId,
         isCustom = exercise.isCustom,
-        isAiGenerated = exercise.isAiGenerated
+        isAiGenerated = exercise.isAiGenerated,
+        supportedFields = exercise.supportedFields
     )
 
     fun exerciseFromDto(dto: ExerciseV1): Exercise = Exercise(
@@ -175,7 +185,8 @@ object BackupMapper {
         customMediaIsVideo = false,
         sourceId = dto.sourceId,
         isCustom = dto.isCustom,
-        isAiGenerated = dto.isAiGenerated
+        isAiGenerated = dto.isAiGenerated,
+        supportedFields = dto.supportedFields
     )
 
     fun sessionToDto(session: WorkoutSession): WorkoutSessionV1 = WorkoutSessionV1(
@@ -187,7 +198,9 @@ object BackupMapper {
         routineId = session.routineId,
         routineWeekday = session.routineWeekday,
         plannedDate = session.plannedDate,
-        plannedDateKey = session.plannedDateKey
+        plannedDateKey = session.plannedDateKey,
+        scheduleId = session.scheduleId,
+        scheduleGoal = session.scheduleGoal
     )
 
     fun sessionFromDto(dto: WorkoutSessionV1): WorkoutSession = WorkoutSession(
@@ -199,10 +212,12 @@ object BackupMapper {
         routineId = dto.routineId,
         routineWeekday = dto.routineWeekday,
         plannedDate = dto.plannedDate,
-        plannedDateKey = dto.plannedDateKey
+        plannedDateKey = dto.plannedDateKey,
+        scheduleId = dto.scheduleId,
+        scheduleGoal = dto.scheduleGoal
     )
 
-    fun setToDto(set: LoggedSet): LoggedSetV1 = LoggedSetV1(
+    fun setToDto(set: LoggedSet): LoggedSetV2 = LoggedSetV2(
         id = set.id,
         sessionId = set.sessionId,
         exerciseId = set.exerciseId,
@@ -216,10 +231,15 @@ object BackupMapper {
         distanceKm = set.distanceKm,
         isCompleted = set.isCompleted,
         timestamp = set.timestamp,
-        bodyWeightKg = set.bodyWeightKg
+        bodyWeightKg = set.bodyWeightKg,
+        isWarmup = set.isWarmup,
+        restSecondsOverride = set.restSecondsOverride,
+        setUid = set.setUid,
+        parentSetUid = set.parentSetUid,
+        dropIndex = set.dropIndex
     )
 
-    fun setFromDto(dto: LoggedSetV1): LoggedSet = LoggedSet(
+    fun setFromDto(dto: LoggedSetV2): LoggedSet = LoggedSet(
         id = dto.id,
         sessionId = dto.sessionId,
         exerciseId = dto.exerciseId,
@@ -233,7 +253,16 @@ object BackupMapper {
         distanceKm = dto.distanceKm,
         isCompleted = dto.isCompleted,
         timestamp = dto.timestamp,
-        bodyWeightKg = dto.bodyWeightKg
+        bodyWeightKg = dto.bodyWeightKg,
+        isWarmup = dto.isWarmup,
+        restSecondsOverride = dto.restSecondsOverride,
+        // A pre-drop-set archive has no UID. Deriving it from the stable row id keeps export and
+        // import comparable, while every genuinely new set already carries its own UUID.
+        setUid = dto.setUid.ifBlank {
+            if (dto.id > 0L) "legacy-${dto.id}" else ""
+        },
+        parentSetUid = dto.parentSetUid?.takeIf { it.isNotBlank() },
+        dropIndex = dto.dropIndex.coerceAtLeast(0)
     )
 
     fun routineToDto(routine: SavedRoutine): SavedRoutineV1 = SavedRoutineV1(
@@ -244,7 +273,8 @@ object BackupMapper {
         goal = routine.goal,
         exercisesJson = routine.exercisesJson,
         createdAt = routine.createdAt,
-        scheduleVersion = routine.scheduleVersion
+        scheduleVersion = routine.scheduleVersion,
+        modelVersion = routine.modelVersion
     )
 
     fun routineFromDto(dto: SavedRoutineV1): SavedRoutine = SavedRoutine(
@@ -255,7 +285,8 @@ object BackupMapper {
         goal = dto.goal,
         exercisesJson = dto.exercisesJson,
         createdAt = dto.createdAt,
-        scheduleVersion = dto.scheduleVersion
+        scheduleVersion = dto.scheduleVersion,
+        modelVersion = dto.modelVersion
     )
 
     fun scheduleDayToDto(day: ScheduledWorkoutDay): ScheduledWorkoutDayV1 = ScheduledWorkoutDayV1(
@@ -276,6 +307,36 @@ object BackupMapper {
         dayTitle = dto.dayTitle,
         exerciseCount = dto.exerciseCount,
         capturedAt = dto.capturedAt
+    )
+
+    fun scheduleToDto(schedule: SchedulePlan): ScheduleV1 = ScheduleV1(
+        id = schedule.id,
+        name = schedule.name,
+        description = schedule.description,
+        goal = schedule.goal,
+        createdAt = schedule.createdAt,
+        legacyRoutineId = schedule.legacyRoutineId
+    )
+
+    fun scheduleFromDto(dto: ScheduleV1): SchedulePlan = SchedulePlan(
+        id = dto.id,
+        name = dto.name,
+        description = dto.description,
+        goal = dto.goal,
+        createdAt = dto.createdAt,
+        legacyRoutineId = dto.legacyRoutineId
+    )
+
+    fun scheduleSlotToDto(slot: ScheduleDaySlot): ScheduleDaySlotV1 = ScheduleDaySlotV1(
+        scheduleId = slot.scheduleId,
+        weekday = slot.weekday,
+        routineId = slot.routineId
+    )
+
+    fun scheduleSlotFromDto(dto: ScheduleDaySlotV1): ScheduleDaySlot = ScheduleDaySlot(
+        scheduleId = dto.scheduleId,
+        weekday = dto.weekday,
+        routineId = dto.routineId
     )
 
     fun weightLogToDto(log: BodyWeightLog): BodyWeightLogV1 = BodyWeightLogV1(

@@ -90,7 +90,8 @@ class FitnessRepository(
             instructions = exercise.instructions,
             bodyPart = exercise.bodyPart,
             target = exercise.target,
-            secondaryMuscles = exercise.secondaryMuscles
+            secondaryMuscles = exercise.secondaryMuscles,
+            supportedFields = exercise.supportedFields
         ) > 0
 
     /**
@@ -115,7 +116,8 @@ class FitnessRepository(
             instructions = exercise.instructions,
             bodyPart = exercise.bodyPart,
             target = exercise.target,
-            secondaryMuscles = exercise.secondaryMuscles
+            secondaryMuscles = exercise.secondaryMuscles,
+            supportedFields = exercise.supportedFields
         ) > 0
 
     /** Restores the shipped library rows from the bundled dataset. Deletes the rows the athlete kept. */
@@ -244,9 +246,12 @@ class FitnessRepository(
     suspend fun saveUserProfile(profile: UserProfile) = userProfileDao.insertOrUpdate(profile)
 
     // Saved Routines
-    fun getAllSavedRoutines(): Flow<List<SavedRoutine>> = savedRoutineDao.getAllRoutines()
+    fun getAllSavedRoutines(): Flow<List<SavedRoutine>> = savedRoutineDao.getUserRoutines()
     suspend fun getSavedRoutineById(id: Long): SavedRoutine? = savedRoutineDao.getRoutineById(id)
-    suspend fun getAllSavedRoutinesOnce(): List<SavedRoutine> = savedRoutineDao.getAllRoutinesOnce()
+
+    /** Replaces a routine in place, preserving its id and every Schedule reference. */
+    suspend fun updateSavedRoutine(routine: SavedRoutine): Long = savedRoutineDao.insertRoutine(routine)
+    suspend fun getAllSavedRoutinesOnce(): List<SavedRoutine> = savedRoutineDao.getUserRoutinesOnce()
     suspend fun saveRoutine(routine: SavedRoutine): Long = savedRoutineDao.insertRoutine(routine)
     suspend fun deleteRoutine(routine: SavedRoutine) = savedRoutineDao.deleteRoutine(routine)
 

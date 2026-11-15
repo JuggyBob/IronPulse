@@ -77,6 +77,25 @@ class LibraryExerciseEditingTest {
     )
 
     @Test
+    fun `an explicit field configuration is persisted and read back`() = runBlocking {
+        val before = libraryExercise()
+        val config = "holdSeconds,addedWeight"
+
+        val wrote = repository().updateLibraryExercise(before.copy(supportedFields = config))
+
+        assertTrue("the field configuration must be written", wrote)
+        val after = db.exerciseDao().getAllExercisesList().first { it.id == before.id }
+        assertEquals(config, after.supportedFields)
+        assertEquals(
+            listOf(
+                com.example.data.model.ExerciseField.HOLD_SECONDS,
+                com.example.data.model.ExerciseField.ADDED_WEIGHT
+            ),
+            after.exerciseFields
+        )
+    }
+
+    @Test
     fun `a library exercise can be retyped without ownership`() = runBlocking {
         val before = libraryExercise()
         // Whichever type it shipped as, the test writes the other one, so it can tell whether the
@@ -357,7 +376,8 @@ class LibraryExerciseEditingTest {
             instructions = "",
             bodyPart = "",
             target = "",
-            secondaryMuscles = "[]"
+            secondaryMuscles = "[]",
+            supportedFields = control.supportedFields
         )
         DatasetSeeder.seed(context, repository().exerciseDaoForReseed())
 

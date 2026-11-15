@@ -582,25 +582,16 @@ fun RestTimerDialog(
                                 val isSelected = totalSelectedSeconds == totalSec
                                 OutlinedButton(
                                     onClick = {
-                                        val targetM = (totalSec / 60).toFloat()
-                                        val targetS = (totalSec % 60).toFloat()
+                                        // A preset is an exact choice, not a scrub. Snap both digits
+                                        // to the target in one state change so the clock cannot roll
+                                        // through an intermediate second, reach 00, and then show 01
+                                        // again. AnimatedContent still animates the single old-to-new
+                                        // digit transition.
                                         animScope.launch {
-                                            minutesAnim.animateTo(
-                                                targetM,
-                                                animationSpec = spring(
-                                                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                                                    stiffness = Spring.StiffnessLow
-                                                )
-                                            )
+                                            minutesAnim.snapTo((totalSec / 60).toFloat())
                                         }
                                         animScope.launch {
-                                            secondsAnim.animateTo(
-                                                targetS,
-                                                animationSpec = spring(
-                                                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                                                    stiffness = Spring.StiffnessLow
-                                                )
-                                            )
+                                            secondsAnim.snapTo((totalSec % 60).toFloat())
                                         }
                                     },
                                     shape = RoundedCornerShape(8.dp),

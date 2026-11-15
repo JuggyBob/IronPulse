@@ -4,8 +4,12 @@
 *.bin
 /build/
 /.gradle/
+/.kotlin/
 /app/build/
 /captures/
+
+# Local agent/QA scratch files
+/.tmp/
 
 # Local release artefacts and backups (never published)
 /apk/

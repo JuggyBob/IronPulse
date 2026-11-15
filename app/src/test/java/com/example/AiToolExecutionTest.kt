@@ -88,7 +88,8 @@ class AiToolExecutionTest {
             bodyPart = "waist",
             target = "abs",
             exerciseType = ExerciseType.PURE_BODYWEIGHT,
-            equipment = "Bodyweight"
+            equipment = "Bodyweight",
+            supportedFields = "holdSeconds,addedWeight"
         )
     )
 
@@ -694,6 +695,57 @@ class AiToolExecutionTest {
                 .getString("instructions")
                 .isNotBlank()
         )
+    }
+
+    @Test
+    fun `routine proposals keep only the fields the exercise supports`() = runBlocking {
+        val result = dispatcher().dispatch(
+            call(
+                AiToolCatalog.PROPOSE_NEW_ROUTINE,
+                """
+                {
+                  "routineName": "Plank Day",
+                  "goal": "Core",
+                  "days": [
+                    {
+                      "weekday": 2,
+                      "focus": "Core",
+                      "exercises": [
+                        {"name": "Plank", "sets": 3, "reps": 8, "weightKg": 40,
+                         "addedWeightKg": 10, "holdSeconds": 90, "distanceKm": 2.0,
+                         "prescription": "3 sets x 8 reps",
+                         "dropSets": [
+                           {"mainSet": 1, "drop": 1, "reps": 6, "weightKg": 20,
+                            "addedWeightKg": 5, "holdSeconds": 60, "distanceKm": 1.0}
+                         ]}
+                      ]
+                    }
+                  ]
+                }
+                """.trimIndent()
+            )
+        )
+
+        assertFalse(result.isError)
+        val exercise = body(result).getJSONObject("proposal")
+            .getJSONArray("days").getJSONObject(0)
+            .getJSONArray("exercises").getJSONObject(0)
+
+        // Plank's explicit fields are hold + added weight. Reps, external weight and distance are
+        // not part of this exercise, so the proposal must not smuggle them into the routine.
+        assertEquals(0, exercise.getInt("reps"))
+        assertEquals(0.0, exercise.getDouble("weightKg"), 0.001)
+        assertEquals(10.0, exercise.getDouble("addedWeightKg"), 0.001)
+        assertEquals(90, exercise.getInt("holdSeconds"))
+        assertEquals(0.0, exercise.getDouble("distanceKm"), 0.001)
+        assertTrue(exercise.getString("prescription").contains("90s"))
+
+        val drop = exercise.getJSONArray("dropSets").getJSONObject(0)
+        assertEquals(0, drop.getInt("reps"))
+        assertEquals(0.0, drop.getDouble("weightKg"), 0.001)
+        assertEquals(5.0, drop.getDouble("addedWeightKg"), 0.001)
+        assertEquals(60, drop.getInt("holdSeconds"))
+        assertEquals(0.0, drop.getDouble("distanceKm"), 0.001)
     }
 
     @Test

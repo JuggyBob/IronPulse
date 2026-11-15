@@ -2,6 +2,8 @@ package com.example.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -32,6 +34,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.wrapContentSize
@@ -60,7 +63,6 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Splitscreen
-import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.AlertDialog
 import com.example.util.ExerciseMediaStore
 import androidx.compose.material3.Button
@@ -118,14 +120,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.Exercise
+import com.example.data.model.ExerciseFieldCatalog
 import com.example.data.model.ExerciseType
 import com.example.data.model.LoggedSet
 import com.example.data.model.WeightUnit
+import com.example.data.model.WorkoutMetrics
 import com.example.data.model.MuscleCategory
 import com.example.ui.components.DayDropdown
+import com.example.ui.components.LocalBottomDockState
 import com.example.ui.components.LocalLiquidGlassEnabled
 import com.example.ui.components.liquidGlass
 import com.example.ui.components.MuscleSelectorDialog
@@ -198,6 +204,7 @@ fun LogWorkoutScreen(
     val allSessions by viewModel.allSessions.collectAsStateWithLifecycle()
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
     val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
+    val exerciseDefaultRests by viewModel.exerciseDefaultRests.collectAsStateWithLifecycle()
     val customExerciseResult by viewModel.customExerciseResult.collectAsStateWithLifecycle()
     // When the workout in progress was last written to disk, for the "auto saved" indicator.
     val lastAutoSaveAt by viewModel.lastAutoSaveAt.collectAsStateWithLifecycle()
@@ -206,7 +213,8 @@ fun LogWorkoutScreen(
     // The dock is an overlay. The quick-workout tray must sit above it, except while the
     // keyboard is open: then the root's imePadding lifts the page and the dock is hidden.
     val keyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-    val dockClearance = if (keyboardOpen) 0.dp else 92.dp
+    val dockState = LocalBottomDockState.current
+    val dockClearance = if (keyboardOpen || !dockState.visible) 0.dp else dockState.topInset
 
     var showCustomExerciseDialog by remember { mutableStateOf(false) }
     var exerciseBeingEdited by remember { mutableStateOf<Exercise?>(null) }
@@ -220,6 +228,9 @@ fun LogWorkoutScreen(
 
     // Whether exercise animations play by themselves (settings page toggle).
     val autoplayDemos by viewModel.autoplayExerciseDemos.collectAsStateWithLifecycle()
+    val materialExpressive3 by viewModel.appSettings
+        .map { it.materialExpressive3 }
+        .collectAsStateWithLifecycle(initialValue = false)
     // The exercise whose media slot is being filled from the gallery picker.
     var pendingMediaExerciseId by remember { mutableStateOf<Long?>(null) }
     // The exercise open in the low level editor, reached from the pen on the detail dialog.
@@ -276,7 +287,9 @@ fun LogWorkoutScreen(
     var pendingQuickWorkoutAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     var autoCollapseJob by remember { mutableStateOf<Job?>(null) }
     var targetScrollExerciseId by remember { mutableLongStateOf(-1L) }
-    var targetScrollTrigger by remember { mutableIntStateOf(0) }
+    var quickWorkoutSelectedExerciseId by rememberSaveable(activeSession?.startTime ?: 0L) {
+        mutableLongStateOf(0L)
+    }
 
     // "Exercise added" slide-in banner. It owns a dedicated job so the tray's own
     // autoCollapseJob?.cancel() calls can never leave the banner stuck on screen.
@@ -284,7 +297,6 @@ fun LogWorkoutScreen(
     var addedBannerJob by remember { mutableStateOf<Job?>(null) }
 
     val coroutineScope = rememberCoroutineScope()
-    val workoutListState = rememberLazyListState()
 
     val safeStartQuickWorkout: () -> Unit = {
         autoCollapseJob?.cancel()
@@ -305,7 +317,6 @@ fun LogWorkoutScreen(
         fun performAdd() {
             viewModel.addExerciseToActiveSession(exercise)
             targetScrollExerciseId = exercise.id
-            targetScrollTrigger++
 
             // The old pop-up (tray sliding up and back down on its own) is gone: adding an exercise
             // no longer moves the bottom tray at all, only the green banner animates in and out.
@@ -856,21 +867,25 @@ fun LogWorkoutScreen(
             val completedSetsCount = activeSets.count { it.isCompleted }
             val progressFraction = if (totalSetsCount > 0) completedSetsCount.toFloat() / totalSetsCount.toFloat() else 0f
 
-            LaunchedEffect(exercisesInSession, targetScrollTrigger) {
-                if (targetScrollExerciseId != -1L && exercisesInSession.isNotEmpty()) {
-                    delay(80)
-                    val exerciseIdx = exercisesInSession.indexOfFirst { it.id == targetScrollExerciseId }
-                    val targetIndex = if (exerciseIdx != -1) exerciseIdx + 1 else exercisesInSession.size
-                    if (targetIndex in 0..exercisesInSession.size) {
-                        workoutListState.animateScrollToItem(targetIndex, scrollOffset = 450)
-                    }
-                }
-            }
+            var trayPresented by remember(workout.startTime) { mutableStateOf(false) }
+            LaunchedEffect(workout.startTime) { trayPresented = true }
 
-            Card(
+            AnimatedVisibility(
+                visible = trayPresented,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = dockClearance)
+                    .padding(bottom = dockClearance),
+                enter = slideInVertically(
+                    animationSpec = tween(260, easing = FastOutSlowInEasing),
+                    initialOffsetY = { it }
+                ) + fadeIn(tween(180)),
+                exit = slideOutVertically(
+                    animationSpec = tween(180, easing = FastOutSlowInEasing),
+                    targetOffsetY = { it }
+                ) + fadeOut(tween(140))
+            ) {
+            Card(
+                modifier = Modifier
                     .fillMaxWidth()
                     .height(animatedTrayHeight)
                     .testTag("quick_workout_tray"),
@@ -1114,112 +1129,51 @@ fun LogWorkoutScreen(
                             trackColor = DarkSurfaceVariant
                         )
 
-                        // Exercises Execution List
-                        LazyColumn(
-                            state = workoutListState,
+                        ActiveWorkoutInterface(
+                            exercises = exercisesInSession,
+                            sets = activeSets,
+                            unit = weightUnit,
+                            workoutKey = workout.startTime,
+                            focusExerciseId = if (targetScrollExerciseId > 0L) {
+                                targetScrollExerciseId
+                            } else {
+                                0L
+                            },
+                            materialExpressive3 = materialExpressive3,
+                            bottomPadding = 8.dp,
+                            compact = true,
+                            allExercises = allExercises,
+                            selectedExerciseId = quickWorkoutSelectedExerciseId.takeIf { it != 0L },
+                            onSelectedExerciseChange = { quickWorkoutSelectedExerciseId = it },
+                            onAddSet = { viewModel.addSetToActiveSession(it) },
+                            onAddDropSet = { viewModel.addDropSetToActiveSession(it) },
+                            onToggleSetComplete = { setToUpdate, completed ->
+                                autoCollapseJob?.cancel()
+                                viewModel.toggleActiveSetCompletion(setToUpdate, completed)
+                                if (!setToUpdate.isCompleted && completed) {
+                                    val rest = WorkoutMetrics.effectiveRestSeconds(setToUpdate, 0)
+                                    if (rest > 0) {
+                                        viewModel.startRestTimer(rest, setToUpdate.exerciseName)
+                                    }
+                                }
+                            },
+                            onUpdateSet = { _, updatedSet ->
+                                autoCollapseJob?.cancel()
+                                viewModel.updateActiveSet(updatedSet)
+                            },
+                            onDeleteSet = { viewModel.deleteActiveSet(it) },
+                            onAddExercise = { exercise ->
+                                viewModel.addExerciseToActiveSession(exercise)
+                                targetScrollExerciseId = exercise.id
+                            },
+                            onRemoveExercise = { viewModel.removeExerciseFromActiveSession(it) },
+                            onRestoreExercise = { viewModel.restoreExerciseToActiveSession(it) },
+                            onMoveExercise = { from, to -> viewModel.moveActiveExercise(from, to) },
+                            onShowDetails = { exerciseShowingDetails = it },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .weight(1f),
-                            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 16.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            item {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = "EXERCISES IN WORKOUT (${exercisesInSession.size})",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = TextMuted
-                                    )
-                                    if (trayState == QuickWorkoutTrayState.PARTIAL) {
-                                        Text(
-                                            text = "Add more from library above ↑",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = ElectricCyan
-                                        )
-                                    }
-                                }
-                            }
-
-                            if (exercisesInSession.isEmpty()) {
-                                item {
-                                    Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        colors = CardDefaults.cardColors(containerColor = DarkBg),
-                                        shape = RoundedCornerShape(12.dp),
-                                        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-                                    ) {
-                                        Column(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(16.dp),
-                                            horizontalAlignment = Alignment.CenterHorizontally
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.FitnessCenter,
-                                                contentDescription = null,
-                                                tint = TextMuted,
-                                                modifier = Modifier.size(32.dp)
-                                            )
-                                            Spacer(modifier = Modifier.height(6.dp))
-                                            Text(
-                                                text = "No exercises added yet",
-                                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                                color = TextWhite
-                                            )
-                                            Spacer(modifier = Modifier.height(2.dp))
-                                            Text(
-                                                text = "Tap '+ Log' on any exercise in the database above to add it to this workout session.",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = TextMuted,
-                                                textAlign = TextAlign.Center
-                                            )
-                                        }
-                                    }
-                                }
-                            } else {
-                                itemsIndexed(
-                                    items = exercisesInSession,
-                                    key = { _, exercise -> exercise.id }
-                                ) { index, exercise ->
-                                    val exerciseSets = activeSets.filter { it.exerciseId == exercise.id }
-                                    RoutineExerciseExecutionCard(
-                                        orderIndex = index + 1,
-                                        exercise = exercise,
-                                        prescription = "", // No yellow target bar
-                                        sets = exerciseSets,
-                                        unit = weightUnit,
-                                        onAddSet = {
-                                            autoCollapseJob?.cancel()
-                                            targetScrollExerciseId = exercise.id
-                                            targetScrollTrigger++
-                                            viewModel.addSetToActiveSession(exercise)
-                                        },
-                                        onUpdateSet = { setIndexInWorkout, updatedSet ->
-                                            autoCollapseJob?.cancel()
-                                            viewModel.updateActiveSet(setIndexInWorkout, updatedSet)
-                                        },
-                                        onDeleteSet = { setIndexInWorkout ->
-                                            autoCollapseJob?.cancel()
-                                            viewModel.deleteActiveSet(setIndexInWorkout)
-                                        },
-                                        allWorkoutSets = activeSets,
-                                        // Tapping the name opens the exercise's details.
-                                        //
-                                        // The quick workout used the same card as the routine workout
-                                        // without passing this, so the name was dead text in one and
-                                        // live in the other. Same component, same behaviour.
-                                        onShowDetails = {
-                                            autoCollapseJob?.cancel()
-                                            exerciseShowingDetails = exercise
-                                        }
-                                    )
-                                }
-                            }
-                        }
+                                .weight(1f)
+                        )
 
                         // Small button on the lower left (right on top of the number of sets completed)
                         RestTimerDockedButton(
@@ -1240,7 +1194,10 @@ fun LogWorkoutScreen(
                                             enabled = true,
                                             tint = MintGreen,
                                             cornerRadius = 12.dp,
-                                            elevation = 12.dp
+                                            elevation = 12.dp,
+                                            // Match the Routine action bar: a single translucent
+                                            // glass tone, not the old top-lit white gradient.
+                                            uniformSurface = true
                                         )
                                     } else {
                                         Modifier
@@ -1315,6 +1272,7 @@ fun LogWorkoutScreen(
                         }
                     }
                 }
+            }
             }
         }
 
@@ -1649,6 +1607,10 @@ fun LogWorkoutScreen(
                 }
             } else {
                 null
+            },
+            defaultRestSeconds = exerciseDefaultRests[liveDetail.id] ?: 0,
+            onDefaultRestChange = { seconds ->
+                viewModel.setExerciseDefaultRest(liveDetail.id, seconds)
             }
         )
     }
@@ -1701,11 +1663,15 @@ fun LogWorkoutScreen(
             existingExercise = editing,
             prefillName = if (editing == null) prefillCustomExerciseName else "",
             findSimilar = { candidateName -> viewModel.findSimilarExercise(candidateName, editing?.id ?: 0L) },
-            onSave = { name, category, equipment, type, description ->
+            onSave = { name, category, equipment, type, description, supportedFields ->
                 if (editing == null) {
-                    viewModel.createCustomExercise(name, category, equipment, type, description)
+                    viewModel.createCustomExercise(
+                        name, category, equipment, type, description, supportedFields
+                    )
                 } else {
-                    viewModel.updateCustomExercise(editing.id, name, category, equipment, type, description)
+                    viewModel.updateCustomExercise(
+                        editing.id, name, category, equipment, type, description, supportedFields
+                    )
                 }
             },
             onDismiss = {
@@ -1848,13 +1814,10 @@ fun ExerciseCard(
         }
     }
 
-    val fieldsSummary = remember(exercise.exerciseType, unit) {
-        when (exercise.exerciseType) {
-            ExerciseType.STANDARD_WEIGHT -> "Fields: Sets • Reps • Weight ($unit)"
-            ExerciseType.ADDED_WEIGHT -> "Fields: Reps • Added Weight (+$unit)"
-            ExerciseType.PURE_BODYWEIGHT -> "Fields: Reps / Hold (seconds)"
-            ExerciseType.CARDIO -> "Fields: Time • Distance (km)"
-            else -> "Fields: Sets • Reps"
+    val fieldsSummary = remember(exercise.supportedFields, exercise.exerciseType, unit) {
+        val suffix = WeightUnit.fromLabel(unit)
+        "Fields: Sets  " + exercise.exerciseFields.joinToString("  ") {
+            ExerciseFieldCatalog.shortLabel(it, suffix)
         }
     }
 
@@ -1928,6 +1891,7 @@ fun ExerciseCard(
                         color = badgeColor
                     )
                 }
+
             }
 
             // Ownership marker: only the exercises the user created or the AI registered can be
@@ -2019,13 +1983,15 @@ fun ExerciseCard(
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = fieldsSummary,
                     style = MaterialTheme.typography.labelSmall,
-                    color = TextMuted
+                    color = TextMuted,
+                    softWrap = true,
+                    modifier = Modifier.weight(1f)
                 )
 
                 Button(
@@ -2033,7 +1999,11 @@ fun ExerciseCard(
                     colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant),
                     border = ExerciseButtonBorder,
                     shape = ExerciseButtonShape,
-                    contentPadding = ExerciseButtonPadding
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    modifier = Modifier
+                        .widthIn(min = 112.dp)
+                        .heightIn(min = 44.dp)
+                        .testTag("exercise_add_set_${exercise.id}")
                 ) {
                     Icon(
                         imageVector = Icons.Default.Add,
@@ -2045,241 +2015,12 @@ fun ExerciseCard(
                     Text(
                         text = "Add Set",
                         style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                        color = ElectricCyan
+                        color = ElectricCyan,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
             }
         }
     }
 }
-
-@Composable
-fun ActiveSetRow(
-    setIndex: Int,
-    set: LoggedSet,
-    unit: String,
-    onUpdateSet: (LoggedSet) -> Unit,
-    onDeleteSet: () -> Unit
-) {
-    // The label arrives as a string; the fields below need the real unit to convert with
-    val weightUnit = WeightUnit.fromLabel(unit)
-    val fieldColors = activeFieldColors()
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("active_set_row_$setIndex"),
-        colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
-        shape = RoundedCornerShape(12.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Set ${set.setNumber}: ${set.exerciseName}",
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                        color = TextWhite
-                    )
-                }
-
-                IconButton(
-                    onClick = onDeleteSet,
-                    modifier = Modifier.size(24.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Delete Set",
-                        tint = FireRed.copy(alpha = 0.8f),
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Dynamic Fields according to exerciseType
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                when (set.exerciseType) {
-                    ExerciseType.STANDARD_WEIGHT -> {
-                        // Standard Weight: the field speaks the athlete's unit, the set stores kg
-                        WeightInputField(
-                            label = "Weight ($unit)",
-                            kgValue = set.weight,
-                            unit = weightUnit,
-                            onKgChanged = { kg -> onUpdateSet(set.copy(weight = kg)) },
-                            modifier = Modifier.weight(1f),
-                            testTag = "set_weight_input_${set.id}"
-                        )
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Reps", style = MaterialTheme.typography.labelSmall, color = TextMuted)
-                            OutlinedTextField(
-                                value = if (set.reps == 0) "" else set.reps.toString(),
-                                onValueChange = { newVal ->
-                                    val parsed = newVal.toIntOrNull() ?: 0
-                                    onUpdateSet(set.copy(reps = parsed))
-                                },
-                                placeholder = { Text("0", color = TextMuted) },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = fieldColors
-                            )
-                        }
-                    }
-
-                    ExerciseType.ADDED_WEIGHT -> {
-                        // Added Weight / Calisthenics: the field speaks the athlete's unit, the set
-                        // stores kilograms
-                        WeightInputField(
-                            label = "Added Wt (+$unit)",
-                            kgValue = set.addedWeight,
-                            unit = weightUnit,
-                            onKgChanged = { kg -> onUpdateSet(set.copy(addedWeight = kg)) },
-                            labelColor = CoralOrange,
-                            placeholder = "+0",
-                            modifier = Modifier.weight(1f),
-                            testTag = "set_added_weight_input_${set.id}"
-                        )
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Reps", style = MaterialTheme.typography.labelSmall, color = TextMuted)
-                            OutlinedTextField(
-                                value = if (set.reps == 0) "" else set.reps.toString(),
-                                onValueChange = { newVal ->
-                                    val parsed = newVal.toIntOrNull() ?: 0
-                                    onUpdateSet(set.copy(reps = parsed))
-                                },
-                                placeholder = { Text("0", color = TextMuted) },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = fieldColors
-                            )
-                        }
-                    }
-
-                    ExerciseType.CARDIO -> {
-                        // Distance work: a duration and a distance. There is no weight and no rep
-                        // count here, because a 5 km run has neither, and asking for them produced
-                        // the "Set 1: Run, 80 kg x 8" nonsense the athlete reported.
-                        val distanceLabel = "Distance (${DistanceFormat.suffixFor(weightUnit)})"
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Time (min)", style = MaterialTheme.typography.labelSmall, color = GoldenAmber)
-                            OutlinedTextField(
-                                value = if (set.holdDurationSeconds == 0) {
-                                    ""
-                                } else {
-                                    // Stored as seconds; a run is recorded in minutes.
-                                    (set.holdDurationSeconds / 60).toString()
-                                },
-                                onValueChange = { newVal ->
-                                    val minutes = newVal.toIntOrNull() ?: 0
-                                    onUpdateSet(set.copy(holdDurationSeconds = minutes * 60))
-                                },
-                                placeholder = { Text("0", color = TextMuted) },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = fieldColors
-                            )
-                        }
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                distanceLabel,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextMuted
-                            )
-                            OutlinedTextField(
-                                value = DistanceFormat.format(set.distanceKm, weightUnit),
-                                onValueChange = { newVal ->
-                                    val parsed = DistanceFormat.toKm(newVal, weightUnit)
-                                    onUpdateSet(set.copy(distanceKm = parsed))
-                                },
-                                placeholder = { Text("0.0", color = TextMuted) },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = fieldColors
-                            )
-                        }
-                    }
-
-                    ExerciseType.PURE_BODYWEIGHT -> {
-                        // Pure Bodyweight: Reps or Hold Duration (seconds)
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Reps", style = MaterialTheme.typography.labelSmall, color = MintGreen)
-                            OutlinedTextField(
-                                value = if (set.reps == 0) "" else set.reps.toString(),
-                                onValueChange = { newVal ->
-                                    val parsed = newVal.toIntOrNull() ?: 0
-                                    onUpdateSet(set.copy(reps = parsed))
-                                },
-                                placeholder = { Text("0", color = TextMuted) },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = fieldColors
-                            )
-                        }
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Hold (seconds)", style = MaterialTheme.typography.labelSmall, color = TextMuted)
-                            OutlinedTextField(
-                                value = if (set.holdDurationSeconds == 0) "" else set.holdDurationSeconds.toString(),
-                                onValueChange = { newVal ->
-                                    val parsed = newVal.toIntOrNull() ?: 0
-                                    onUpdateSet(set.copy(holdDurationSeconds = parsed))
-                                },
-                                placeholder = { Text("0s", color = TextMuted) },
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = fieldColors
-                            )
-                        }
-                    }
-                }
-
-                // Completed Checkbox toggle
-                IconButton(
-                    onClick = { onUpdateSet(set.copy(isCompleted = !set.isCompleted)) },
-                    modifier = Modifier
-                        .size(40.dp)
-                        .background(
-                            if (set.isCompleted) MintGreen.copy(alpha = 0.2f) else DarkBg,
-                            CircleShape
-                        )
-                        .border(1.dp, if (set.isCompleted) MintGreen else DarkBorder, CircleShape)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = "Completed",
-                        tint = if (set.isCompleted) MintGreen else TextMuted,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun activeFieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedContainerColor = DarkBg,
-    unfocusedContainerColor = DarkBg,
-    focusedBorderColor = ElectricCyan,
-    unfocusedBorderColor = DarkBorder,
-    focusedTextColor = TextWhite,
-    unfocusedTextColor = TextWhite
-)

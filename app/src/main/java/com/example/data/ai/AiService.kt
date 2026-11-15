@@ -28,7 +28,13 @@ class AiService(
                 "overload tips, and structured routines. When asked for a workout routine, format " +
                 "each exercise clearly with suggested Sets and Reps or Hold Durations on individual " +
                 "lines (e.g. 'Exercise Name (4x8 @ +10kg)'). Keep advice concise, motivating, and " +
-                "actionable."
+                "actionable. When workout data includes isWarmup flags, treat warm-up sets as " +
+                "preparation: they count toward total volume and set counts, but never as " +
+                "working-set PRs, best sets or estimated 1RM records. A drop set is a direct " +
+                "continuation of one main set, not a separate exercise: when a plan calls for " +
+                "them, write the reduction after that set (for example 'Bench Press 3x8 @ 40kg, " +
+                "drop 30kg x 8, drop 20kg x 6') and never list drops as top-level exercises. " +
+                "Drop sets count toward volume and repetitions but never as 1RM or working-set PRs."
     }
 
     val activeProviderFlow: Flow<AiProviderId> = configurationRepository.activeProviderFlow

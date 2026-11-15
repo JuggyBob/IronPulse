@@ -206,7 +206,11 @@ class WorkoutSummaryGenerator(
             "Write a concise Markdown summary with: an overall assessment, exercises that improved, " +
                 "declined or stayed similar with the actual numbers, observations and limitations, and " +
                 "a short conclusion. If only some exercises appear in both sessions, say which ones " +
-                "could not be compared. Only claim a personal record if the supplied history establishes one."
+                "could not be compared. Only claim a personal record if the supplied history establishes one. " +
+                "Warm-up sets (isWarmup=true) count toward volume and set counts but are never working-set PRs, " +
+                "best sets or estimated 1RM records; do not present them as new maxima. Drop sets " +
+                "(isDropSet=true) are direct children of a main set: include their reps and volume, " +
+                "but never treat one as a PR, a best working set or an estimated 1RM source."
         )
     }
 
@@ -223,6 +227,9 @@ class WorkoutSummaryGenerator(
         appendLine("notes: ${session.notes.take(500).ifBlank { "(none)" }}")
         val sets = wrapper.sets.filter { it.isCompleted }.take(MAX_SETS)
         appendLine("completedSets: ${sets.size}")
+        appendLine("warmupSets: ${sets.count { it.isWarmup }}")
+        appendLine("dropSets: ${sets.count { it.isDropSet }}")
+        appendLine("workingSets: ${sets.count { !it.isWarmup && !it.isDropSet }}")
         for (set in sets) {
             appendLine(set.promptLine())
         }
@@ -241,7 +248,7 @@ class WorkoutSummaryGenerator(
         append(" | addedWeightKg ").append(addedWeight)
         append(" | holdSeconds ").append(holdDurationSeconds)
         append(" | cardioMinutes ").append(
-            if (exerciseType == com.example.data.model.ExerciseType.CARDIO) {
+            if (exerciseType == com.example.data.model.ExerciseType.CARDIO || distanceKm > 0.0) {
                 holdDurationSeconds / 60.0
             } else {
                 0.0
@@ -249,6 +256,13 @@ class WorkoutSummaryGenerator(
         )
         append(" | distanceKm ").append(distanceKm)
         append(" | bodyWeightKg ").append(bodyWeightKg)
+        append(" | isWarmup ").append(isWarmup)
+        append(" | isDropSet ").append(isDropSet)
+        if (isDropSet) {
+            append(" | parentSetUid ").append(parentSetUid.orEmpty())
+            append(" | dropIndex ").append(dropIndex)
+        }
+        append(" | restSecondsOverride ").append(restSecondsOverride ?: "inherit")
     }
 
     private fun weekdayName(epochMillis: Long): String = when (ActivityHeatmap.isoDayOfWeek(epochMillis)) {
@@ -266,7 +280,9 @@ class WorkoutSummaryGenerator(
         const val SYSTEM_INSTRUCTION =
             "You are IronPulse AI, a factual strength-training analyst. You compare only the " +
                 "supplied sessions. You never invent data, never claim a personal record without " +
-                "explicit evidence, and you distinguish observed changes from interpretation. Use " +
+                "explicit evidence, and you distinguish observed changes from interpretation. " +
+                "Warm-up sets (isWarmup=true) are preparation: include them in volume and set " +
+                "counts, but never treat them as working-set PRs or estimated 1RM records. Use " +
                 "Markdown headings, short paragraphs, bullet lists and tables where useful. Do not " +
                 "emit raw HTML."
     }

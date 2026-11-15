@@ -59,7 +59,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -76,10 +79,12 @@ import com.example.data.model.WeightUnit
 import com.example.data.model.WeightConversion
 import com.example.data.model.LoggedSet
 import com.example.data.model.RoutineParser
+import com.example.data.model.WorkoutMetrics
 import com.example.ui.components.RestTimerDockedButton
 import com.example.ui.components.RestTimerDialog
 import com.example.ui.components.LocalLiquidGlassEnabled
 import com.example.ui.components.liquidGlass
+import com.example.ui.components.liquidGlassBackdrop
 import com.example.ui.theme.CoralOrange
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
@@ -117,12 +122,17 @@ fun RoutineWorkoutScreen(
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
     // Weights live in kilograms; this is the unit the athlete reads and types in
     val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
+    val allExercises by viewModel.allExercises.collectAsStateWithLifecycle()
+    val exerciseDefaultRests by viewModel.exerciseDefaultRests.collectAsStateWithLifecycle()
     val unit = weightUnit.suffix
     // Follows the "Autoplay exercise demos" setting, so the animation a routine workout shows behaves
     // like the one in the catalog instead of always looping.
     val autoplayExerciseDemos by viewModel.appSettings
         .map { it.autoplayExerciseDemos }
         .collectAsStateWithLifecycle(initialValue = true)
+    val materialExpressive3 by viewModel.appSettings
+        .map { it.materialExpressive3 }
+        .collectAsStateWithLifecycle(initialValue = false)
     // When the workout in progress was last written to disk, for the "auto saved" indicator.
     val lastAutoSaveAt by viewModel.lastAutoSaveAt.collectAsStateWithLifecycle()
     val glassEnabled = LocalLiquidGlassEnabled.current
@@ -152,6 +162,7 @@ fun RoutineWorkoutScreen(
     // The exercise the athlete tapped the name of. Same dialog as the Exercises tab, opened without
     // leaving the workout: the timer keeps running and the set numbering stays where it was.
     var exerciseShowingDetails by remember { mutableStateOf<Exercise?>(null) }
+    var actionBarBounds by remember { mutableStateOf<Rect?>(null) }
 
     BackHandler {
         showExitDialog = true
@@ -193,6 +204,13 @@ fun RoutineWorkoutScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .imePadding()
+                .liquidGlassBackdrop(
+                    enabled = glassEnabled,
+                    bounds = actionBarBounds,
+                    cornerRadius = 16.dp,
+                    blurRadius = 30.dp,
+                    scrimAlpha = 0.28f
+                )
         ) {
             // === TOP BAR ===
             Surface(
@@ -267,116 +285,79 @@ fun RoutineWorkoutScreen(
                 }
             }
 
-            // === EXERCISE LIST (SHOWS ONLY THE ONES SAVED IN THIS WORKOUT IN EXACT ORDER) ===
-            LazyColumn(
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 14.dp),
-                contentPadding = PaddingValues(top = 12.dp, bottom = 120.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                item {
-                    Text(
-                        text = "ROUTINE EXERCISES (${workout.exercises.size})",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = TextMuted
-                    )
-                }
-
-                // Coach note for this day: a plain description above the exercises
                 if (workout.dayNote.isNotBlank()) {
-                    item {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(DarkBg, RoundedCornerShape(12.dp))
-                                .border(1.dp, ElectricCyan.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
-                                .padding(12.dp),
-                            verticalAlignment = Alignment.Top
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Info,
-                                contentDescription = null,
-                                tint = ElectricCyan,
-                                modifier = Modifier
-                                    .size(16.dp)
-                                    .padding(top = 1.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column {
-                                Text(
-                                    text = "COACH'S NOTE",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = ElectricCyan
-                                )
-                                Spacer(modifier = Modifier.height(3.dp))
-                                Text(
-                                    text = workout.dayNote,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = TextWhite,
-                                    lineHeight = 17.sp
-                                )
-                            }
-                        }
-                    }
-                }
-
-                if (workout.exercises.isEmpty()) {
-                    item {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-                            shape = RoundedCornerShape(12.dp),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-                        ) {
-                            Text(
-                                text = "No exercises found in this routine. Please edit the routine to add exercises.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = TextMuted,
-                                modifier = Modifier.padding(16.dp)
-                            )
-                        }
-                    }
-                } else {
-                    itemsIndexed(
-                        items = workout.exercises,
-                        key = { _, exercise -> exercise.id }
-                    ) { index, exercise ->
-                        val exerciseSets = workout.sets.filter { it.exerciseId == exercise.id }
-                        val routineItem = workout.routineItems.getOrNull(index)
-
-                        RoutineExerciseExecutionCard(
-                            orderIndex = index + 1,
-                            exercise = exercise,
-                            prescription = routineItem?.let {
-                                RoutineParser.shortPrescription(it.prescription, it.equipment)
-                            } ?: "",
-                            sets = exerciseSets,
-                            unit = weightUnit,
-                            onAddSet = { viewModel.addSetToRoutineWorkout(exercise) },
-                            onUpdateSet = { setIndexInWorkout, updatedSet ->
-                                val wasCompleted =
-                                    workout.sets.getOrNull(setIndexInWorkout)?.isCompleted == true
-                                viewModel.updateRoutineWorkoutSet(setIndexInWorkout, updatedSet)
-                                // A routine entry may carry its own rest default. Ticking a set
-                                // starts that timer through the existing timer flow; changing the
-                                // active timer afterwards is a manual override and never rewrites
-                                // the saved routine.
-                                if (!wasCompleted && updatedSet.isCompleted) {
-                                    val restSeconds = routineItem?.restSeconds ?: 0
-                                    if (restSeconds > 0) {
-                                        viewModel.startRestTimer(restSeconds, exercise.name)
-                                    }
-                                }
-                            },
-                            onDeleteSet = { setIndexInWorkout ->
-                                viewModel.deleteRoutineWorkoutSet(setIndexInWorkout)
-                            },
-                            allWorkoutSets = workout.sets,
-                            onShowDetails = { exerciseShowingDetails = exercise }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                            .background(DarkBg, RoundedCornerShape(10.dp))
+                            .border(1.dp, ElectricCyan.copy(alpha = 0.35f), RoundedCornerShape(10.dp))
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = ElectricCyan,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = workout.dayNote,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextWhite,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
                         )
                     }
                 }
+
+                ActiveWorkoutInterface(
+                    exercises = workout.exercises,
+                    sets = workout.sets,
+                    unit = weightUnit,
+                    workoutKey = workout.startTime,
+                    routineItems = workout.routineItems,
+                    allExercises = allExercises,
+                    materialExpressive3 = materialExpressive3,
+                    bottomPadding = 112.dp,
+                    onAddSet = { viewModel.addSetToRoutineWorkout(it) },
+                    onAddDropSet = { viewModel.addDropSetToRoutineWorkout(it) },
+                    onToggleSetComplete = { setToUpdate, completed ->
+                        val wasCompleted = setToUpdate.isCompleted
+                        viewModel.toggleRoutineWorkoutSetCompletion(setToUpdate, completed)
+                        if (!wasCompleted && completed) {
+                            val index = workout.exercises.indexOfFirst {
+                                it.id == setToUpdate.exerciseId
+                            }
+                            val item = workout.routineItems.getOrNull(index)
+                            val rest = WorkoutMetrics.effectiveRestSeconds(
+                                setToUpdate,
+                                item?.restSeconds ?: 0
+                            )
+                            if (rest > 0) {
+                                viewModel.startRestTimer(rest, setToUpdate.exerciseName)
+                            }
+                        }
+                    },
+                    onUpdateSet = { setToUpdate, updatedSet ->
+                        viewModel.updateRoutineWorkoutSet(setToUpdate, updatedSet)
+                    },
+                    onDeleteSet = { viewModel.deleteRoutineWorkoutSet(it) },
+                    onAddExercise = { viewModel.addExerciseToRoutineWorkout(it) },
+                    onRemoveExercise = { viewModel.removeExerciseFromRoutineWorkout(it) },
+                    onRestoreExercise = { viewModel.restoreExerciseToRoutineWorkout(it) },
+                    onMoveExercise = { from, to -> viewModel.moveRoutineExercise(from, to) },
+                    onShowDetails = { exerciseShowingDetails = it },
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
 
@@ -401,6 +382,7 @@ fun RoutineWorkoutScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(start = 14.dp, end = 14.dp, bottom = 14.dp)
+                    .onGloballyPositioned { actionBarBounds = it.boundsInRoot() }
                     .then(
                         if (glassEnabled) {
                             Modifier.liquidGlass(
@@ -409,9 +391,10 @@ fun RoutineWorkoutScreen(
                                 tint = ElectricCyan,
                                 cornerRadius = 16.dp,
                                 elevation = 14.dp,
-                                // Match the main dock's single-tone glass instead of the old
-                                // top-lit panel gradient.
-                                uniformSurface = true
+                                // The set list behind this bar is blurred by liquidGlassBackdrop.
+                                // A lighter body lets that real blur show instead of painting the
+                                // old top-lit white gradient over it.
+                                backdropBlurred = true
                             )
                         } else {
                             Modifier
@@ -516,7 +499,11 @@ fun RoutineWorkoutScreen(
             autoplayDemos = autoplayExerciseDemos,
             // No pen while a workout is running: an exercise's fields are not something to change
             // mid set. See the comment on the editor below.
-            onEdit = null
+            onEdit = null,
+            defaultRestSeconds = exerciseDefaultRests[detailExercise.id] ?: 0,
+            onDefaultRestChange = { seconds ->
+                viewModel.setExerciseDefaultRest(detailExercise.id, seconds)
+            }
         )
     }
 
@@ -644,437 +631,5 @@ fun RoutineWorkoutScreen(
                 }
             }
         )
-    }
-}
-
-@Composable
-fun RoutineExerciseExecutionCard(
-    orderIndex: Int,
-    exercise: Exercise,
-    prescription: String,
-    sets: List<LoggedSet>,
-    unit: WeightUnit,
-    onAddSet: () -> Unit,
-    onUpdateSet: (Int, LoggedSet) -> Unit,
-    onDeleteSet: (Int) -> Unit,
-    allWorkoutSets: List<LoggedSet>,
-    onShowDetails: () -> Unit = {}
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("routine_exercise_card_${exercise.id}"),
-        colors = CardDefaults.cardColors(containerColor = DarkSurface),
-        shape = RoundedCornerShape(14.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
-    ) {
-        Column(modifier = Modifier.padding(14.dp)) {
-            // Exercise Header Row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Order Badge
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .background(ElectricCyan.copy(alpha = 0.15f), CircleShape)
-                            .border(1.dp, ElectricCyan, CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "#$orderIndex",
-                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                            color = ElectricCyan
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(10.dp))
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        // Tapping the name opens the same detail dialog the Exercises tab uses. The
-                        // athlete is mid set and cannot remember whether this variation wants a pause
-                        // rep or a full one, and leaving the workout to find out loses the timer and
-                        // the set numbering. Same component, same layout, one tap.
-                        Text(
-                            text = exercise.name,
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            color = TextWhite,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { onShowDetails() }
-                                .padding(vertical = 2.dp)
-                                .testTag("routine_exercise_name_${exercise.id}")
-                        )
-                        Text(
-                            text = "${exercise.equipment} • ${exercise.category}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextMuted,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-
-                // Type Badge
-                val (badgeBg, badgeText, badgeColor) = when (exercise.exerciseType) {
-                    ExerciseType.ADDED_WEIGHT -> Triple(CoralOrange.copy(alpha = 0.18f), "Added Wt / Cali", CoralOrange)
-                    ExerciseType.PURE_BODYWEIGHT -> Triple(MintGreen.copy(alpha = 0.18f), "Bodyweight", MintGreen)
-                    else -> Triple(ElectricCyan.copy(alpha = 0.18f), "Standard Wt", ElectricCyan)
-                }
-
-                Box(
-                    modifier = Modifier
-                        .background(badgeBg, RoundedCornerShape(8.dp))
-                        .padding(horizontal = 8.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        text = badgeText,
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = badgeColor
-                    )
-                }
-            }
-
-            // Target Prescription Chip if present
-            if (prescription.isNotBlank()) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Box(
-                    modifier = Modifier
-                        .background(DarkBg, RoundedCornerShape(6.dp))
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                ) {
-                    Text(
-                        text = "Target: $prescription",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-                        color = GoldenAmber
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Table Header
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 4.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "SET",
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                    color = TextMuted,
-                    modifier = Modifier.width(36.dp),
-                    textAlign = TextAlign.Center
-                )
-
-                // Cardio logs a duration and a distance where the other types log a load and a rep
-                // count. The columns keep their positions so the table stays aligned; only the
-                // headers change, which is why a run never asked for "WT 80 / REPS 8".
-                val weightLabel = when (exercise.exerciseType) {
-                    ExerciseType.ADDED_WEIGHT -> "+WT (${unit.suffix})"
-                    ExerciseType.PURE_BODYWEIGHT -> "HOLD (s)"
-                    ExerciseType.CARDIO -> "MIN"
-                    else -> "WT (${unit.suffix})"
-                }
-                Text(
-                    text = weightLabel,
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                    color = TextMuted,
-                    modifier = Modifier.weight(1.2f),
-                    textAlign = TextAlign.Center
-                )
-
-                val repsLabel = when (exercise.exerciseType) {
-                    ExerciseType.PURE_BODYWEIGHT -> "REPS"
-                    ExerciseType.CARDIO -> DistanceFormat.suffixFor(WeightUnit.fromLabel(unit.suffix)).uppercase()
-                    else -> "REPS"
-                }
-                Text(
-                    text = repsLabel,
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                    color = TextMuted,
-                    modifier = Modifier.weight(1.2f),
-                    textAlign = TextAlign.Center
-                )
-
-                Text(
-                    text = "DONE",
-                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                    color = TextMuted,
-                    modifier = Modifier.width(72.dp),
-                    textAlign = TextAlign.Center
-                )
-            }
-
-            // Sets Rows
-            sets.forEach { setItem ->
-                val globalIndex = allWorkoutSets.indexOfFirst { it.exerciseId == setItem.exerciseId && it.setNumber == setItem.setNumber }
-                if (globalIndex != -1) {
-                    RoutineSetRow(
-                        set = setItem,
-                        unit = unit,
-                        exerciseType = exercise.exerciseType,
-                        onUpdate = { updated -> onUpdateSet(globalIndex, updated) },
-                        onDelete = { onDeleteSet(globalIndex) }
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                }
-            }
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            // Add Set Button
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
-                Button(
-                    onClick = onAddSet,
-                    colors = ButtonDefaults.buttonColors(containerColor = DarkBg),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.5f)),
-                    shape = RoundedCornerShape(8.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                    modifier = Modifier.testTag("add_set_button_${exercise.id}")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = null,
-                        tint = ElectricCyan,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "Add Set",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = ElectricCyan
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun RoutineSetRow(
-    set: LoggedSet,
-    unit: WeightUnit,
-    exerciseType: String,
-    onUpdate: (LoggedSet) -> Unit,
-    onDelete: () -> Unit
-) {
-    val isCompleted = set.isCompleted
-
-    // Left column. It means different things per type: a load for the weight types, a hold in seconds
-    // for calisthenics, and minutes for cardio.
-    var weightText by remember(set.weight, set.addedWeight, set.holdDurationSeconds, unit, exerciseType) {
-        val v = when (exerciseType) {
-            ExerciseType.ADDED_WEIGHT ->
-                if (set.addedWeight > 0) {
-                    WeightConversion.format(set.addedWeight, unit, withUnit = false)
-                } else {
-                    ""
-                }
-            ExerciseType.PURE_BODYWEIGHT -> if (set.holdDurationSeconds > 0) set.holdDurationSeconds.toString() else ""
-            ExerciseType.CARDIO -> if (set.holdDurationSeconds > 0) (set.holdDurationSeconds / 60).toString() else ""
-            else ->
-                if (set.weight > 0) {
-                    WeightConversion.format(set.weight, unit, withUnit = false)
-                } else {
-                    ""
-                }
-        }
-        mutableStateOf(v)
-    }
-
-    // Right column. For cardio this is the distance, not a rep count.
-    var repsText by remember(set.reps, set.distanceKm, unit, exerciseType) {
-        mutableStateOf(
-            when (exerciseType) {
-                ExerciseType.CARDIO -> DistanceFormat.format(set.distanceKm, unit)
-                else -> if (set.reps > 0) set.reps.toString() else ""
-            }
-        )
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(
-                if (isCompleted) MintGreen.copy(alpha = 0.08f) else DarkBg,
-                RoundedCornerShape(8.dp)
-            )
-            .border(
-                1.dp,
-                if (isCompleted) MintGreen.copy(alpha = 0.4f) else DarkBorder,
-                RoundedCornerShape(8.dp)
-            )
-            .padding(horizontal = 6.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        // Set Number
-        Box(
-            modifier = Modifier
-                .width(32.dp)
-                .height(32.dp)
-                .background(if (isCompleted) MintGreen.copy(alpha = 0.2f) else DarkSurface, CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "${set.setNumber}",
-                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                color = if (isCompleted) MintGreen else TextWhite
-            )
-        }
-
-        Spacer(modifier = Modifier.width(4.dp))
-
-        // Weight Input (or Hold Seconds)
-        OutlinedTextField(
-            value = weightText,
-            onValueChange = { input ->
-                weightText = input
-                when (exerciseType) {
-                    // A hold time is seconds, not a weight
-                    ExerciseType.PURE_BODYWEIGHT ->
-                        onUpdate(set.copy(holdDurationSeconds = input.toDoubleOrNull()?.toInt() ?: 0))
-                    // Cardio records whole minutes, stored back as seconds like any other duration
-                    ExerciseType.CARDIO ->
-                        onUpdate(set.copy(holdDurationSeconds = (input.toDoubleOrNull()?.toInt() ?: 0) * 60))
-                    // The typed value is in the athlete's unit and is stored as kilograms
-                    ExerciseType.ADDED_WEIGHT ->
-                        onUpdate(set.copy(addedWeight = WeightConversion.parseToKg(input, unit) ?: 0.0))
-                    else ->
-                        onUpdate(set.copy(weight = WeightConversion.parseToKg(input, unit) ?: 0.0))
-                }
-            },
-            placeholder = {
-                Text(
-                    text = when (exerciseType) {
-                        ExerciseType.ADDED_WEIGHT -> "+0"
-                        ExerciseType.PURE_BODYWEIGHT -> "0s"
-                        ExerciseType.CARDIO -> "0"
-                        else -> "0"
-                    },
-                    color = TextMuted,
-                    fontSize = 13.sp
-                )
-            },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = if (exerciseType == ExerciseType.PURE_BODYWEIGHT) {
-                    KeyboardType.Number
-                } else {
-                    KeyboardType.Decimal
-                }
-            ),
-            textStyle = MaterialTheme.typography.bodyMedium.copy(
-                color = TextWhite,
-                textAlign = TextAlign.Center,
-                fontWeight = FontWeight.SemiBold
-            ),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = ElectricCyan,
-                unfocusedBorderColor = DarkBorder,
-                focusedContainerColor = DarkSurface,
-                unfocusedContainerColor = DarkSurface
-            ),
-            modifier = Modifier
-                .weight(1.2f)
-                .height(48.dp)
-                .testTag("set_weight_input_${set.exerciseId}_${set.setNumber}")
-        )
-
-        Spacer(modifier = Modifier.width(6.dp))
-
-        // Reps Input, or the distance for a cardio set
-        OutlinedTextField(
-            value = repsText,
-            onValueChange = { input ->
-                repsText = input
-                if (exerciseType == ExerciseType.CARDIO) {
-                    onUpdate(set.copy(distanceKm = DistanceFormat.toKm(input, unit)))
-                } else {
-                    onUpdate(set.copy(reps = input.toIntOrNull() ?: 0))
-                }
-            },
-            placeholder = { Text("0", color = TextMuted, fontSize = 13.sp) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = if (exerciseType == ExerciseType.CARDIO) {
-                    KeyboardType.Decimal
-                } else {
-                    KeyboardType.Number
-                }
-            ),
-            textStyle = MaterialTheme.typography.bodyMedium.copy(
-                color = TextWhite,
-                textAlign = TextAlign.Center,
-                fontWeight = FontWeight.SemiBold
-            ),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = ElectricCyan,
-                unfocusedBorderColor = DarkBorder,
-                focusedContainerColor = DarkSurface,
-                unfocusedContainerColor = DarkSurface
-            ),
-            modifier = Modifier
-                .weight(1.2f)
-                .height(48.dp)
-                .testTag("set_reps_input_${set.exerciseId}_${set.setNumber}")
-        )
-
-        Spacer(modifier = Modifier.width(6.dp))
-
-        // Done Checkbox and Delete Button
-        Row(
-            modifier = Modifier.width(72.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Checkmark button (toggles completed)
-            Box(
-                modifier = Modifier
-                    .size(34.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (isCompleted) MintGreen else DarkSurface)
-                    .border(1.dp, if (isCompleted) MintGreen else DarkBorder, RoundedCornerShape(8.dp))
-                    .clickable { onUpdate(set.copy(isCompleted = !isCompleted)) }
-                    .testTag("set_complete_check_${set.exerciseId}_${set.setNumber}"),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = "Complete Set",
-                    tint = if (isCompleted) OnAccent else TextMuted,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-
-            // Delete set button
-            IconButton(
-                onClick = onDelete,
-                modifier = Modifier
-                    .size(32.dp)
-                    .testTag("delete_set_button_${set.exerciseId}_${set.setNumber}")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "Delete Set",
-                    tint = TextMuted.copy(alpha = 0.6f),
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-        }
     }
 }

@@ -23,6 +23,8 @@ data class RoutineExerciseItem(
      */
     val targetAddedWeightKg: Double = 0.0,
     val targetHoldSeconds: Int = 0,
+    /** Default distance for distance-based work, in kilometres. */
+    val targetDistanceKm: Double = 0.0,
     /**
      * The default rest between sets of this exercise *in this routine*, in seconds.
      *
@@ -55,7 +57,217 @@ data class RoutineExerciseItem(
      * Coach note written for this training day. Stored on every item of the day so the day level
      * note survives the flat JSON array format, and never turned into a fake exercise.
      */
-    val dayNote: String = ""
+    val dayNote: String = "",
+    /** Drop sets grouped under their 1-based main set index. Empty means no drop sets. */
+    val dropSets: List<RoutineDropSet> = emptyList(),
+    /** Optional per-main-set defaults; missing indexes inherit the values above. */
+    val mainSetDefaults: List<RoutineMainSetDefault> = emptyList()
+) {
+    fun defaultForMainSet(mainSetIndex: Int): RoutineMainSetDefault {
+        val explicit = mainSetDefaults.firstOrNull { it.mainSetIndex == mainSetIndex }
+        return explicit ?: RoutineMainSetDefault(
+            mainSetIndex = mainSetIndex,
+            targetReps = targetReps,
+            targetHoldSeconds = targetHoldSeconds,
+            targetWeight = targetWeight,
+            targetAddedWeightKg = targetAddedWeightKg,
+            targetDistanceKm = targetDistanceKm,
+            restSeconds = restSeconds
+        )
+    }
+
+    fun withMainSetDefault(updated: RoutineMainSetDefault): RoutineExerciseItem {
+        val next = mainSetDefaults.filterNot { it.mainSetIndex == updated.mainSetIndex } + updated
+        return copy(mainSetDefaults = next.sortedBy { it.mainSetIndex })
+    }
+}
+
+/**
+ * Optional explicit defaults for one main set. Missing indexes fall back to the exercise-level
+ * target values, so old routines keep working without materialising every row.
+ */
+data class RoutineMainSetDefault(
+    val mainSetIndex: Int = 1,
+    val targetReps: Int = 0,
+    val targetHoldSeconds: Int = 0,
+    val targetWeight: Double = 0.0,
+    val targetAddedWeightKg: Double = 0.0,
+    val targetDistanceKm: Double = 0.0,
+    val restSeconds: Int = 0
+)
+
+/**
+ * Re-homes a prescribed load that was stored in the field this exercise no longer records.
+ *
+ * Before the explicit field architecture, routine JSON (and the AI routine importer) wrote a
+ * prescribed load as `addedWeight` even for dumbbell exercises, which are standard-weight work.
+ * The 4.8.0 field audit then gave those exercises `weight` only, so the stored 9 kg became
+ * invisible in the editor and was erased on the next save. Moving the value into the field the
+ * exercise actually records keeps the athlete's prescription instead of silently zeroing it.
+ *
+ * If the exercise records both kinds of load, or neither, the values are left exactly as stored:
+ * there is no single correct field to choose.
+ */
+fun RoutineExerciseItem.withLegacyLoadFallback(
+    fields: List<ExerciseField>
+): RoutineExerciseItem {
+    if (fields.isEmpty()) return this
+    val (weight, added) = migrateStoredLoad(targetWeight, targetAddedWeightKg, fields)
+    val normalizedDrops = dropSets.map { it.withLegacyLoadFallback(fields) }
+    val normalizedMains = mainSetDefaults.map { it.withLegacyLoadFallback(fields) }
+    val normalized = copy(
+        targetWeight = weight,
+        targetAddedWeightKg = added,
+        dropSets = normalizedDrops,
+        mainSetDefaults = normalizedMains
+    )
+    return if (normalized == this) this else normalized
+}
+
+fun RoutineDropSet.withLegacyLoadFallback(fields: List<ExerciseField>): RoutineDropSet {
+    if (fields.isEmpty()) return this
+    val (weight, added) = migrateStoredLoad(targetWeight, targetAddedWeightKg, fields)
+    return if (weight == targetWeight && added == targetAddedWeightKg) {
+        this
+    } else {
+        copy(targetWeight = weight, targetAddedWeightKg = added)
+    }
+}
+
+fun RoutineMainSetDefault.withLegacyLoadFallback(
+    fields: List<ExerciseField>
+): RoutineMainSetDefault {
+    if (fields.isEmpty()) return this
+    val (weight, added) = migrateStoredLoad(targetWeight, targetAddedWeightKg, fields)
+    return if (weight == targetWeight && added == targetAddedWeightKg) {
+        this
+    } else {
+        copy(targetWeight = weight, targetAddedWeightKg = added)
+    }
+}
+
+/**
+ * @return the pair (weight, addedWeight) to store for this exercise's field configuration.
+ */
+private fun migrateStoredLoad(
+    weight: Double,
+    addedWeight: Double,
+    fields: List<ExerciseField>
+): Pair<Double, Double> {
+    val supportsWeight = ExerciseField.WEIGHT in fields
+    val supportsAdded = ExerciseField.ADDED_WEIGHT in fields
+    // Both fields are meaningful, or neither is: keep exactly what the routine stored.
+    if (supportsWeight == supportsAdded) return weight to addedWeight
+    return when {
+        supportsWeight && weight == 0.0 && addedWeight > 0.0 -> addedWeight to 0.0
+        supportsAdded && addedWeight == 0.0 && weight > 0.0 -> 0.0 to weight
+        else -> weight to addedWeight
+    }
+}
+
+/**
+ * Clears targets the exercise no longer supports and rebuilds the prescription.
+ *
+ * This is for editable routine defaults, not historical sets. The stored workout history keeps
+ * every value it was recorded with; a routine that the athlete is editing should not claim a
+ * "8 reps" target for a Plank that only records holds.
+ */
+fun RoutineExerciseItem.sanitizedFor(fields: List<ExerciseField>): RoutineExerciseItem {
+    if (fields.isEmpty()) return this
+    val normalized = withLegacyLoadFallback(fields)
+    val sanitized = normalized.copy(
+        targetReps = if (ExerciseField.REPS in fields) normalized.targetReps else 0,
+        targetWeight = if (ExerciseField.WEIGHT in fields) normalized.targetWeight else 0.0,
+        targetAddedWeightKg = if (ExerciseField.ADDED_WEIGHT in fields) {
+            normalized.targetAddedWeightKg
+        } else {
+            0.0
+        },
+        targetHoldSeconds = if (
+            ExerciseField.HOLD_SECONDS in fields || ExerciseField.TIME_SECONDS in fields
+        ) {
+            normalized.targetHoldSeconds
+        } else {
+            0
+        },
+        targetDistanceKm = if (ExerciseField.DISTANCE_KM in fields) {
+            normalized.targetDistanceKm
+        } else {
+            0.0
+        },
+        dropSets = normalized.dropSets.map { it.sanitizedFor(fields) },
+        mainSetDefaults = normalized.mainSetDefaults.map { it.sanitizedFor(fields) }
+    )
+    return sanitized.copy(prescription = RoutineParser.buildPrescription(sanitized))
+}
+
+fun RoutineDropSet.sanitizedFor(fields: List<ExerciseField>): RoutineDropSet {
+    if (fields.isEmpty()) return this
+    val normalized = withLegacyLoadFallback(fields)
+    return normalized.copy(
+        targetReps = if (ExerciseField.REPS in fields) normalized.targetReps else 0,
+        targetWeight = if (ExerciseField.WEIGHT in fields) normalized.targetWeight else 0.0,
+        targetAddedWeightKg = if (ExerciseField.ADDED_WEIGHT in fields) {
+            normalized.targetAddedWeightKg
+        } else {
+            0.0
+        },
+        targetHoldSeconds = if (
+            ExerciseField.HOLD_SECONDS in fields || ExerciseField.TIME_SECONDS in fields
+        ) {
+            normalized.targetHoldSeconds
+        } else {
+            0
+        },
+        targetDistanceKm = if (ExerciseField.DISTANCE_KM in fields) {
+            normalized.targetDistanceKm
+        } else {
+            0.0
+        }
+    )
+}
+
+fun RoutineMainSetDefault.sanitizedFor(fields: List<ExerciseField>): RoutineMainSetDefault {
+    if (fields.isEmpty()) return this
+    val normalized = withLegacyLoadFallback(fields)
+    return normalized.copy(
+        targetReps = if (ExerciseField.REPS in fields) normalized.targetReps else 0,
+        targetWeight = if (ExerciseField.WEIGHT in fields) normalized.targetWeight else 0.0,
+        targetAddedWeightKg = if (ExerciseField.ADDED_WEIGHT in fields) {
+            normalized.targetAddedWeightKg
+        } else {
+            0.0
+        },
+        targetHoldSeconds = if (
+            ExerciseField.HOLD_SECONDS in fields || ExerciseField.TIME_SECONDS in fields
+        ) {
+            normalized.targetHoldSeconds
+        } else {
+            0
+        },
+        targetDistanceKm = if (ExerciseField.DISTANCE_KM in fields) {
+            normalized.targetDistanceKm
+        } else {
+            0.0
+        }
+    )
+}
+
+/**
+ * One drop-set prescription attached to a main set of a saved routine.
+ *
+ * [mainSetIndex] is the 1-based main set within the exercise, and [dropIndex] is the 1-based
+ * position within that main set. Numbers are local, never global identifiers.
+ */
+data class RoutineDropSet(
+    val mainSetIndex: Int = 1,
+    val dropIndex: Int = 1,
+    val targetReps: Int = 0,
+    val targetHoldSeconds: Int = 0,
+    val targetWeight: Double = 0.0,
+    val targetAddedWeightKg: Double = 0.0,
+    val targetDistanceKm: Double = 0.0,
+    val restSeconds: Int = 0
 )
 
 data class RoutineDay(
@@ -74,7 +286,9 @@ data class RoutineDay(
      * rest day, so a day can never claim to be a workout day while holding nothing.
      */
     val exercises: List<RoutineExerciseItem> = emptyList(),
-    val note: String = ""
+    val note: String = "",
+    /** The standalone Routine referenced by this Schedule slot, or 0 for a rest day. */
+    val routineId: Long = 0L
 ) {
     /** Whether this day is a planned rest day. */
     val isRestDay: Boolean get() = exercises.isEmpty()
@@ -83,6 +297,20 @@ data class RoutineDay(
     val dayName: String get() = Weekday.name(weekday)
 }
 
+
+/**
+ * Snapshot of an exercise removed from a running workout, used by the Undo action.
+ *
+ * The saved routine is deliberately not part of this snapshot: active-workout deletion never
+ * changes the routine. The snapshot only restores the session's own exercise, sets and position.
+ */
+data class RemovedActiveExercise(
+    val exercise: Exercise,
+    val routineItem: RoutineExerciseItem?,
+    val sets: List<LoggedSet>,
+    val index: Int,
+    val wasSessionOnly: Boolean
+)
 
 data class ActiveRoutineWorkoutState(
     val routineId: Long,
@@ -106,7 +334,13 @@ data class ActiveRoutineWorkoutState(
      */
     val plannedDate: Long = 0L,
     /** Timezone-stable `yyyyMMdd` key of [plannedDate]. */
-    val plannedDateKey: Long = 0L
+    val plannedDateKey: Long = 0L,
+    /** Schedule that supplied the workout, or 0 for a standalone Routine. */
+    val scheduleId: Long = 0L,
+    /** Schedule goal strategy captured at start. */
+    val scheduleGoal: String = "",
+    /** Exercises added during this active workout that did not come from the saved routine. */
+    val sessionOnlyExerciseIds: Set<Long> = emptySet()
 )
 
 object RoutineParser {
@@ -307,11 +541,52 @@ object RoutineParser {
         head = head.substringBefore('|')
         // A spaced separator only. A hyphen without spaces is deliberately left alone, or "Push-Up"
         // would be truncated to "Push".
-        val separator = Regex("""\s+[-–—:=]\s+""").find(head)
+        // A spaced dash, or a colon/equals followed by a space. A hyphen without spaces is
+        // deliberately left alone, or "Push-Up" would be truncated to "Push". The colon form has
+        // to match without a space before it: "Single Arm Band Curl: 3 x 8 @ 34kg" is a normal
+        // pasted line, and treating it as prose dropped the whole exercise.
+        val separator = Regex("""(?:\s+[-–—]\s+|\s*[:=]\s+)""").find(head)
         if (separator != null) head = head.substring(0, separator.range.first)
         head = head.substringBefore('(')
         return head.trim()
     }
+
+    /**
+     * A compact prescription that keeps every independently configured target.
+     *
+     * It deliberately excludes load: the existing design keeps weight in its own fields and out of
+     * the prescription text. Unlike the old implementation, reps and hold/distance are not
+     * mutually exclusive.
+     */
+    /**
+     * The prescription as it should be displayed for a routine target.
+     *
+     * Standard rep work keeps a hand-written rep range; a hold or distance target is rebuilt from
+     * the values so the header cannot show "3 x 8 reps" for a Plank with no rep field.
+     */
+    fun displayPrescription(item: RoutineExerciseItem): String =
+        if (item.targetHoldSeconds > 0 || item.targetDistanceKm > 0.0) {
+            buildPrescription(item)
+        } else {
+            shortPrescription(item.prescription, item.equipment)
+                .ifBlank { buildPrescription(item) }
+        }
+
+    fun buildPrescription(item: RoutineExerciseItem): String {
+        val parts = mutableListOf<String>()
+        if (item.targetReps > 0) parts += "${item.targetReps} reps"
+        if (item.targetHoldSeconds > 0) parts += "${item.targetHoldSeconds}s"
+        if (item.targetDistanceKm > 0.0) parts += "${formatKm(item.targetDistanceKm)} km"
+        if (parts.isEmpty()) parts += "0 reps"
+        return "${item.targetSets} sets x " + parts.joinToString(" / ")
+    }
+
+    private fun formatKm(value: Double): String =
+        if (value % 1.0 == 0.0) {
+            value.toInt().toString()
+        } else {
+            "%.2f".format(value).trimEnd('0').trimEnd('.')
+        }
 
     fun serializeExercises(items: List<RoutineExerciseItem>): String {
         val array = JSONArray()
@@ -328,6 +603,7 @@ object RoutineParser {
                 // Backward compatible: routines saved before this field simply have no added weight
                 put("addedWeight", item.targetAddedWeightKg)
                 put("holdSeconds", item.targetHoldSeconds)
+                if (item.targetDistanceKm > 0.0) put("distanceKm", item.targetDistanceKm)
                 // Backward compatible: routines saved before this field simply have no rest default.
                 if (item.restSeconds > 0) put("restSeconds", item.restSeconds)
                 put("prescription", item.prescription)
@@ -337,6 +613,39 @@ object RoutineParser {
                 put("dayTitle", item.dayTitle)
                 // Backward compatible: routines saved before this field simply have no note
                 if (item.dayNote.isNotBlank()) put("dayNote", item.dayNote)
+                if (item.mainSetDefaults.isNotEmpty()) {
+                    put("mainSets", JSONArray().apply {
+                        item.mainSetDefaults.sortedBy { it.mainSetIndex }.forEach { mainSet ->
+                            put(JSONObject().apply {
+                                put("main", mainSet.mainSetIndex)
+                                put("reps", mainSet.targetReps)
+                                put("holdSeconds", mainSet.targetHoldSeconds)
+                                put("weight", mainSet.targetWeight)
+                                put("addedWeight", mainSet.targetAddedWeightKg)
+                                if (mainSet.targetDistanceKm > 0.0) {
+                                    put("distanceKm", mainSet.targetDistanceKm)
+                                }
+                                if (mainSet.restSeconds > 0) put("restSeconds", mainSet.restSeconds)
+                            })
+                        }
+                    })
+                }
+                if (item.dropSets.isNotEmpty()) {
+                    put("dropSets", JSONArray().apply {
+                        for (drop in item.dropSets.sortedWith(compareBy({ it.mainSetIndex }, { it.dropIndex }))) {
+                            put(JSONObject().apply {
+                                put("mainSet", drop.mainSetIndex)
+                                put("drop", drop.dropIndex)
+                                put("reps", drop.targetReps)
+                                put("holdSeconds", drop.targetHoldSeconds)
+                                put("weight", drop.targetWeight)
+                                put("addedWeight", drop.targetAddedWeightKg)
+                                if (drop.targetDistanceKm > 0.0) put("distanceKm", drop.targetDistanceKm)
+                                if (drop.restSeconds > 0) put("restSeconds", drop.restSeconds)
+                            })
+                        }
+                    })
+                }
             }
             array.put(obj)
         }
@@ -496,6 +805,22 @@ object RoutineParser {
     ): List<RoutineExerciseItem> {
         return parseWeek(rawText, allExercises, weekStartsOnMonday).flatMap { it.exercises }
     }
+
+    /**
+     * The flat exercise list of one standalone workout Routine.
+     *
+     * Any weekday metadata is intentionally discarded: a Routine is one workout, not a day of a
+     * week. Legacy week JSON is accepted so an existing routine can still be opened before the
+     * one-time model migration has run.
+     */
+    fun parseSingleWorkout(
+        rawText: String,
+        allExercises: List<Exercise>
+    ): List<RoutineExerciseItem> = parseExercises(
+        rawText = rawText,
+        allExercises = allExercises,
+        weekStartsOnMonday = true
+    ).map { it.copy(weekday = 0, dayTitle = "", dayNote = "") }
 
     private fun parseJsonDays(
         trimmed: String,
@@ -666,6 +991,117 @@ object RoutineParser {
         return s
     }
 
+    /**
+     * Reads inline drop-set clauses from a text prescription.
+     *
+     * Examples understood:
+     *  - "3x8 @ 40kg, drop 30kg x 8, drop 20kg x 6"
+     *  - "4 sets x 10 reps (drop set: 25kg x 12)"
+     *  - "3x8; after set 2 drop to 30kg for 8"
+     *
+     * The parent is explicit: "after set N" selects that main set, otherwise the first one. Each
+     * reduction becomes a direct child with its own index, never another top-level exercise.
+     */
+    /**
+     * A line that is only a drop-set instruction for the previous exercise.
+     *
+     * Returns an empty list when the line is not a drop instruction or carries no numbers, so
+     * ordinary coach notes still follow the note path.
+     */
+    private fun parseStandaloneDropLine(line: String, mainSetCount: Int): List<RoutineDropSet> {
+        val cleaned = line
+            .trim()
+            .replaceFirst(Regex("^[*_#>\\-\\u2022\\s]+"), "")
+            .trim()
+        if (!cleaned.startsWith("drop", ignoreCase = true)) return emptyList()
+        return parseInlineDropSets(cleaned, mainSetCount)
+    }
+
+    private fun parseInlineDropSets(rawPrescription: String, mainSetCount: Int): List<RoutineDropSet> {
+        if (rawPrescription.isBlank() || !rawPrescription.contains("drop", ignoreCase = true)) {
+            return emptyList()
+        }
+        val mainFromText = Regex(
+            "(?i)(?:after|on|following)\\s*(?:main\\s*)?set\\s*(\\d+)"
+        ).find(rawPrescription)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        val defaultMain = (mainFromText ?: 1).coerceIn(1, mainSetCount.coerceAtLeast(1))
+
+        val matches = Regex("(?i)\\bdrop(?:\\s*set)?\\b").findAll(rawPrescription).toList()
+        if (matches.isEmpty()) return emptyList()
+        val result = mutableListOf<RoutineDropSet>()
+        matches.forEachIndexed { index, match ->
+            val start = match.range.last + 1
+            val end = matches.getOrNull(index + 1)?.range?.first ?: rawPrescription.length
+            var segment = rawPrescription.substring(start, end)
+                .trim()
+                .trimStart(':', '=', '-', '\u2013', ',')
+                .trim()
+            // "drop set 2: ..." names the child, not a repetition count.
+            segment = segment.replace(Regex("^\\d+\\s*[:\\-=]\\s*"), "").trim()
+            if (segment.isBlank()) return@forEachIndexed
+            val weight = Regex(
+                "(\\d+(?:[.,]\\d+)?)\\s*(?:kg|kgs|kilograms?|lb|lbs|pounds?)\\b",
+                RegexOption.IGNORE_CASE
+            ).find(segment)?.groupValues?.getOrNull(1)?.replace(',', '.')?.toDoubleOrNull()
+            val reps = Regex("(?:x|\\u00d7|\\*)\\s*(\\d+)", RegexOption.IGNORE_CASE)
+                .find(segment)?.groupValues?.getOrNull(1)?.toIntOrNull()
+                ?: Regex("(\\d+)\\s*reps?\\b", RegexOption.IGNORE_CASE)
+                    .find(segment)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            val hold = Regex("(\\d+)\\s*(?:s|sec|secs|seconds?)\\b", RegexOption.IGNORE_CASE)
+                .find(segment)?.groupValues?.getOrNull(1)?.toIntOrNull()
+            if (reps == null && weight == null && hold == null) return@forEachIndexed
+            val mainSet = if (Regex("(?i)\\bafter\\b").containsMatchIn(segment)) {
+                Regex("(?i)after\\s*(?:set\\s*)?(\\d+)").find(segment)
+                    ?.groupValues?.getOrNull(1)?.toIntOrNull()
+                    ?.coerceIn(1, mainSetCount.coerceAtLeast(1)) ?: defaultMain
+            } else {
+                defaultMain
+            }
+            result += RoutineDropSet(
+                mainSetIndex = mainSet,
+                dropIndex = result.count { it.mainSetIndex == mainSet } + 1,
+                targetReps = (reps ?: 0).coerceIn(0, 100),
+                targetHoldSeconds = (hold ?: 0).coerceIn(0, 600),
+                targetWeight = (weight ?: 0.0).coerceAtLeast(0.0)
+            )
+        }
+        return result
+    }
+
+    /**
+     * Reads a load written in free text, e.g. "3x8 @ 34kg" or "3 sets x 8 reps @ +9kg".
+     *
+     * The legacy AI importer put the load in the prescription and the text parser used to ignore
+     * it and hard-code `targetWeight = 0`. That silently erased every prescribed load from a
+     * routine when the 4.5 schedule/routine migration converted its text to the JSON format.
+     *
+     * A plain "34kg" is a working weight; a leading "+", "added" or "weighted" means the load was
+     * prescribed on top of body weight. The caller normalizes the pair against the exercise's real
+     * field list afterwards, so a weight stored here is not lost on an added-weight movement.
+     *
+     * @return (weightKg, addedWeightKg), both 0 when no load is written.
+     */
+    private fun parsePrescribedLoad(text: String): Pair<Double, Double> {
+        if (text.isBlank()) return 0.0 to 0.0
+        val match = LOAD_IN_TEXT.find(text) ?: return 0.0 to 0.0
+        val prefix = match.groupValues[1].lowercase()
+        val value = match.groupValues[2].replace(',', '.').toDoubleOrNull() ?: return 0.0 to 0.0
+        if (value <= 0.0) return 0.0 to 0.0
+        val unit = match.groupValues[3].lowercase()
+        val kilograms = if (unit.startsWith("lb") || unit.startsWith("pound")) {
+            WeightConversion.toKg(value, WeightUnit.LB)
+        } else {
+            value
+        }
+        val added = prefix.contains('+') || prefix.contains("added") || prefix.contains("weighted")
+        return if (added) 0.0 to kilograms else kilograms to 0.0
+    }
+
+    /** See [parsePrescribedLoad]. The unit is required so reps and sets can never match. */
+    private val LOAD_IN_TEXT = Regex(
+        """(?i)([+]|added|weighted|bw\s*\+)?\s*(\d+(?:[.,]\d+)?)\s*(kg|kgs|kilograms?|lb|lbs|pounds?)\b"""
+    )
+
     private fun parseJsonExerciseItem(
         obj: JSONObject,
         exByName: Map<String, Exercise>,
@@ -673,28 +1109,39 @@ object RoutineParser {
         overrideDayTitle: String? = null,
         fallbackSlot: Int = 1
     ): ScheduledWorkout? {
-        val name = obj.optString("name").trim()
+        // The canonical writer uses "name". Older backups and test fixtures written against the
+        // entity field names use "exerciseName"; both are real user data and must migrate.
+        val name = obj.optString("name").ifBlank {
+            obj.optString("exerciseName")
+        }.trim()
         if (name.isBlank()) return null
 
         val matched = exByName[name.lowercase()] ?: findMatchingExercise(name, exByName.values)
-        val sets = obj.optInt("sets", 3)
-        val reps = obj.optInt("reps", 8)
-        val weight = obj.optDouble("weight", 0.0)
+        val sets = obj.optInt("sets", obj.optInt("targetSets", 3))
+        val reps = obj.optInt("reps", obj.optInt("targetReps", 8))
+        var weight = obj.optDouble("weight", obj.optDouble("targetWeight", 0.0))
         // The default added weight, read from the JSON in both branches below. It is a setting the
         // athlete made on the routine, not a property of the catalog exercise, so it must never be
         // taken from the matched exercise.
-        val addedWeight = obj.optDouble("addedWeight", 0.0)
-        val hold = obj.optInt("holdSeconds", 0)
+        var addedWeight = obj.optDouble("addedWeight", obj.optDouble("targetAddedWeightKg", 0.0))
+        val hold = obj.optInt("holdSeconds", obj.optInt("targetHoldSeconds", 0))
         // Missing, null, negative or absurd values all fall back to "no routine default" instead of
         // letting a corrupt JSON blob start a ten hour timer.
         val restSeconds = obj.optInt("restSeconds", 0).coerceIn(0, 600)
         val rawPrescription = obj.optString("prescription", "")
+        // Older AI writers stored the load only inside the prescription text. When the dedicated
+        // fields say nothing, read the text instead of silently keeping 0.
+        if (weight <= 0.0 && addedWeight <= 0.0) {
+            val (textWeight, textAddedWeight) = parsePrescribedLoad(rawPrescription)
+            weight = textWeight
+            addedWeight = textAddedWeight
+        }
         val matchedEquipment = matched?.equipment ?: obj.optString("equipment", "")
         val prescription = shortPrescription(rawPrescription, matchedEquipment).ifBlank {
             if (hold > 0) "$sets sets x ${hold}s"
             else "$sets sets x $reps reps"
         }
-        val dayNote = obj.optString("dayNote", "")
+        val dayNote = obj.optString("dayNote", obj.optString("note", ""))
 
         // Where this exercise sits in the week.
         //
@@ -705,7 +1152,9 @@ object RoutineParser {
         val hint = readScheduleHint(obj, fallbackSlot)
         val weekday = overrideWeekday ?: hint.weekday
         val slot = if (overrideWeekday != null) fallbackSlot else hint.slot
-        val dayTitle = overrideDayTitle ?: cleanDayTitle(obj.optString("dayTitle", ""))
+        val dayTitle = overrideDayTitle ?: cleanDayTitle(
+            obj.optString("dayTitle", obj.optString("focus", obj.optString("title", "")))
+        )
 
         val item = if (matched != null) {
             RoutineExerciseItem(
@@ -719,17 +1168,24 @@ object RoutineParser {
                 targetWeight = weight,
                 targetAddedWeightKg = addedWeight,
                 targetHoldSeconds = hold,
+                targetDistanceKm = obj.optDouble("distanceKm", obj.optDouble("distance", 0.0))
+                    .coerceAtLeast(0.0),
                 restSeconds = restSeconds,
                 prescription = prescription,
                 weekday = weekday,
                 dayTitle = dayTitle,
-                dayNote = dayNote
+                dayNote = dayNote,
+                dropSets = parseDropSets(obj),
+                mainSetDefaults = parseMainSetDefaults(obj)
             )
         } else {
             RoutineExerciseItem(
-                exerciseId = obj.optLong("id", 0L),
+                exerciseId = obj.optLong("id", obj.optLong("exerciseId", 0L)),
                 exerciseName = name,
-                exerciseType = obj.optString("type", ExerciseType.STANDARD_WEIGHT),
+                exerciseType = obj.optString(
+                    "type",
+                    obj.optString("exerciseType", ExerciseType.STANDARD_WEIGHT)
+                ),
                 category = obj.optString("category", ""),
                 equipment = obj.optString("equipment", ""),
                 targetSets = sets,
@@ -737,14 +1193,27 @@ object RoutineParser {
                 targetWeight = weight,
                 targetAddedWeightKg = addedWeight,
                 targetHoldSeconds = hold,
+                targetDistanceKm = obj.optDouble("distanceKm", obj.optDouble("distance", 0.0))
+                    .coerceAtLeast(0.0),
                 restSeconds = restSeconds,
                 prescription = prescription,
                 weekday = weekday,
                 dayTitle = dayTitle,
-                dayNote = dayNote
+                dayNote = dayNote,
+                dropSets = parseDropSets(obj),
+                mainSetDefaults = parseMainSetDefaults(obj)
             )
         }
-        return ScheduledWorkout(item = item, weekday = weekday, slot = slot)
+        // Old routine JSON stored dumbbell loads under addedWeight. Migrate only when the catalog
+        // really knows this exercise: a caller with no catalog (the workout draft codec) has no
+        // field list to judge against, and guessing from the type could move a value the exercise
+        // does record. Those callers normalize later, against the resolved exercise.
+        val normalized = if (matched != null) {
+            item.withLegacyLoadFallback(matched.exerciseFields)
+        } else {
+            item
+        }
+        return ScheduledWorkout(item = normalized, weekday = weekday, slot = slot)
     }
 
     /**
@@ -754,6 +1223,51 @@ object RoutineParser {
      * @param slot the position of the workout within the routine, for an entry that named no weekday.
      */
     private data class ScheduleHint(val weekday: Int, val slot: Int)
+
+    /** Reads optional per-main-set defaults; missing rows are fine and fall back to the item. */
+    private fun parseMainSetDefaults(obj: JSONObject): List<RoutineMainSetDefault> {
+        val array = obj.optJSONArray("mainSets") ?: return emptyList()
+        val result = mutableListOf<RoutineMainSetDefault>()
+        for (i in 0 until array.length()) {
+            val row = array.optJSONObject(i) ?: continue
+            val main = row.optInt("main", row.optInt("mainSet", i + 1)).coerceAtLeast(1)
+            result += RoutineMainSetDefault(
+                mainSetIndex = main,
+                targetReps = row.optInt("reps", 0).coerceIn(0, 100),
+                targetHoldSeconds = row.optInt("holdSeconds", 0).coerceIn(0, 86400),
+                targetWeight = row.optDouble("weight", 0.0).coerceAtLeast(0.0),
+                targetAddedWeightKg = row.optDouble("addedWeight", 0.0).coerceAtLeast(0.0),
+                targetDistanceKm = row.optDouble("distanceKm", 0.0).coerceAtLeast(0.0),
+                restSeconds = row.optInt("restSeconds", 0).coerceIn(0, 600)
+            )
+        }
+        return result.distinctBy { it.mainSetIndex }.sortedBy { it.mainSetIndex }
+    }
+
+    /**
+     * Reads optional drop-set prescriptions. A missing or malformed array is no drop sets, never
+     * a reason to reject the whole routine.
+     */
+    private fun parseDropSets(obj: JSONObject): List<RoutineDropSet> {
+        val array = obj.optJSONArray("dropSets") ?: return emptyList()
+        val result = mutableListOf<RoutineDropSet>()
+        for (i in 0 until array.length()) {
+            val drop = array.optJSONObject(i) ?: continue
+            val mainSet = drop.optInt("mainSet", drop.optInt("mainSetIndex", 1)).coerceAtLeast(1)
+            val dropIndex = drop.optInt("drop", drop.optInt("dropIndex", i + 1)).coerceAtLeast(1)
+            result += RoutineDropSet(
+                mainSetIndex = mainSet,
+                dropIndex = dropIndex,
+                targetReps = drop.optInt("reps", drop.optInt("targetReps", 0)).coerceIn(0, 1000),
+                targetHoldSeconds = drop.optInt("holdSeconds", drop.optInt("targetHoldSeconds", 0)).coerceIn(0, 86400),
+                targetWeight = drop.optDouble("weight", drop.optDouble("targetWeight", 0.0)).coerceAtLeast(0.0),
+                targetAddedWeightKg = drop.optDouble("addedWeight", drop.optDouble("targetAddedWeightKg", 0.0)).coerceAtLeast(0.0),
+                targetDistanceKm = drop.optDouble("distanceKm", drop.optDouble("distance", 0.0)).coerceAtLeast(0.0),
+                restSeconds = drop.optInt("restSeconds", 0).coerceIn(0, 600)
+            )
+        }
+        return result.sortedWith(compareBy({ it.mainSetIndex }, { it.dropIndex }))
+    }
 
     private fun readScheduleHint(obj: JSONObject, fallbackSlot: Int): ScheduleHint {
         // The weekday key: a name, or the ISO weekday number.
@@ -867,6 +1381,8 @@ object RoutineParser {
         var currentWeekday = RoutineSchedule.weekdayForSlot(1, weekStartsOnMonday)
         var currentSlot = 1
         var currentDayTitle = ""
+        // The exercise a standalone "Drop set: ..." line belongs to.
+        var lastWorkout: ScheduledWorkout? = null
 
         for (line in lines) {
             val lineTrimmed = line.trim()
@@ -882,9 +1398,37 @@ object RoutineParser {
                     RoutineSchedule.weekdayForSlot(currentSlot, weekStartsOnMonday)
                 }
                 currentDayTitle = header.title
+                lastWorkout = null
                 titlesMap[currentWeekday] = currentDayTitle
                 if (!daysMap.containsKey(currentWeekday)) {
                     daysMap[currentWeekday] = mutableListOf()
+                }
+                continue
+            }
+
+            // A standalone reduction line belongs to the exercise above it. This is the shape
+            // people paste from a coach ("Drop set: 30 kg x 8") and must not become a note.
+            val standaloneDrops = parseStandaloneDropLine(
+                lineTrimmed,
+                lastWorkout?.item?.targetSets ?: 1
+            )
+            if (standaloneDrops.isNotEmpty() && lastWorkout != null) {
+                val weekday = lastWorkout!!.weekday
+                val list = daysMap[weekday]
+                val index = list?.indexOfLast { it === lastWorkout } ?: -1
+                if (list != null && index >= 0) {
+                    val currentItem = list[index].item
+                    val combined = (currentItem.dropSets + standaloneDrops)
+                        .groupBy { it.mainSetIndex }
+                        .flatMap { (_, rows) ->
+                            rows.sortedBy { it.dropIndex }.mapIndexed { childIndex, drop ->
+                                drop.copy(dropIndex = childIndex + 1)
+                            }
+                        }
+                        .sortedWith(compareBy({ it.mainSetIndex }, { it.dropIndex }))
+                    val updated = list[index].copy(item = currentItem.copy(dropSets = combined))
+                    list[index] = updated
+                    lastWorkout = updated
                 }
                 continue
             }
@@ -910,7 +1454,9 @@ object RoutineParser {
                 .replaceFirst(Regex("""^\d+[\.\)]\s*"""), "")
                 .substringBefore('|')
                 .trim()
-            if (looksLikeProseNotExercise(proseCandidate)) {
+            // Test the exercise-name head, not the prescription. A comma in "3x8, drop 30kg x8"
+            // used to make the whole line look like prose and silently drop the exercise.
+            if (looksLikeProseNotExercise(nameHeadOfLine(proseCandidate))) {
                 val cleanedNote = cleanNoteText(lineTrimmed)
                 if (cleanedNote.isNotBlank() && !NOTE_LABEL_ONLY.matches(cleanedNote)) {
                     notesMap.getOrPut(currentWeekday) { mutableListOf() }.add(cleanedNote)
@@ -1019,6 +1565,9 @@ object RoutineParser {
                 else "$sets sets x $reps reps"
             }
 
+            // The prescription is the only place a pasted program carries its load, e.g.
+            // "3x8 @ 34kg". Without this the text-to-JSON migration wrote 0 for every exercise.
+            val (textWeight, textAddedWeight) = parsePrescribedLoad(prescriptionCandidate)
             val item = if (matched != null) {
                 RoutineExerciseItem(
                     exerciseId = matched.id,
@@ -1028,12 +1577,14 @@ object RoutineParser {
                     equipment = matched.equipment,
                     targetSets = sets,
                     targetReps = reps,
-                    targetWeight = 0.0,
+                    targetWeight = textWeight,
+                    targetAddedWeightKg = textAddedWeight,
                     targetHoldSeconds = hold,
                     prescription = finalPrescription,
                     weekday = currentWeekday,
-                    dayTitle = currentDayTitle
-                )
+                    dayTitle = currentDayTitle,
+                    dropSets = parseInlineDropSets(prescriptionCandidate, sets)
+                ).withLegacyLoadFallback(matched.exerciseFields)
             } else {
                 RoutineExerciseItem(
                     exerciseId = 0L,
@@ -1043,15 +1594,18 @@ object RoutineParser {
                     equipment = "Bodyweight",
                     targetSets = sets,
                     targetReps = reps,
-                    targetWeight = 0.0,
+                    targetWeight = textWeight,
+                    targetAddedWeightKg = textAddedWeight,
                     targetHoldSeconds = hold,
                     prescription = finalPrescription,
                     weekday = currentWeekday,
-                    dayTitle = currentDayTitle
+                    dayTitle = currentDayTitle,
+                    dropSets = parseInlineDropSets(prescriptionCandidate, sets)
                 )
             }
-            daysMap.getOrPut(currentWeekday) { mutableListOf() }
-                .add(ScheduledWorkout(item = item, weekday = currentWeekday, slot = currentSlot))
+            val scheduled = ScheduledWorkout(item = item, weekday = currentWeekday, slot = currentSlot)
+            daysMap.getOrPut(currentWeekday) { mutableListOf() }.add(scheduled)
+            lastWorkout = scheduled
         }
 
         val nonNullDays = daysMap.filter { it.value.isNotEmpty() }

@@ -6,10 +6,12 @@
  */
 package com.example.ui.viewmodel
 
+import com.example.data.model.DropSetRules
 import com.example.data.model.Exercise
+import com.example.data.model.ExerciseField
 import com.example.data.model.ExerciseType
 import com.example.data.model.LoggedSet
-import com.example.data.model.WorkoutMetrics
+import com.example.data.model.RemovedActiveExercise
 import com.example.data.model.WorkoutSession
 import com.example.data.repository.FitnessRepository
 import kotlinx.coroutines.CoroutineScope
@@ -21,17 +23,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Owns the live quick-workout session: its exercise list, sets and save/discard transitions.
- *
- * Routine workouts have their own state holder and remain in [MainViewModel] for now. This
- * controller deliberately keeps persistence and widget/AI-summary side effects behind callbacks so
- * it has one responsibility and the existing ViewModel facade stays unchanged.
+ * Owns the live quick-workout session: its exercise list, sets, drop sets and save/discard
+ * transitions. All exercise additions, removals and drops here are session-only.
  */
 class QuickWorkoutSessionController(
     private val repository: FitnessRepository,
     private val scope: CoroutineScope,
     private val currentBodyWeightKg: () -> Double,
     private val resolveBodyWeightKg: suspend () -> Double,
+    private val defaultRestForExercise: (Long) -> Int,
     private val stopRestTimer: () -> Unit,
     private val refreshBenchmarks: () -> Unit,
     private val clearWorkoutDraft: () -> Unit,
@@ -65,69 +65,106 @@ class QuickWorkoutSessionController(
             _activeSession.value!!
         }
 
+        // The picker excludes exercises already in the session, but adding the same movement
+        // again through the existing API means "another set of it", not "ignore the request".
         if (_activeSessionExercises.value.none { it.id == exercise.id }) {
             _activeSessionExercises.value = _activeSessionExercises.value + exercise
         }
 
-        val currentList = _activeSets.value.toMutableList()
-        val existingSetsOfThisExercise = currentList.filter { it.exerciseId == exercise.id }
-        val nextSetNumber = existingSetsOfThisExercise.size + 1
-        val lastSet = existingSetsOfThisExercise.lastOrNull()
+        val currentList = DropSetRules.normalize(_activeSets.value).toMutableList()
+        val existingMains = currentList.filter { it.exerciseId == exercise.id && !it.isDropSet }
+        val nextSetNumber = (existingMains.maxOfOrNull { it.setNumber } ?: 0) + 1
+        val lastSet = existingMains.maxByOrNull { it.setNumber }
 
+        val fields = exercise.exerciseFields
         val newSet = LoggedSet(
             sessionId = currentSession.id,
             exerciseId = exercise.id,
             exerciseName = exercise.name,
             exerciseType = exercise.exerciseType,
             setNumber = nextSetNumber,
-            weight = lastSet?.weight
-                ?: if (exercise.exerciseType == ExerciseType.STANDARD_WEIGHT) 60.0 else 0.0,
-            addedWeight = lastSet?.addedWeight ?: 0.0,
-            reps = lastSet?.reps
-                ?: if (exercise.exerciseType == ExerciseType.PURE_BODYWEIGHT) 10 else 8,
-            holdDurationSeconds = lastSet?.holdDurationSeconds ?: 0,
+            weight = if (ExerciseField.WEIGHT in fields) lastSet?.weight ?: 60.0 else 0.0,
+            addedWeight = if (ExerciseField.ADDED_WEIGHT in fields) lastSet?.addedWeight ?: 0.0 else 0.0,
+            reps = if (ExerciseField.REPS in fields) {
+                lastSet?.reps ?: if (exercise.exerciseType == ExerciseType.PURE_BODYWEIGHT) 10 else 8
+            } else 0,
+            holdDurationSeconds = if (
+                ExerciseField.HOLD_SECONDS in fields || ExerciseField.TIME_SECONDS in fields
+            ) {
+                lastSet?.holdDurationSeconds ?: 0
+            } else 0,
+            distanceKm = if (ExerciseField.DISTANCE_KM in fields) lastSet?.distanceKm ?: 0.0 else 0.0,
+            restSecondsOverride = lastSet?.restSecondsOverride
+                ?: defaultRestForExercise(exercise.id).takeIf { it > 0 },
             isCompleted = false,
             timestamp = System.currentTimeMillis(),
-            bodyWeightKg = currentBodyWeightKg()
+            bodyWeightKg = currentBodyWeightKg(),
+            setUid = LoggedSet.newUid()
         )
         currentList.add(newSet)
-        _activeSets.value = currentList
+        _activeSets.value = DropSetRules.renumberExerciseSets(currentList, exercise.id)
+    }
+
+    fun addDropSet(parent: LoggedSet) {
+        val current = DropSetRules.normalize(_activeSets.value)
+        val parentSet = current.firstOrNull { it.setUid == parent.setUid && !it.isDropSet } ?: return
+        val siblings = DropSetRules.childrenOf(current, parentSet.setUid)
+        val source = siblings.lastOrNull() ?: parentSet
+        val child = LoggedSet(
+            sessionId = _activeSession.value?.id ?: 0L,
+            exerciseId = parentSet.exerciseId,
+            exerciseName = parentSet.exerciseName,
+            exerciseType = parentSet.exerciseType,
+            setNumber = parentSet.setNumber,
+            weight = source.weight,
+            addedWeight = source.addedWeight,
+            reps = source.reps,
+            holdDurationSeconds = source.holdDurationSeconds,
+            distanceKm = source.distanceKm,
+            isCompleted = false,
+            timestamp = System.currentTimeMillis(),
+            bodyWeightKg = currentBodyWeightKg(),
+            isWarmup = parentSet.isWarmup,
+            restSecondsOverride = source.restSecondsOverride,
+            setUid = LoggedSet.newUid(),
+            parentSetUid = parentSet.setUid,
+            dropIndex = (siblings.maxOfOrNull { it.dropIndex } ?: 0) + 1
+        )
+        _activeSets.value = current + child
     }
 
     fun updateSet(index: Int, updated: LoggedSet) {
         val currentList = _activeSets.value.toMutableList()
         if (index in currentList.indices) {
-            currentList[index] = updated
+            val existing = currentList[index]
+            currentList[index] = updated.copy(
+                setUid = existing.setUid,
+                parentSetUid = existing.parentSetUid,
+                dropIndex = existing.dropIndex
+            )
             _activeSets.value = currentList
         }
     }
 
     fun updateSet(updated: LoggedSet) {
         val currentList = _activeSets.value.toMutableList()
-        val idx = currentList.indexOfFirst {
-            (it.id != 0L && it.id == updated.id) ||
-                (it.exerciseId == updated.exerciseId && it.setNumber == updated.setNumber)
-        }
-        if (idx != -1) {
-            currentList[idx] = updated
-            _activeSets.value = currentList
-        }
+        val idx = currentList.indexOfFirst { existing -> sameSet(existing, updated) }
+        if (idx != -1) updateSet(idx, updated)
+    }
+
+    fun toggleSetCompletion(setToUpdate: LoggedSet, completed: Boolean) {
+        val current = DropSetRules.normalize(_activeSets.value)
+        val existing = current.firstOrNull { sameSet(it, setToUpdate) } ?: return
+        _activeSets.value = DropSetRules.toggleCompletion(current, existing.setUid, completed)
     }
 
     fun deleteSet(index: Int) {
         val currentList = _activeSets.value.toMutableList()
         if (index in currentList.indices) {
-            val removed = currentList.removeAt(index)
-            var currentSetNum = 1
-            val reindexed = currentList.map { set ->
-                if (set.exerciseId == removed.exerciseId) {
-                    set.copy(setNumber = currentSetNum++)
-                } else {
-                    set
-                }
-            }
-            _activeSets.value = reindexed
-            if (reindexed.none { it.exerciseId == removed.exerciseId }) {
+            val removed = currentList[index]
+            val remaining = DropSetRules.removeSet(currentList, removed.setUid)
+            _activeSets.value = remaining
+            if (remaining.none { it.exerciseId == removed.exerciseId }) {
                 _activeSessionExercises.value =
                     _activeSessionExercises.value.filter { it.id != removed.exerciseId }
             }
@@ -135,14 +172,52 @@ class QuickWorkoutSessionController(
     }
 
     fun deleteSet(setToDel: LoggedSet) {
-        val currentList = _activeSets.value.toMutableList()
-        val idx = currentList.indexOfFirst {
-            (it.id != 0L && it.id == setToDel.id) ||
-                (it.exerciseId == setToDel.exerciseId && it.setNumber == setToDel.setNumber)
+        val current = DropSetRules.normalize(_activeSets.value)
+        val existing = current.firstOrNull { sameSet(it, setToDel) } ?: return
+        _activeSets.value = DropSetRules.removeSet(current, existing.setUid)
+        if (_activeSets.value.none { it.exerciseId == existing.exerciseId }) {
+            _activeSessionExercises.value =
+                _activeSessionExercises.value.filter { it.id != existing.exerciseId }
         }
-        if (idx != -1) {
-            deleteSet(idx)
+    }
+
+    fun removeExercise(exerciseId: Long): RemovedActiveExercise? {
+        val index = _activeSessionExercises.value.indexOfFirst { it.id == exerciseId }
+        if (index < 0) return null
+        val sets = _activeSets.value.filter { it.exerciseId == exerciseId }
+        val snapshot = RemovedActiveExercise(
+            exercise = _activeSessionExercises.value[index],
+            routineItem = null,
+            sets = sets,
+            index = index,
+            wasSessionOnly = true
+        )
+        _activeSessionExercises.value = _activeSessionExercises.value.filterIndexed { i, _ -> i != index }
+        _activeSets.value = _activeSets.value.filterNot { it.exerciseId == exerciseId }
+        return snapshot
+    }
+
+    fun restoreExercise(snapshot: RemovedActiveExercise) {
+        if (_activeSessionExercises.value.any { it.id == snapshot.exercise.id }) return
+        val index = snapshot.index.coerceIn(0, _activeSessionExercises.value.size)
+        _activeSessionExercises.value = _activeSessionExercises.value.toMutableList().apply {
+            add(index, snapshot.exercise)
         }
+        val existingUids = _activeSets.value.mapNotNull { it.setUid.takeIf(String::isNotBlank) }.toHashSet()
+        val restored = DropSetRules.normalize(snapshot.sets).filterNot { it.setUid in existingUids }
+        _activeSets.value = DropSetRules.renumberExerciseSets(
+            _activeSets.value + restored,
+            snapshot.exercise.id
+        )
+    }
+
+    fun moveExercise(fromIndex: Int, toIndex: Int) {
+        if (fromIndex !in _activeSessionExercises.value.indices) return
+        if (toIndex !in _activeSessionExercises.value.indices || fromIndex == toIndex) return
+        val list = _activeSessionExercises.value.toMutableList()
+        val exercise = list.removeAt(fromIndex)
+        list.add(toIndex, exercise)
+        _activeSessionExercises.value = list
     }
 
     fun finishAndSave(notes: String = "") {
@@ -152,7 +227,8 @@ class QuickWorkoutSessionController(
         scope.launch(Dispatchers.IO) {
             val savedAt = System.currentTimeMillis()
             val finalBodyWeightKg = resolveBodyWeightKg()
-            val setsToSave = currentSets
+            val repaired = repairCompletedChildren(currentSets)
+            val setsToSave = repaired
                 .filter { it.isCompleted }
                 .mapIndexed { index, set ->
                     set.copy(
@@ -168,8 +244,7 @@ class QuickWorkoutSessionController(
                     notes = notes
                 )
                 val sessionId = repository.insertSession(finalSession)
-                val setsWithSessionId = setsToSave.map { it.copy(sessionId = sessionId) }
-                repository.insertSets(setsWithSessionId)
+                repository.insertSets(setsToSave.map { it.copy(sessionId = sessionId) })
                 savedSessionId = sessionId
                 refreshBenchmarks()
             }
@@ -188,7 +263,6 @@ class QuickWorkoutSessionController(
         clearWorkoutDraft()
     }
 
-    /** Clears only the in-memory session, used by data replacement and full-reset flows. */
     fun clearLiveState() {
         _activeSession.value = null
         _activeSets.value = emptyList()
@@ -198,12 +272,30 @@ class QuickWorkoutSessionController(
     fun restore(session: WorkoutSession, exercises: List<Exercise>, sets: List<LoggedSet>) {
         _activeSession.value = session
         _activeSessionExercises.value = exercises
-        _activeSets.value = sets
+        _activeSets.value = DropSetRules.normalize(sets)
     }
 
     fun rename(title: String) {
         _activeSession.value?.let { session ->
             _activeSession.value = session.copy(title = title)
+        }
+    }
+
+    private fun sameSet(a: LoggedSet, b: LoggedSet): Boolean =
+        (b.setUid.isNotBlank() && a.setUid == b.setUid) ||
+            (b.id != 0L && a.id == b.id) ||
+            (a.exerciseId == b.exerciseId &&
+                a.setNumber == b.setNumber &&
+                a.parentSetUid == b.parentSetUid &&
+                a.dropIndex == b.dropIndex)
+
+    /** A completed child implies a performed parent; fix corrupted old data before saving. */
+    private fun repairCompletedChildren(sets: List<LoggedSet>): List<LoggedSet> {
+        val normalized = DropSetRules.normalize(sets)
+        val completedChildren = normalized.filter { it.isDropSet && it.isCompleted }
+        val parentUids = completedChildren.mapNotNull { it.parentSetUid }.toHashSet()
+        return normalized.map { set ->
+            if (!set.isDropSet && set.setUid in parentUids) set.copy(isCompleted = true) else set
         }
     }
 }

@@ -81,7 +81,7 @@ object WorkoutWidgetDataSource {
     ): WidgetSnapshot {
         val settings = prefs.appSettingsFlow.first()
         val themes = prefs.androidWidgetThemesFlow.first()
-        val activeRoutineId = prefs.activeRoutineIdFlow.first()
+        val activeScheduleId = prefs.activeScheduleIdFlow.first()
 
         val room = db.withTransaction {
             WidgetRoomData(
@@ -89,7 +89,9 @@ object WorkoutWidgetDataSource {
                 sessions = db.workoutDao().getAllSessionsWithSetsOnce(),
                 routines = db.savedRoutineDao().getAllRoutinesOnce(),
                 exercises = db.exerciseDao().getAllExercisesList(),
-                roomProfile = db.userProfileDao().getProfileDirect()
+                roomProfile = db.userProfileDao().getProfileDirect(),
+                schedules = db.schedulePlanDao().getAllSchedulesOnce(),
+                slots = db.schedulePlanDao().getAllScheduleSlotsOnce()
             )
         }
         val streak = WorkoutStreak.calculate(
@@ -100,29 +102,60 @@ object WorkoutWidgetDataSource {
         )
 
         val todayKey = LocalDateKey.keyOf(now)
-        val activeRoutine = room.routines.firstOrNull { it.id == activeRoutineId }
-        val scheduleToday = room.schedule.firstOrNull { day ->
-            (day.dateKey.takeIf { it > 0L } ?: LocalDateKey.keyOf(day.dateStart)) == todayKey &&
-                activeRoutine != null &&
-                day.routineId == activeRoutineId
-        }
-        val parsedToday = if (scheduleToday == null && activeRoutine != null) {
-            val todayWeekday = LocalDateKey.isoDayOfWeek(todayKey)
-            RoutineParser.parseWeek(
-                activeRoutine.exercisesJson,
-                room.exercises,
-                settings.weekStartsOnMonday
-            ).firstOrNull { it.weekday == todayWeekday }
-        } else {
+        val todayWeekday = LocalDateKey.isoDayOfWeek(todayKey)
+        val activeSchedule = room.schedules.firstOrNull { it.id == activeScheduleId }
+        val todaySlot = if (activeSchedule == null) {
             null
+        } else {
+            room.slots.firstOrNull {
+                it.scheduleId == activeSchedule.id && it.weekday == todayWeekday
+            }
         }
-        val workoutDay = (scheduleToday?.exerciseCount ?: parsedToday?.exercises?.size ?: 0) > 0
-        val workoutName = when {
-            scheduleToday != null && scheduleToday.exerciseCount > 0 ->
-                scheduleToday.dayTitle.ifBlank { Weekday.name(scheduleToday.weekday) }
-            parsedToday != null && parsedToday.exercises.isNotEmpty() ->
-                parsedToday.dayTitle.ifBlank { parsedToday.dayName }
-            else -> ""
+        val todayRoutine = todaySlot?.routineId?.let { id ->
+            room.routines.firstOrNull { it.id == id && it.modelVersion >= 2 }
+        }
+        val todayItems = todayRoutine?.let {
+            runCatching { RoutineParser.parseSingleWorkout(it.exercisesJson, room.exercises) }
+                .getOrElse { emptyList() }
+        }.orEmpty()
+        var workoutDay = todayItems.isNotEmpty()
+        var workoutName = if (workoutDay) {
+            todayRoutine?.name ?: Weekday.name(todayWeekday)
+        } else {
+            ""
+        }
+        if (!workoutDay && activeSchedule == null) {
+            val legacyRow = room.schedule.firstOrNull { day ->
+                (day.dateKey.takeIf { it > 0L } ?: LocalDateKey.keyOf(day.dateStart)) == todayKey
+            }
+            if (legacyRow != null) {
+                workoutDay = legacyRow.exerciseCount > 0
+                workoutName = if (workoutDay) {
+                    legacyRow.dayTitle.ifBlank { Weekday.name(legacyRow.weekday) }
+                } else {
+                    ""
+                }
+            } else {
+                val legacyActiveId = prefs.activeRoutineIdFlow.first()
+                val legacyRoutine = room.routines.firstOrNull {
+                    it.id == legacyActiveId && it.modelVersion < 2
+                }
+                if (legacyRoutine != null) {
+                    val legacyDay = runCatching {
+                        RoutineParser.parseWeek(
+                            legacyRoutine.exercisesJson,
+                            room.exercises,
+                            settings.weekStartsOnMonday
+                        ).firstOrNull { it.weekday == todayWeekday }
+                    }.getOrNull()
+                    workoutDay = legacyDay != null && legacyDay.exercises.isNotEmpty()
+                    workoutName = if (workoutDay) {
+                        legacyDay?.dayTitle?.ifBlank { legacyRoutine.name }.orEmpty()
+                    } else {
+                        ""
+                    }
+                }
+            }
         }
 
         val week = HomeDashboard.rollingWindow(now)
@@ -192,6 +225,8 @@ object WorkoutWidgetDataSource {
         val sessions: List<SessionWithSets>,
         val routines: List<com.example.data.model.SavedRoutine>,
         val exercises: List<com.example.data.model.Exercise>,
-        val roomProfile: com.example.data.model.UserProfile?
+        val roomProfile: com.example.data.model.UserProfile?,
+        val schedules: List<com.example.data.model.SchedulePlan>,
+        val slots: List<com.example.data.model.ScheduleDaySlot>
     )
 }

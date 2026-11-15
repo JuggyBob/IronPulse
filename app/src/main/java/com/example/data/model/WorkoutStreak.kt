@@ -130,7 +130,12 @@ object WorkoutStreak {
                         null
                     }
                 }
-                if (session.routineId <= 0L) return@mapNotNull null
+                // Legacy multi-day routine sessions carried a weekday. A new standalone Routine
+                // has routineId but weekday 0 and no planned date, so it must not invent schedule
+                // adherence.
+                if (session.routineId <= 0L || session.routineWeekday !in 1..7) {
+                    return@mapNotNull null
+                }
                 val startDate = LocalDateKey.keyOf(session.startTime)
                 val plan = byDate[startDate]
                 return@mapNotNull if (plan == null || plan.exerciseCount > 0) startDate else null

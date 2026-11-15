@@ -203,7 +203,15 @@ fun Modifier.liquidGlassBackdrop(
      * A uniform shade over the blurred copy. It keeps the blur and the page colours visible but
      * flattens a bright card behind the dock into a soft glow instead of a separate pale band.
      */
-    scrimAlpha: Float = 0.22f
+    scrimAlpha: Float = 0.22f,
+    /**
+     * When false the layer keeps its previous capture instead of recording the page again.
+     *
+     * Used for the short navigation transition: the dock's blurred copy stays visually stable, the
+     * page underneath is already moving, and re-recording a full-screen layer every frame during
+     * the animation was one of the largest costs on the UI thread.
+     */
+    updateContent: Boolean = true
 ): Modifier {
     if (!enabled || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return this
     return drawWithCache {
@@ -215,6 +223,7 @@ fun Modifier.liquidGlassBackdrop(
         )
         val clip = Path()
         val cornerPx = cornerRadius.toPx()
+        var layerHasContent = false
 
         onDrawWithContent {
             // Draw the page normally first.
@@ -225,10 +234,13 @@ fun Modifier.liquidGlassBackdrop(
                 // Record a second copy for the glass. Its RenderEffect must stay set until the
                 // frame executes: RenderNode properties are read when the display list runs, not
                 // when drawLayer() is called. Resetting it here would make both copies unblurred.
-                layer.record {
-                    this@onDrawWithContent.drawContent()
+                if (updateContent || !layerHasContent) {
+                    layer.record {
+                        this@onDrawWithContent.drawContent()
+                    }
+                    layer.renderEffect = effect
+                    layerHasContent = true
                 }
-                layer.renderEffect = effect
                 clip.reset()
                 clip.addRoundRect(
                     RoundRect(

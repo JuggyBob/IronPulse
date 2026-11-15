@@ -90,7 +90,9 @@ class BackupArchiveCodecTest {
     @Test
     fun `a newer data schema is rejected`() {
         val file = validArchive("newer-schema.ironpulse")
-        val manifest = readManifest(file).copy(dataSchemaVersion = 3)
+        val manifest = readManifest(file).copy(
+            dataSchemaVersion = BackupFormat.CURRENT_DATA_SCHEMA_VERSION + 1
+        )
         val future = temp.newFile("newer-schema-corrupt.ironpulse")
         rewriteEntry(
             file,

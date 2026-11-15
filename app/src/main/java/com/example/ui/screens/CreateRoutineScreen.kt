@@ -1,12 +1,18 @@
 package com.example.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +30,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
@@ -33,6 +40,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Check
@@ -42,6 +50,7 @@ import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -67,26 +76,42 @@ import com.example.data.model.ExerciseMedia
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.model.DistanceFormat
 import com.example.data.model.Exercise
+import com.example.data.model.ExerciseField
+import com.example.data.model.ExerciseFieldCatalog
+import com.example.data.model.ExerciseFieldValues
 import com.example.data.model.ExerciseSearch
 import com.example.data.model.ExerciseType
+import com.example.data.model.RoutineDropSet
 import com.example.data.model.RoutineExerciseItem
+import com.example.data.model.RoutineMainSetDefault
 import com.example.data.model.RoutineDayClamp
 import com.example.data.model.RoutineParser
+import com.example.data.model.sanitizedFor
 import com.example.data.model.SavedRoutine
 import com.example.data.model.WeightConversion
 import com.example.data.model.WeightUnit
@@ -95,6 +120,10 @@ import com.example.ui.components.AiUnavailableDialog
 import com.example.ui.components.AnimatedDropdownField
 import com.example.ui.components.DayDropdown
 import com.example.ui.components.CustomExerciseDialog
+import com.example.ui.components.DropSetBranchConnector
+import com.example.ui.components.DropSetBranchLeadIn
+import com.example.ui.components.DropSetRowVisibility
+import com.example.ui.components.ExerciseDetailDialog
 import com.example.ui.components.WeightInputField
 import com.example.ui.theme.CoralOrange
 import com.example.ui.theme.DarkBg
@@ -111,6 +140,7 @@ import com.example.ui.theme.OnAccent
 import com.example.ui.viewmodel.MainViewModel
 import com.example.util.ExerciseMediaStore
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Training goals offered by the routine builder. The first entry is also the default so the
@@ -136,9 +166,13 @@ fun CreateRoutineScreen(
     val userCreatedExercises by viewModel.userCreatedExercises.collectAsStateWithLifecycle()
     val aiCreationState by viewModel.aiExerciseCreationState.collectAsStateWithLifecycle()
     val aiErrorDialog by viewModel.aiErrorDialog.collectAsStateWithLifecycle()
+    val autoplayExerciseDemos by viewModel.autoplayExerciseDemos.collectAsStateWithLifecycle()
+    // The read-only exercise sheet opened by tapping an exercise name in the routine list.
+    var exerciseShowingDetails by remember { mutableStateOf<Exercise?>(null) }
     val customExerciseResult by viewModel.customExerciseResult.collectAsStateWithLifecycle()
     // Weights live in kilograms; this is the unit the athlete reads and types in.
     val unit by viewModel.weightUnit.collectAsStateWithLifecycle()
+    val exerciseDefaultRests by viewModel.exerciseDefaultRests.collectAsStateWithLifecycle()
     // Where the athlete's week begins. It decides the order the seven days are shown in, and where
     // a sequence of workouts with no weekday of its own starts.
     val weekStartsOnMonday by viewModel.weekStartFlow.collectAsStateWithLifecycle()
@@ -293,6 +327,13 @@ fun CreateRoutineScreen(
 
         // Last line of defence: never persist an exercise on a day that is not part of the week.
         val clamped = RoutineDayClamp.clampExercises(selectedRoutineExercises.toList())
+            .map { item ->
+                val fields = allExercises.firstOrNull {
+                    it.id == item.exerciseId ||
+                        it.name.equals(item.exerciseName, ignoreCase = true)
+                }?.exerciseFields
+                if (fields == null) item else item.sanitizedFor(fields)
+            }
         val trainingDays = clamped.map { it.weekday }.distinct().size.coerceAtLeast(1)
 
         if (isEditing) {
@@ -730,16 +771,10 @@ fun CreateRoutineScreen(
                                                 Button(
                                                     onClick = {
                                                         selectedRoutineExercises.add(
-                                                            RoutineExerciseItem(
-                                                                exerciseId = exercise.id,
-                                                                exerciseName = exercise.name,
-                                                                exerciseType = exercise.exerciseType,
-                                                                category = exercise.category,
-                                                                equipment = exercise.equipment,
-                                                                targetSets = 3,
-                                                                targetReps = 8,
-                                                                prescription = "3 sets x 8 reps",
-                                                                weekday = activeDayForAdding
+                                                            defaultRoutineItemFor(
+                                                                exercise,
+                                                                activeDayForAdding,
+                                                                exerciseDefaultRests[exercise.id] ?: 0
                                                             )
                                                         )
                                                         searchQuery = "" // Clear after adding
@@ -866,6 +901,10 @@ fun CreateRoutineScreen(
                             item = item,
                             unit = unit,
                             expanded = expandedAddedWeightIndex == visibleIndex,
+                            supportedFields = allExercises.firstOrNull {
+                                it.id == item.exerciseId ||
+                                    it.name.equals(item.exerciseName, ignoreCase = true)
+                            }?.exerciseFields ?: ExerciseFieldCatalog.defaultsForType(item.exerciseType),
                             canMoveUp = visibleIndex > 0,
                             canMoveDown = visibleIndex < visibleRoutineEntries.size - 1,
                             onMoveUp = {
@@ -887,6 +926,12 @@ fun CreateRoutineScreen(
                                 // two open panels on a phone screen is one too many.
                                 expandedAddedWeightIndex =
                                     if (expandedAddedWeightIndex == visibleIndex) null else visibleIndex
+                            },
+                            onShowDetails = {
+                                allExercises.firstOrNull {
+                                    it.id == item.exerciseId ||
+                                        it.name.equals(item.exerciseName, ignoreCase = true)
+                                }?.let { exerciseShowingDetails = it }
                             },
                             onUpdate = { updated ->
                                 selectedRoutineExercises[index] = updated
@@ -960,16 +1005,10 @@ fun CreateRoutineScreen(
                     searchQuery = ""
                     // Add it to the routine straight away, it is exactly what the user searched for
                     selectedRoutineExercises.add(
-                        RoutineExerciseItem(
-                            exerciseId = state.exercise.id,
-                            exerciseName = state.exercise.name,
-                            exerciseType = state.exercise.exerciseType,
-                            category = state.exercise.category,
-                            equipment = state.exercise.equipment,
-                            targetSets = 3,
-                            targetReps = 8,
-                            prescription = "3 sets x 8 reps",
-                            weekday = activeDayForAdding
+                        defaultRoutineItemFor(
+                            state.exercise,
+                            activeDayForAdding,
+                            exerciseDefaultRests[state.exercise.id] ?: 0
                         )
                     )
                     viewModel.resetAiExerciseCreationState()
@@ -1013,8 +1052,10 @@ fun CreateRoutineScreen(
                 existingExercise = exerciseBeingEdited,
                 prefillName = prefillCustomExerciseName,
                 findSimilar = { viewModel.findSimilarExercise(it) },
-                onSave = { name, category, equipment, exerciseType, description ->
-                    viewModel.createCustomExercise(name, category, equipment, exerciseType, description)
+                onSave = { name, category, equipment, exerciseType, description, supportedFields ->
+                    viewModel.createCustomExercise(
+                        name, category, equipment, exerciseType, description, supportedFields
+                    )
                 },
                 onDismiss = { showCustomExerciseDialog = false },
                 onAttachMedia = if (canOwnMedia) {
@@ -1062,16 +1103,10 @@ fun CreateRoutineScreen(
                     val exercise = result.exercise
                     if (selectedRoutineExercises.none { it.exerciseId == exercise.id }) {
                         selectedRoutineExercises.add(
-                            RoutineExerciseItem(
-                                exerciseId = exercise.id,
-                                exerciseName = exercise.name,
-                                exerciseType = exercise.exerciseType,
-                                category = exercise.category,
-                                equipment = exercise.equipment,
-                                targetSets = 3,
-                                targetReps = 8,
-                                prescription = "3 sets x 8 reps",
-                                weekday = activeDayForAdding
+                            defaultRoutineItemFor(
+                                exercise,
+                                activeDayForAdding,
+                                exerciseDefaultRests[exercise.id] ?: 0
                             )
                         )
                     }
@@ -1088,6 +1123,19 @@ fun CreateRoutineScreen(
                 }
                 else -> Unit
             }
+        }
+
+        // Read-only exercise detail, opened from a routine exercise name. No pen (fields are not
+        // edited from here) and no Add Set (this is a routine, not a running workout).
+        exerciseShowingDetails?.let { detailExercise ->
+            ExerciseDetailDialog(
+                exercise = detailExercise,
+                unit = unit.suffix,
+                onAddSet = null,
+                onDismiss = { exerciseShowingDetails = null },
+                autoplayDemos = autoplayExerciseDemos,
+                onEdit = null
+            )
         }
 
         aiErrorDialog?.let { errorState ->
@@ -1219,20 +1267,76 @@ private fun NoExerciseFoundCard(
     }
 }
 
+/**
+ * A sensible first target for a newly added exercise, using its explicit field configuration.
+ *
+ * The old fixed "3 x 8" gave a Plank a rep target it cannot record. Hold and timed work start at
+ * 30s/10min, and distance work at 1 km, so the routine is editable without a zero staring back.
+ */
+internal fun defaultRoutineItemFor(
+    exercise: Exercise,
+    weekday: Int,
+    defaultRestSeconds: Int = 0
+): RoutineExerciseItem {
+    val fields = exercise.exerciseFields
+    val hold = when {
+        ExerciseField.HOLD_SECONDS in fields -> 30
+        ExerciseField.TIME_SECONDS in fields -> 600
+        else -> 0
+    }
+    val item = RoutineExerciseItem(
+        exerciseId = exercise.id,
+        exerciseName = exercise.name,
+        exerciseType = exercise.exerciseType,
+        category = exercise.category,
+        equipment = exercise.equipment,
+        targetSets = 3,
+        targetReps = if (ExerciseField.REPS in fields) 8 else 0,
+        targetHoldSeconds = hold,
+        targetDistanceKm = if (ExerciseField.DISTANCE_KM in fields) 1.0 else 0.0,
+        restSeconds = defaultRestSeconds.coerceIn(0, 600),
+        weekday = weekday
+    )
+    return item.copy(prescription = RoutineParser.buildPrescription(item))
+}
+
 @Composable
 fun SelectedRoutineExerciseRow(
     index: Int,
     item: RoutineExerciseItem,
     unit: WeightUnit,
     expanded: Boolean,
+    supportedFields: List<ExerciseField> = emptyList(),
     canMoveUp: Boolean,
     canMoveDown: Boolean,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
     onToggleExpanded: () -> Unit,
+    /** Opens the same read-only exercise sheet the workout uses. */
+    onShowDetails: () -> Unit,
     onUpdate: (RoutineExerciseItem) -> Unit,
     onDelete: () -> Unit
 ) {
+    val fields = supportedFields.ifEmpty {
+        ExerciseFieldCatalog.defaultsForType(item.exerciseType)
+    }
+    // The one load value that is always visible. Added weight keeps its + prefix and colour;
+    // standard-weight work now shows its working load too, instead of leaving the card silent.
+    val loadBadge: Triple<String, Color, String>? = when {
+        ExerciseField.ADDED_WEIGHT in fields && item.targetAddedWeightKg > 0.0 ->
+            Triple(
+                "+${formatRoutineWeight(item.targetAddedWeightKg, unit)} ${unit.suffix}",
+                CoralOrange,
+                "routine_added_weight_badge_$index"
+            )
+        ExerciseField.WEIGHT in fields && item.targetWeight > 0.0 ->
+            Triple(
+                "${formatRoutineWeight(item.targetWeight, unit)} ${unit.suffix}",
+                ElectricCyan,
+                "routine_weight_badge_$index"
+            )
+        else -> null
+    }
     Card(
         modifier = Modifier
             .testTag("selected_routine_exercise_$index"),
@@ -1268,44 +1372,67 @@ fun SelectedRoutineExerciseRow(
 
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            // Tapping the name opens the settings for this exercise. It is the
-                            // only affordance on the row, so a routine with twenty exercises does
-                            // not carry twenty visible weight fields.
+                            // Tapping the name opens the same read-only exercise sheet the workout
+                            // shows: instructions, media, fields and targets. The defaults panel
+                            // has its own small control, so the name is no longer the only route
+                            // to it and a standard-weight exercise no longer has a dead tap.
                             //
                             // The name takes the leftover space rather than what it wants, so the
-                            // badge beside it always has room and never wraps onto two lines.
+                            // controls beside it always have room and never wrap.
                             Text(
                                 text = item.exerciseName,
-                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontWeight = FontWeight.Bold
+                                ),
                                 color = TextWhite,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier
-                                    .weight(1f, fill = false)
+                                    .weight(1f)
                                     .clip(RoundedCornerShape(6.dp))
-                                    .clickable { onToggleExpanded() }
+                                    .clickable { onShowDetails() }
                                     .testTag("routine_exercise_name_$index")
                             )
-                            // The default added weight, when there is one. A small badge rather
-                            // than a field, so the setting is visible without opening anything.
-                            if (item.targetAddedWeightKg > 0.0) {
+                            if (ExerciseField.ADDED_WEIGHT in fields) {
+                                IconButton(
+                                    onClick = onToggleExpanded,
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .testTag("routine_exercise_defaults_$index")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Tune,
+                                        contentDescription = if (expanded) {
+                                            "Hide exercise defaults"
+                                        } else {
+                                            "Exercise defaults"
+                                        },
+                                        tint = if (expanded) ElectricCyan else TextMuted,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                }
+                            }
+                            // The load the athlete prescribed, visible without opening anything.
+                            loadBadge?.let { (text, color, tag) ->
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Surface(
-                                    color = CoralOrange.copy(alpha = 0.15f),
+                                    color = color.copy(alpha = 0.15f),
                                     shape = RoundedCornerShape(4.dp),
                                     border = androidx.compose.foundation.BorderStroke(
-                                        1.dp, CoralOrange.copy(alpha = 0.4f)
+                                        1.dp, color.copy(alpha = 0.4f)
                                     )
                                 ) {
                                     Text(
-                                        text = "+${formatRoutineWeight(item.targetAddedWeightKg, unit)} ${unit.suffix}",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = CoralOrange,
+                                        text = text,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        color = color,
                                         maxLines = 1,
                                         softWrap = false,
                                         modifier = Modifier
                                             .padding(horizontal = 5.dp, vertical = 2.dp)
-                                            .testTag("routine_added_weight_badge_$index")
+                                            .testTag(tag)
                                     )
                                 }
                             }
@@ -1354,7 +1481,9 @@ fun SelectedRoutineExerciseRow(
                     }
                 }
 
-                // Reorder and Delete Actions
+                // Reorder and Delete Actions. The exercise-level chevron used to sit here, but it
+                // opened a panel at the bottom of the card rather than the main-set fields the
+                // athlete expects. The main-set rows below are the single edit path now.
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
                         onClick = onMoveUp,
@@ -1398,108 +1527,114 @@ fun SelectedRoutineExerciseRow(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Prescribed Sets & Reps
+            // Compact target row. It shows Sets plus the exercise's first meaningful field.
+            // Every other supported field lives in SET DEFAULTS & DROP SETS below, so a Plank is
+            // never offered a Reps control it does not support.
+            val quickField = if (ExerciseField.REPS in fields) {
+                ExerciseField.REPS
+            } else {
+                fields.firstOrNull()
+            }
+            fun updateQuickField(field: ExerciseField, newValue: Double) {
+                val updated = ExerciseFieldValues.write(item, field, newValue)
+                onUpdate(updated.copy(prescription = RoutineParser.buildPrescription(updated)))
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(DarkBg, RoundedCornerShape(8.dp))
                     .padding(horizontal = 10.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Target Sets
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = "Sets:",
+                        text = "Sets",
                         style = MaterialTheme.typography.labelSmall,
-                        color = TextMuted
+                        color = TextMuted,
+                        maxLines = 1
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Row(
-                        modifier = Modifier
-                            .background(DarkSurface, RoundedCornerShape(6.dp))
-                            .border(1.dp, DarkBorder, RoundedCornerShape(6.dp)),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(
-                            onClick = {
-                                if (item.targetSets > 1) {
-                                    onUpdate(item.copy(targetSets = item.targetSets - 1, prescription = "${item.targetSets - 1} sets x ${item.targetReps} reps"))
-                                }
-                            },
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Text("-", color = TextWhite, fontWeight = FontWeight.Bold)
+                    RoutineCompactStepper(
+                        value = item.targetSets.toString(),
+                        onMinus = {
+                            if (item.targetSets > 1) {
+                                val nextSets = item.targetSets - 1
+                                val updated = item.copy(
+                                    targetSets = nextSets,
+                                    dropSets = item.dropSets.filter { it.mainSetIndex <= nextSets },
+                                    mainSetDefaults = item.mainSetDefaults.filter {
+                                        it.mainSetIndex <= nextSets
+                                    }
+                                )
+                                onUpdate(
+                                    updated.copy(
+                                        prescription = RoutineParser.buildPrescription(updated)
+                                    )
+                                )
+                            }
+                        },
+                        onPlus = {
+                            if (item.targetSets < 10) {
+                                val updated = item.copy(targetSets = item.targetSets + 1)
+                                onUpdate(
+                                    updated.copy(
+                                        prescription = RoutineParser.buildPrescription(updated)
+                                    )
+                                )
+                            }
                         }
-                        Text(
-                            text = "${item.targetSets}",
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                            color = TextWhite,
-                            modifier = Modifier.padding(horizontal = 6.dp)
-                        )
-                        IconButton(
-                            onClick = {
-                                if (item.targetSets < 10) {
-                                    onUpdate(item.copy(targetSets = item.targetSets + 1, prescription = "${item.targetSets + 1} sets x ${item.targetReps} reps"))
-                                }
-                            },
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Text("+", color = TextWhite, fontWeight = FontWeight.Bold)
-                        }
-                    }
+                    )
                 }
-
-                // Target Reps
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Reps:",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextMuted
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
+                quickField?.let { field ->
+                    val value = ExerciseFieldValues.read(item, field)
                     Row(
-                        modifier = Modifier
-                            .background(DarkSurface, RoundedCornerShape(6.dp))
-                            .border(1.dp, DarkBorder, RoundedCornerShape(6.dp)),
+                        modifier = Modifier.weight(1f),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        IconButton(
-                            onClick = {
-                                if (item.targetReps > 1) {
-                                    onUpdate(item.copy(targetReps = item.targetReps - 1, prescription = "${item.targetSets} sets x ${item.targetReps - 1} reps"))
-                                }
-                            },
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Text("-", color = TextWhite, fontWeight = FontWeight.Bold)
-                        }
                         Text(
-                            text = "${item.targetReps}",
-                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
-                            color = TextWhite,
-                            modifier = Modifier.padding(horizontal = 6.dp)
+                            text = ExerciseFieldCatalog.shortLabel(field, unit),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
-                        IconButton(
-                            onClick = {
-                                if (item.targetReps < 50) {
-                                    onUpdate(item.copy(targetReps = item.targetReps + 1, prescription = "${item.targetSets} sets x ${item.targetReps + 1} reps"))
-                                }
+                        Spacer(modifier = Modifier.width(6.dp))
+                        RoutineCompactStepper(
+                            value = routineFieldValueText(value, field, unit),
+                            onMinus = {
+                                updateQuickField(
+                                    field,
+                                    stepRoutineValue(value, field, -1, unit)
+                                )
                             },
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Text("+", color = TextWhite, fontWeight = FontWeight.Bold)
-                        }
+                            onPlus = {
+                                updateQuickField(
+                                    field,
+                                    stepRoutineValue(value, field, 1, unit)
+                                )
+                            }
+                        )
                     }
                 }
             }
+
+            RoutineDropSetsSection(
+                item = item,
+                unit = unit,
+                fields = fields,
+                onUpdate = onUpdate
+            )
 
             // The default added weight, opened by tapping the exercise name.
             //
             // It animates in and out rather than snapping, so the row does not jump: the athlete
             // asked for the panel, they should see where it came from and where it went.
             AnimatedVisibility(
-                visible = expanded,
+                visible = expanded && ExerciseField.ADDED_WEIGHT in fields,
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut()
             ) {
@@ -1602,6 +1737,794 @@ fun SelectedRoutineExerciseRow(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Drop-set configuration for one routine exercise.
+ *
+ * Every main set has its own branch and its own children. The values are copied from the parent
+ * when a child is created, never shared, so editing child 2 cannot move child 1 or the parent.
+ * Numbers are local to the main set (`mainSetIndex`, `dropIndex`) and are renumbered on removal.
+ */
+@Composable
+private fun RoutineDropSetsSection(
+    item: RoutineExerciseItem,
+    unit: WeightUnit,
+    fields: List<ExerciseField>,
+    onUpdate: (RoutineExerciseItem) -> Unit
+) {
+    val drops = item.dropSets
+    val knownKeys = remember(item.exerciseId) {
+        drops.map { "${it.mainSetIndex}:${it.dropIndex}" }.toMutableSet()
+    }
+    val scope = rememberCoroutineScope()
+    var removingKeys by remember(item.exerciseId) { mutableStateOf<Set<String>>(emptySet()) }
+    // Entering the editor must show the routine, not every exercise's defaults. The section starts
+    // closed and the athlete opens only what they want to edit.
+    //
+    // rememberSaveable matters here: this composable lives inside a LazyColumn item. Scrolling the
+    // exercise out of the viewport disposes the item, and a plain remember would forget both the
+    // section and the main-set selection. The lazy list's saveable state holder keeps these values
+    // keyed by the item's stable exercise key, so scrolling back restores exactly what was open.
+    var expanded by rememberSaveable(item.exerciseId) { mutableStateOf(false) }
+    var expandedMainSet by rememberSaveable(item.exerciseId) { mutableIntStateOf(0) }
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(220),
+        label = "routine_drop_section_arrow_${item.exerciseId}"
+    )
+
+    fun removeDropAnimated(target: RoutineDropSet) {
+        val key = "${target.mainSetIndex}:${target.dropIndex}"
+        removingKeys = removingKeys + key
+        scope.launch {
+            delay(190)
+            knownKeys.remove(key)
+            val remaining = drops
+                .filterNot {
+                    it.mainSetIndex == target.mainSetIndex && it.dropIndex == target.dropIndex
+                }
+                .map { drop ->
+                    if (drop.mainSetIndex == target.mainSetIndex && drop.dropIndex > target.dropIndex) {
+                        drop.copy(dropIndex = drop.dropIndex - 1)
+                    } else {
+                        drop
+                    }
+                }
+            onUpdate(item.copy(dropSets = remaining))
+            removingKeys = removingKeys - key
+        }
+    }
+
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(7.dp))
+                .clickable { expanded = !expanded }
+                .padding(vertical = 3.dp)
+                .testTag("routine_drop_section_toggle_${item.exerciseId}"),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "SET DEFAULTS & DROP SETS",
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = ElectricCyan
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                if (drops.isEmpty()) "Main sets" else "${drops.size} drop set${if (drops.size == 1) "" else "s"}",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (drops.isEmpty()) TextMuted else ElectricCyan.copy(alpha = 0.85f)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Icon(
+                imageVector = Icons.Default.ArrowDropDown,
+                contentDescription = if (expanded) "Collapse set defaults" else "Expand set defaults",
+                tint = ElectricCyan,
+                modifier = Modifier
+                    .size(18.dp)
+                    .rotate(arrowRotation)
+            )
+        }
+
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(tween(280), expandFrom = Alignment.Top) + fadeIn(tween(160)),
+            exit = shrinkVertically(tween(200)) + fadeOut(tween(120))
+        ) {
+            Column {
+                Spacer(modifier = Modifier.height(4.dp))
+
+                for (mainSetIndex in 1..item.targetSets) {
+                    val mainDefault = item.defaultForMainSet(mainSetIndex)
+                    val children = drops
+                        .filter { it.mainSetIndex == mainSetIndex }
+                        .sortedBy { it.dropIndex }
+                    val mainExpanded = expandedMainSet == mainSetIndex
+
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        // Continue the branch gutter through the main-set fields panel. The line
+                        // starts inside the numbered circle (which paints over it) and runs to the
+                        // bottom of the expanded panel, so it still connects to the drop set even
+                        // when both disclosures are open.
+                        if (children.isNotEmpty()) {
+                            Canvas(modifier = Modifier.matchParentSize()) {
+                                drawLine(
+                                    color = Color(0xFF33556A),
+                                    start = Offset(14.dp.toPx(), 20.dp.toPx()),
+                                    end = Offset(14.dp.toPx(), size.height),
+                                    strokeWidth = 1.2.dp.toPx()
+                                )
+                            }
+                        }
+
+                        Column {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(7.dp))
+                                    .clickable {
+                                        expandedMainSet = if (mainExpanded) 0 else mainSetIndex
+                                    }
+                                    .padding(vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                // The leading column is exactly the branch gutter width. The
+                                // circle is centred in it and the connector draws at its centre,
+                                // so the branch grows straight out of the number.
+                                Box(
+                                    modifier = Modifier.width(28.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(24.dp)
+                                            .background(DarkBg, CircleShape)
+                                            .border(1.dp, DarkBorder, CircleShape),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            mainSetIndex.toString(),
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontWeight = FontWeight.Bold
+                                            ),
+                                            color = TextWhite
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        "Main set $mainSetIndex",
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontWeight = FontWeight.SemiBold
+                                        ),
+                                        color = TextWhite
+                                    )
+                                    Text(
+                                        routineFieldSummary(mainDefault, fields, unit),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = TextMuted,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = if (mainExpanded) {
+                                        "Collapse main set"
+                                    } else {
+                                        "Edit main set"
+                                    },
+                                    tint = if (mainExpanded) ElectricCyan else TextMuted,
+                                    modifier = Modifier
+                                        .size(18.dp)
+                                        .rotate(if (mainExpanded) 180f else 0f)
+                                )
+                            }
+
+                            AnimatedVisibility(
+                                visible = mainExpanded,
+                                enter = expandVertically(tween(240)) + fadeIn(tween(140)),
+                                exit = shrinkVertically(tween(180)) + fadeOut(tween(100))
+                            ) {
+                                RoutineMainSetDefaultsPanel(
+                                    mainSet = mainDefault,
+                                    fields = fields,
+                                    unit = unit,
+                                    onUpdate = { updated -> onUpdate(item.withMainSetDefault(updated)) }
+                                )
+                            }
+                        }
+                    }
+
+                    if (children.isNotEmpty()) {
+                        DropSetBranchLeadIn(
+                            width = 28.dp,
+                            gutter = 14.dp,
+                            modifier = Modifier.height(5.dp)
+                        )
+                    }
+                    children.forEachIndexed { childIndex, drop ->
+                        val key = "${drop.mainSetIndex}:${drop.dropIndex}"
+                        val animateIn = knownKeys.add(key)
+                        key(key) {
+                            // The arm must meet the drop-set number, not the middle of the card.
+                            // The card reports the vertical centre of its header row, so opening
+                            // the dropdown grows the card downwards while the arm stays on D1.
+                            var headerAnchorY by remember(key) { mutableFloatStateOf(0f) }
+                            // Box overlay instead of IntrinsicSize: the card contains
+                            // AnimatedVisibility, which cannot answer intrinsic measurements.
+                            Box(modifier = Modifier.fillMaxWidth()) {
+                                Canvas(modifier = Modifier.matchParentSize()) {
+                                    val gutterX = 14.dp.toPx()
+                                    val armEnd = 28.dp.toPx()
+                                    val anchorY = if (headerAnchorY > 0f) {
+                                        headerAnchorY
+                                    } else {
+                                        size.height / 2f
+                                    }
+                                    drawLine(
+                                        color = Color(0xFF33556A),
+                                        start = Offset(gutterX, 0f),
+                                        end = Offset(
+                                            gutterX,
+                                            if (childIndex == children.lastIndex) anchorY else size.height
+                                        ),
+                                        strokeWidth = 1.2.dp.toPx()
+                                    )
+                                    drawLine(
+                                        color = Color(0xFF33556A),
+                                        start = Offset(gutterX, anchorY),
+                                        end = Offset(armEnd, anchorY),
+                                        strokeWidth = 1.2.dp.toPx()
+                                    )
+                                }
+                                DropSetRowVisibility(
+                                    visible = key !in removingKeys,
+                                    modifier = Modifier.padding(
+                                        start = 28.dp,
+                                        bottom = if (childIndex == children.lastIndex) 4.dp else 6.dp
+                                    )
+                                ) {
+                                    RoutineDropSetCard(
+                                        drop = drop,
+                                        unit = unit,
+                                        fields = fields,
+                                        animateIn = animateIn,
+                                        onUpdate = { updated ->
+                                            onUpdate(
+                                                item.copy(
+                                                    dropSets = drops.map {
+                                                        if (it.mainSetIndex == drop.mainSetIndex &&
+                                                            it.dropIndex == drop.dropIndex
+                                                        ) {
+                                                            updated
+                                                        } else {
+                                                            it
+                                                        }
+                                                    }
+                                                )
+                                            )
+                                        },
+                                        onRemove = { removeDropAnimated(drop) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        onHeaderAnchorYChanged = { headerAnchorY = it }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 3.dp, bottom = 5.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable {
+                                val nextIndex = (children.maxOfOrNull { it.dropIndex } ?: 0) + 1
+                                onUpdate(
+                                    item.copy(
+                                        dropSets = drops + RoutineDropSet(
+                                            mainSetIndex = mainSetIndex,
+                                            dropIndex = nextIndex,
+                                            targetReps = mainDefault.targetReps,
+                                            targetHoldSeconds = mainDefault.targetHoldSeconds,
+                                            targetWeight = mainDefault.targetWeight,
+                                            targetAddedWeightKg = mainDefault.targetAddedWeightKg,
+                                            targetDistanceKm = mainDefault.targetDistanceKm,
+                                            restSeconds = mainDefault.restSeconds
+                                        )
+                                    )
+                                )
+                            }
+                            .testTag("routine_add_drop_${item.exerciseId}_$mainSetIndex"),
+                        color = DarkBg,
+                        shape = RoundedCornerShape(8.dp),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            ElectricCyan.copy(alpha = 0.30f)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 7.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = null,
+                                tint = ElectricCyan.copy(alpha = 0.9f),
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                "Add drop set",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = ElectricCyan.copy(alpha = 0.9f)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoutineMainSetDefaultsPanel(
+    mainSet: RoutineMainSetDefault,
+    fields: List<ExerciseField>,
+    unit: WeightUnit,
+    onUpdate: (RoutineMainSetDefault) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            // Both the main-set and drop-set panels start at the branch gutter (28dp) and reach
+            // the card's right edge, so their outer widths match exactly.
+            .padding(start = 28.dp, bottom = 5.dp)
+            .background(DarkBg, RoundedCornerShape(9.dp))
+            .border(1.dp, DarkBorder.copy(alpha = 0.7f), RoundedCornerShape(9.dp))
+            .padding(9.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp)
+    ) {
+        fields.forEach { field ->
+            RoutineFieldStepper(
+                field = field,
+                value = ExerciseFieldValues.read(mainSet, field),
+                unit = unit,
+                onMinus = {
+                    onUpdate(
+                        ExerciseFieldValues.write(
+                            mainSet,
+                            field,
+                            stepRoutineValue(ExerciseFieldValues.read(mainSet, field), field, -1, unit)
+                        )
+                    )
+                },
+                onPlus = {
+                    onUpdate(
+                        ExerciseFieldValues.write(
+                            mainSet,
+                            field,
+                            stepRoutineValue(ExerciseFieldValues.read(mainSet, field), field, 1, unit)
+                        )
+                    )
+                }
+            )
+        }
+        RoutineRestStepper(
+            restSeconds = mainSet.restSeconds,
+            onMinus = {
+                onUpdate(
+                    mainSet.copy(
+                        restSeconds = if (mainSet.restSeconds <= 0) 0 else {
+                            (mainSet.restSeconds - 15).coerceAtLeast(0)
+                        }
+                    )
+                )
+            },
+            onPlus = {
+                onUpdate(
+                    mainSet.copy(
+                        restSeconds = if (mainSet.restSeconds <= 0) 30 else {
+                            (mainSet.restSeconds + 15).coerceAtMost(600)
+                        }
+                    )
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+private fun RoutineDropSetCard(
+    drop: RoutineDropSet,
+    unit: WeightUnit,
+    fields: List<ExerciseField>,
+    animateIn: Boolean,
+    onUpdate: (RoutineDropSet) -> Unit,
+    onRemove: () -> Unit,
+    modifier: Modifier = Modifier,
+    onHeaderAnchorYChanged: (Float) -> Unit = {}
+) {
+    // The card is disposed with its parent exercise when the routine list scrolls it away. Saving
+    // the expanded flag keeps the athlete's choice: closing a drop set must stay closed.
+    var expanded by rememberSaveable(drop.mainSetIndex, drop.dropIndex) { mutableStateOf(false) }
+    val state = remember { MutableTransitionState(!animateIn) }
+    LaunchedEffect(animateIn) { if (animateIn) state.targetState = true }
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(200),
+        label = "routine_drop_arrow_${drop.mainSetIndex}_${drop.dropIndex}"
+    )
+
+    AnimatedVisibility(
+        visibleState = state,
+        modifier = modifier,
+        enter = expandVertically(tween(280), expandFrom = Alignment.Top) +
+            slideInHorizontally(tween(240)) { -it / 4 } + fadeIn(tween(160)),
+        exit = shrinkVertically(tween(160)) + fadeOut(tween(100))
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("routine_drop_${drop.mainSetIndex}_${drop.dropIndex}"),
+            color = DarkBg,
+            shape = RoundedCornerShape(9.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.24f))
+        ) {
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onSizeChanged { onHeaderAnchorYChanged(it.height / 2f) }
+                        .padding(horizontal = 7.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(26.dp)
+                            .background(ElectricCyan.copy(alpha = 0.12f), CircleShape)
+                            .border(1.dp, ElectricCyan.copy(alpha = 0.6f), CircleShape)
+                            .clickable { expanded = !expanded },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "D${drop.dropIndex}",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 8.sp
+                            ),
+                            color = ElectricCyan
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "Drop set ${drop.dropIndex}",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = TextWhite,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            routineFieldSummary(drop, fields, unit),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    IconButton(
+                        onClick = onRemove,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .testTag("routine_drop_remove_${drop.mainSetIndex}_${drop.dropIndex}")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Remove drop set",
+                            tint = FireRed.copy(alpha = 0.85f),
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = { expanded = !expanded },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowDropDown,
+                            contentDescription = if (expanded) "Collapse drop set" else "Expand drop set",
+                            tint = ElectricCyan,
+                            modifier = Modifier
+                                .size(18.dp)
+                                .rotate(arrowRotation)
+                        )
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = expanded,
+                    enter = expandVertically(tween(220)) + fadeIn(tween(140)),
+                    exit = shrinkVertically(tween(180)) + fadeOut(tween(100))
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 8.dp, end = 8.dp, bottom = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        HorizontalDivider(color = DarkBorder.copy(alpha = 0.6f))
+                        fields.forEach { field ->
+                            RoutineFieldStepper(
+                                field = field,
+                                value = ExerciseFieldValues.read(drop, field),
+                                unit = unit,
+                                onMinus = {
+                                    onUpdate(
+                                        ExerciseFieldValues.write(
+                                            drop,
+                                            field,
+                                            stepRoutineValue(
+                                                ExerciseFieldValues.read(drop, field),
+                                                field,
+                                                -1,
+                                                unit
+                                            )
+                                        )
+                                    )
+                                },
+                                onPlus = {
+                                    onUpdate(
+                                        ExerciseFieldValues.write(
+                                            drop,
+                                            field,
+                                            stepRoutineValue(
+                                                ExerciseFieldValues.read(drop, field),
+                                                field,
+                                                1,
+                                                unit
+                                            )
+                                        )
+                                    )
+                                }
+                            )
+                        }
+                        RoutineRestStepper(
+                            restSeconds = drop.restSeconds,
+                            onMinus = {
+                                onUpdate(
+                                    drop.copy(
+                                        restSeconds = if (drop.restSeconds <= 0) 0 else {
+                                            (drop.restSeconds - 15).coerceAtLeast(0)
+                                        }
+                                    )
+                                )
+                            },
+                            onPlus = {
+                                onUpdate(
+                                    drop.copy(
+                                        restSeconds = if (drop.restSeconds <= 0) 30 else {
+                                            (drop.restSeconds + 15).coerceAtMost(600)
+                                        }
+                                    )
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoutineFieldStepper(
+    field: ExerciseField,
+    value: Double,
+    unit: WeightUnit,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit
+) {
+    RoutineDropStepper(
+        label = ExerciseFieldCatalog.shortLabel(field, unit),
+        value = routineFieldValueText(value, field, unit),
+        onMinus = onMinus,
+        onPlus = onPlus,
+        modifier = Modifier.fillMaxWidth()
+    )
+}
+
+private fun routineFieldValueText(value: Double, field: ExerciseField, unit: WeightUnit): String =
+    when (field) {
+        ExerciseField.REPS -> value.toInt().toString()
+        ExerciseField.WEIGHT -> formatRoutineWeight(value, unit)
+        ExerciseField.ADDED_WEIGHT -> formatRoutineWeight(value, unit)
+        ExerciseField.HOLD_SECONDS -> value.toInt().toString() + " s"
+        ExerciseField.TIME_SECONDS -> {
+            val minutes = value / 60.0
+            if (minutes % 1.0 == 0.0) minutes.toInt().toString() + " min"
+            else "%.1f min".format(minutes)
+        }
+        ExerciseField.DISTANCE_KM -> DistanceFormat.format(value, unit) + " " + DistanceFormat.suffixFor(unit)
+    }
+
+private fun routineFieldSummary(
+    mainSet: RoutineMainSetDefault,
+    fields: List<ExerciseField>,
+    unit: WeightUnit
+): String = fields.mapNotNull { field ->
+    val value = ExerciseFieldValues.read(mainSet, field)
+    if (value <= 0.0) null else routineFieldValueText(value, field, unit)
+}.joinToString(" · ").ifBlank { "No defaults" }
+
+private fun routineFieldSummary(
+    drop: RoutineDropSet,
+    fields: List<ExerciseField>,
+    unit: WeightUnit
+): String = fields.mapNotNull { field ->
+    val value = ExerciseFieldValues.read(drop, field)
+    if (value <= 0.0) null else routineFieldValueText(value, field, unit)
+}.joinToString(" · ").ifBlank { "No defaults" }
+
+private fun stepRoutineValue(
+    current: Double,
+    field: ExerciseField,
+    direction: Int,
+    unit: WeightUnit
+): Double = when (field) {
+    ExerciseField.REPS -> (current + direction).coerceAtLeast(0.0)
+    ExerciseField.WEIGHT,
+    ExerciseField.ADDED_WEIGHT -> (current + direction * 2.5).coerceAtLeast(0.0)
+    ExerciseField.HOLD_SECONDS -> (current + direction * 5.0).coerceAtLeast(0.0)
+    ExerciseField.TIME_SECONDS -> (current + direction * 60.0).coerceAtLeast(0.0)
+    ExerciseField.DISTANCE_KM -> {
+        val step = if (unit == WeightUnit.LB) 0.1 / 0.621371 else 0.1
+        (current + direction * step).coerceAtLeast(0.0)
+    }
+}
+
+@Composable
+private fun RoutineCompactStepper(
+    value: String,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .background(DarkSurface, RoundedCornerShape(6.dp))
+            .border(1.dp, DarkBorder, RoundedCornerShape(6.dp)),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        IconButton(onClick = onMinus, modifier = Modifier.size(28.dp)) {
+            Text("-", color = TextWhite, fontWeight = FontWeight.Bold)
+        }
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+            color = TextWhite,
+            maxLines = 1,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.widthIn(min = 40.dp).padding(horizontal = 4.dp)
+        )
+        IconButton(onClick = onPlus, modifier = Modifier.size(28.dp)) {
+            Text("+", color = TextWhite, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun RoutineRestStepper(
+    restSeconds: Int,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "Rest",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextMuted,
+            maxLines = 1,
+            modifier = Modifier.weight(1f)
+        )
+        Row(
+            modifier = Modifier
+                .background(DarkSurface, RoundedCornerShape(6.dp))
+                .border(1.dp, DarkBorder, RoundedCornerShape(6.dp)),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onMinus, modifier = Modifier.size(26.dp)) {
+                Text("-", color = TextWhite, fontWeight = FontWeight.Bold)
+            }
+            Box(
+                modifier = Modifier.width(58.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                if (restSeconds > 0) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            restSeconds.toString(),
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = TextWhite,
+                            maxLines = 1
+                        )
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text(
+                            "s",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted
+                        )
+                    }
+                } else {
+                    Text(
+                        "Off",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                        color = TextMuted
+                    )
+                }
+            }
+            IconButton(onClick = onPlus, modifier = Modifier.size(26.dp)) {
+                Text("+", color = TextWhite, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoutineDropStepper(
+    label: String,
+    value: String,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = TextMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Row(
+            modifier = Modifier
+                .background(DarkSurface, RoundedCornerShape(6.dp))
+                .border(1.dp, DarkBorder, RoundedCornerShape(6.dp)),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onMinus, modifier = Modifier.size(26.dp)) {
+                Text("-", color = TextWhite, fontWeight = FontWeight.Bold)
+            }
+            Text(
+                value,
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = TextWhite,
+                maxLines = 1,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.width(62.dp)
+            )
+            IconButton(onClick = onPlus, modifier = Modifier.size(26.dp)) {
+                Text("+", color = TextWhite, fontWeight = FontWeight.Bold)
             }
         }
     }

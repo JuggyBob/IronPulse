@@ -10,6 +10,7 @@ import android.content.Context
 import androidx.room.withTransaction
 import com.example.BuildConfig
 import com.example.data.db.AppDatabase
+import com.example.data.db.RoutineModelMigration
 import com.example.data.model.BodyWeightLog
 import com.example.data.model.ChatMessageEntity
 import com.example.data.model.ChatSession
@@ -17,15 +18,19 @@ import com.example.data.model.Exercise
 import com.example.data.model.GeminiSummary
 import com.example.data.model.LoggedSet
 import com.example.data.model.SavedRoutine
+import com.example.data.model.ScheduleDaySlot
+import com.example.data.model.SchedulePlan
 import com.example.data.model.ScheduledWorkoutDay
 import com.example.data.model.UserProfile
 import com.example.data.model.WorkoutSession
+import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.seed.DatasetSeeder
 import com.example.util.ExerciseMediaStore
 import com.example.util.WidgetPhotoStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -260,8 +265,30 @@ class UserDataBackupManager(
                 preferencesChanged = true
                 coroutineContext.ensureActive()
 
+                // Legacy v1/v2 archives carry the old multi-day routine JSON and no Schedule rows.
+                // Convert them after restore, then promote the old active routine if it was set.
+                val needsLegacyPlanMigration = imported.schedules.isEmpty() &&
+                    imported.routines.any { it.modelVersion < 2 }
+                if (needsLegacyPlanMigration) {
+                    RoutineModelMigration.migrate(db)
+                }
+
                 onProgress(BackupProgress(BackupPhase.VERIFYING, 7, 9))
-                verifyImport(imported, destinationProfileKey, stagedWidgetPhoto)
+                verifyImport(
+                    imported = imported,
+                    destinationProfileKey = destinationProfileKey,
+                    widgetPhotoPath = stagedWidgetPhoto,
+                    skipPlanComparison = needsLegacyPlanMigration
+                )
+                if (needsLegacyPlanMigration) {
+                    val preferenceRepository = UserPreferencesRepository(context)
+                    val legacyActiveId = preferenceRepository.activeRoutineIdFlow.first()
+                    if (legacyActiveId > 0L) {
+                        db.schedulePlanDao().getByLegacyRoutineId(legacyActiveId)?.let { migrated ->
+                            preferenceRepository.migrateActiveRoutine(legacyActiveId, migrated.id)
+                        }
+                    }
+                }
                 onProgress(BackupProgress(BackupPhase.CLEANING_UP, 8, 9))
 
                 // Only after verification: old widget photos are no longer referenced, and media
@@ -326,6 +353,8 @@ class UserDataBackupManager(
                 sets = db.workoutDao().getAllSets(),
                 routines = db.savedRoutineDao().getAllRoutinesOnce(),
                 scheduleDays = db.scheduleDao().getAllScheduleDaysOnce(),
+                schedules = db.schedulePlanDao().getAllSchedulesOnce(),
+                scheduleSlots = db.schedulePlanDao().getAllScheduleSlotsOnce(),
                 bodyWeightLogs = db.bodyWeightDao().getAllWeightLogsOnce(),
                 chatSessions = db.chatDao().getAllSessionsOnce(),
                 chatMessages = db.chatDao().getAllMessagesOnce(),
@@ -368,6 +397,8 @@ class UserDataBackupManager(
             sets = room.sets.sortedBy { it.id }.map(BackupMapper::setToDto),
             routines = room.routines.map(BackupMapper::routineToDto),
             scheduleDays = room.scheduleDays.map(BackupMapper::scheduleDayToDto),
+            schedules = room.schedules.map(BackupMapper::scheduleToDto),
+            scheduleSlots = room.scheduleSlots.map(BackupMapper::scheduleSlotToDto),
             bodyWeightLogs = room.bodyWeightLogs.map(BackupMapper::weightLogToDto),
             chatSessions = room.chatSessions.map(BackupMapper::chatSessionToDto),
             chatMessages = room.chatMessages.map(BackupMapper::chatMessageToDto),
@@ -424,6 +455,8 @@ class UserDataBackupManager(
         val sets = snapshot.sets.map(BackupMapper::setFromDto)
         val routines = snapshot.routines.map(BackupMapper::routineFromDto)
         val scheduleDays = snapshot.scheduleDays.map(BackupMapper::scheduleDayFromDto)
+        val schedules = snapshot.schedules.map(BackupMapper::scheduleFromDto)
+        val scheduleSlots = snapshot.scheduleSlots.map(BackupMapper::scheduleSlotFromDto)
         val weights = snapshot.bodyWeightLogs.map(BackupMapper::weightLogFromDto)
         val chats = snapshot.chatSessions.map(BackupMapper::chatSessionFromDto)
         val messages = snapshot.chatMessages.map(BackupMapper::chatMessageFromDto)
@@ -449,6 +482,8 @@ class UserDataBackupManager(
             db.workoutDao().deleteAllSessions()
             db.savedRoutineDao().deleteAllRoutines()
             db.scheduleDao().deleteAllScheduleDays()
+            db.schedulePlanDao().deleteAllScheduleSlots()
+            db.schedulePlanDao().deleteAllSchedules()
             db.bodyWeightDao().deleteAllWeightLogs()
             db.chatDao().deleteAllMessages()
             db.chatDao().deleteAllSessions()
@@ -460,6 +495,8 @@ class UserDataBackupManager(
 
             if (profile != null) db.userProfileDao().insertOrUpdate(profile)
             if (routines.isNotEmpty()) db.savedRoutineDao().insertRoutines(routines)
+            if (schedules.isNotEmpty()) db.schedulePlanDao().insertSchedules(schedules)
+            if (scheduleSlots.isNotEmpty()) db.schedulePlanDao().insertDays(scheduleSlots)
             if (exercises.isNotEmpty()) db.exerciseDao().upsertAll(exercises)
             if (sessions.isNotEmpty()) db.workoutDao().insertSessions(sessions)
             if (sets.isNotEmpty()) db.workoutDao().insertSets(sets)
@@ -475,7 +512,8 @@ class UserDataBackupManager(
     private suspend fun verifyImport(
         imported: UserDataSnapshot,
         destinationProfileKey: String,
-        widgetPhotoPath: String?
+        widgetPhotoPath: String?,
+        skipPlanComparison: Boolean = false
     ) {
         val room = db.withTransaction {
             RoomPart(
@@ -485,6 +523,8 @@ class UserDataBackupManager(
                 sets = db.workoutDao().getAllSets(),
                 routines = db.savedRoutineDao().getAllRoutinesOnce(),
                 scheduleDays = db.scheduleDao().getAllScheduleDaysOnce(),
+                schedules = db.schedulePlanDao().getAllSchedulesOnce(),
+                scheduleSlots = db.schedulePlanDao().getAllScheduleSlotsOnce(),
                 bodyWeightLogs = db.bodyWeightDao().getAllWeightLogsOnce(),
                 chatSessions = db.chatDao().getAllSessionsOnce(),
                 chatMessages = db.chatDao().getAllMessagesOnce(),
@@ -502,10 +542,19 @@ class UserDataBackupManager(
         if (room.sessions.sortedBy { it.id } != expectedSessions) mismatch("workout history")
         val expectedSets = imported.sets.map(BackupMapper::setFromDto).sortedBy { it.id }
         if (room.sets.sortedBy { it.id } != expectedSets) mismatch("logged sets")
-        val expectedRoutines = imported.routines.map(BackupMapper::routineFromDto).sortedBy { it.id }
-        if (room.routines.sortedBy { it.id } != expectedRoutines) mismatch("routines")
-        val expectedSchedule = imported.scheduleDays.map(BackupMapper::scheduleDayFromDto).sortedBy { it.dateStart }
-        if (room.scheduleDays.sortedBy { it.dateStart } != expectedSchedule) mismatch("schedule")
+        if (!skipPlanComparison) {
+            val expectedRoutines = imported.routines.map(BackupMapper::routineFromDto).sortedBy { it.id }
+            if (room.routines.sortedBy { it.id } != expectedRoutines) mismatch("routines")
+            val expectedSchedule = imported.scheduleDays.map(BackupMapper::scheduleDayFromDto).sortedBy { it.dateStart }
+            if (room.scheduleDays.sortedBy { it.dateStart } != expectedSchedule) mismatch("schedule")
+            val expectedSchedules = imported.schedules.map(BackupMapper::scheduleFromDto).sortedBy { it.id }
+            if (room.schedules.sortedBy { it.id } != expectedSchedules) mismatch("Schedules")
+            val expectedSlots = imported.scheduleSlots.map(BackupMapper::scheduleSlotFromDto)
+                .sortedWith(compareBy({ it.scheduleId }, { it.weekday }))
+            if (room.scheduleSlots.sortedWith(compareBy({ it.scheduleId }, { it.weekday })) != expectedSlots) {
+                mismatch("Schedule days")
+            }
+        }
         val expectedWeights = imported.bodyWeightLogs.map(BackupMapper::weightLogFromDto).sortedBy { it.id }
         if (room.bodyWeightLogs.sortedBy { it.id } != expectedWeights) mismatch("weigh-ins")
         val expectedChats = imported.chatSessions.map(BackupMapper::chatSessionFromDto).sortedBy { it.id }
@@ -621,6 +670,8 @@ class UserDataBackupManager(
         val sets: List<LoggedSet>,
         val routines: List<SavedRoutine>,
         val scheduleDays: List<ScheduledWorkoutDay>,
+        val schedules: List<SchedulePlan>,
+        val scheduleSlots: List<ScheduleDaySlot>,
         val bodyWeightLogs: List<BodyWeightLog>,
         val chatSessions: List<ChatSession>,
         val chatMessages: List<ChatMessageEntity>,

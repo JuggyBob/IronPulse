@@ -109,16 +109,29 @@ class ProgressAnalyticsController(
             val timestamp = sampleSet.timestamp
             val label = dateFormat.format(Date(timestamp))
 
+            // Warm-up sets are training volume, but they are never a working-set performance
+            // record. Max reps and estimated 1RM therefore read only the working sets; total volume
+            // keeps every set, which is the explicit exception in the product rules.
+            val workingSets = WorkoutMetrics.workingSets(daySets)
+            val metricSets = if (metric == ProgressMetric.TOTAL_VOLUME) daySets else workingSets
+
             val value = when (metric) {
                 ProgressMetric.MAX_REPS -> {
-                    daySets.maxOfOrNull { it.reps.toDouble() } ?: 0.0
+                    val repSets = workingSets.filter { it.reps > 0 }
+                    if (repSets.isEmpty()) return@mapNotNull null
+                    repSets.maxOf { it.reps.toDouble() }
                 }
                 ProgressMetric.ESTIMATED_1RM -> {
-                    val measurable = daySets.filter { effectiveWeightOrNull(it) != null }
-                    measurable.maxOfOrNull { set ->
+                    // A hold has no rep count: estimating a 1RM from it would plot a fabricated
+                    // value (or a zero that looks like lost strength).
+                    val measurable = workingSets.filter {
+                        it.reps > 0 && effectiveWeightOrNull(it) != null
+                    }
+                    if (measurable.isEmpty()) return@mapNotNull null
+                    measurable.maxOf { set ->
                         val effectiveWeight = effectiveWeightOrNull(set) ?: 0.0
                         WorkoutMetrics.estimateOneRepMax(effectiveWeight, set.reps)
-                    } ?: return@mapNotNull null
+                    }
                 }
                 ProgressMetric.TOTAL_VOLUME -> {
                     val measurable = daySets.filter { effectiveWeightOrNull(it) != null }
@@ -127,7 +140,12 @@ class ProgressAnalyticsController(
                 }
             }
 
-            val detail = "${daySets.size} sets (${daySets.joinToString { "${it.reps}r" }})"
+            val effortSets = metricSets.filter { it.reps > 0 }
+            val detail = if (effortSets.isEmpty()) {
+                "${metricSets.size} sets"
+            } else {
+                "${metricSets.size} sets (${effortSets.joinToString { "${it.reps}r" }})"
+            }
             ChartPoint(
                 timestamp = timestamp,
                 value = value,

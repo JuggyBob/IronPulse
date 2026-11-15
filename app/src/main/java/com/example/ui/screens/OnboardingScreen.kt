@@ -1,5 +1,9 @@
 package com.example.ui.screens
 
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -14,6 +18,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -41,6 +46,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.ShowChart
@@ -50,10 +59,14 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
@@ -71,22 +84,28 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.Dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.WeightConversion
 import com.example.data.model.WeightUnit
+import com.example.data.backup.DataTransferState
+import com.example.ui.components.CloudBackupPanel
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.DarkSurface
 import com.example.ui.theme.DarkSurfaceVariant
 import com.example.ui.theme.ElectricCyan
+import com.example.ui.theme.FireRed
 import com.example.ui.theme.GoldenAmber
 import com.example.ui.theme.MintGreen
+import com.example.ui.theme.TextDim
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import com.example.ui.theme.OnAccent
@@ -235,6 +254,7 @@ fun OnboardingScreen(viewModel: MainViewModel) {
                         OnboardingPage.PROGRESS -> ProgressPage()
                         OnboardingPage.AI -> AiPage()
                         OnboardingPage.MEDIA -> MediaPage()
+                        OnboardingPage.DATA -> DataPage(viewModel)
                         OnboardingPage.PROFILE -> ProfilePage(
                             weightUnit = weightUnit,
                             name = name,
@@ -376,8 +396,9 @@ private object OnboardingPage {
     const val PROGRESS = 2
     const val AI = 3
     const val MEDIA = 4
-    const val PROFILE = 5
-    const val count = 6
+    const val DATA = 5
+    const val PROFILE = 6
+    const val count = 7
 }
 
 @Composable
@@ -389,11 +410,11 @@ private fun WelcomePage() {
         subtitle = "A workout logger that keeps the numbers straight",
         testTag = "onboarding_page_welcome"
     ) {
-        Bullet("1,334 built in exercises, each with an animation of the movement.")
+        Bullet("1,300+ built in exercises, each with an animation of the movement.")
         Bullet("A library sorted into muscle groups, equipment and movement type, so searching by body " +
             "part finds what you actually did.")
-        Bullet("Build a routine once and it becomes a week: every day of it has its own workout, and " +
-            "a day with nothing on it is a rest day.")
+        Bullet("Build a Routine for each workout, then arrange them into a weekly Schedule with rest " +
+            "days wherever you want them.")
         Bullet("Everything is stored on your phone. No account to make, and nothing uploaded unless " +
             "you ask for AI help.")
     }
@@ -464,6 +485,282 @@ private fun MediaPage() {
         Bullet("Animations stream on demand, so the app stays small.")
         Bullet("The exercise list stays still: an animation appears once you open an exercise.")
         Bullet("Prefer to tap first? Turn autoplay off in Settings.")
+    }
+}
+
+@Composable
+private fun DataPage(viewModel: MainViewModel) {
+    val context = LocalContext.current
+    val transfer by viewModel.dataTransferState.collectAsStateWithLifecycle()
+    val cloudState by viewModel.cloudBackupState.collectAsStateWithLifecycle()
+    var showImportDialog by remember { mutableStateOf(false) }
+    val busy = transfer is DataTransferState.Running ||
+        transfer is DataTransferState.ReadyToImport
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            }
+            viewModel.inspectUserDataImport(uri)
+        }
+    }
+    val folderLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.selectCloudBackupFolder(
+                uri = uri,
+                enableAuto = true,
+                scheduleInitialBackup = false
+            )
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshCloudBackupStatus()
+    }
+    LaunchedEffect(transfer) {
+        showImportDialog = transfer is DataTransferState.ReadyToImport
+    }
+
+    PageScaffold(
+        icon = Icons.Default.Cloud,
+        accent = MintGreen,
+        title = "Bring your data",
+        subtitle = "Optional, and you can change all of it later",
+        testTag = "onboarding_page_data"
+    ) {
+        Text(
+            text = "If you already have an IronPulse backup, you can restore it now instead of " +
+                "finishing setup and hunting through Settings. You can also connect a cloud " +
+                "folder for automatic backups.",
+            style = MaterialTheme.typography.bodySmall,
+            color = TextMuted
+        )
+
+        DataActionCard(
+            icon = Icons.Default.FileUpload,
+            title = "Import a backup",
+            description = "Choose a .ironpulse file and review what it contains before anything is replaced.",
+            actionLabel = "Choose backup",
+            accent = MintGreen,
+            enabled = !busy,
+            onClick = {
+                importLauncher.launch(
+                    arrayOf(
+                        "application/zip",
+                        "application/octet-stream",
+                        "application/x-zip-compressed"
+                    )
+                )
+            },
+            testTag = "onboarding_import_button"
+        )
+
+        OnboardingTransferStatus(
+            transfer = transfer,
+            onDismiss = { viewModel.dismissDataTransferMessage() }
+        )
+
+        CloudBackupPanel(
+            state = cloudState,
+            onChooseFolder = { folderLauncher.launch(null) },
+            onChangeFolder = { folderLauncher.launch(null) },
+            onDisconnect = { viewModel.disconnectCloudBackup() },
+            onToggleAuto = { viewModel.setCloudBackupAutoEnabled(it) },
+            onBackupNow = { viewModel.backupNow() },
+            onDismissMessage = { viewModel.dismissCloudBackupMessage() },
+            compact = true
+        )
+
+        Text(
+            text = "Not interested right now? Continue to the next page. The same options live in " +
+                "Settings, under Data Management.",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextDim
+        )
+    }
+
+    val pendingPreview = (transfer as? DataTransferState.ReadyToImport)?.preview
+    if (showImportDialog && pendingPreview != null) {
+        ImportDataConfirmationDialog(
+            preview = pendingPreview,
+            onConfirm = {
+                showImportDialog = false
+                viewModel.confirmUserDataImport()
+            },
+            onDismiss = {
+                showImportDialog = false
+                viewModel.cancelPendingUserDataImport()
+            }
+        )
+    }
+}
+
+@Composable
+private fun DataActionCard(
+    icon: ImageVector,
+    title: String,
+    description: String,
+    actionLabel: String,
+    accent: Color,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    testTag: String
+) {
+    Surface(
+        color = DarkSurface,
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, DarkBorder)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                    color = TextWhite
+                )
+            }
+            Spacer(modifier = Modifier.height(5.dp))
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = TextMuted,
+                lineHeight = 17.sp
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = onClick,
+                enabled = enabled,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(42.dp)
+                    .testTag(testTag),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, accent.copy(alpha = 0.65f)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = accent)
+            ) {
+                Text(actionLabel, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun OnboardingTransferStatus(
+    transfer: DataTransferState,
+    onDismiss: () -> Unit
+) {
+    when (transfer) {
+        is DataTransferState.Running -> {
+            Column {
+                Text(
+                    text = if (transfer.operation == com.example.data.backup.BackupOperation.IMPORT) {
+                        "Restoring your backup"
+                    } else {
+                        "Saving your backup"
+                    },
+                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                    color = TextWhite
+                )
+                Spacer(modifier = Modifier.height(5.dp))
+                LinearProgressIndicator(
+                    progress = { transfer.progress.fraction },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp)),
+                    color = ElectricCyan,
+                    trackColor = DarkSurfaceVariant
+                )
+                Text(
+                    text = transfer.progress.phase.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+        }
+
+        is DataTransferState.Success -> {
+            Column {
+                Row(verticalAlignment = Alignment.Top) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = MintGreen,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Column {
+                        Text(
+                            text = transfer.title,
+                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+                            color = MintGreen
+                        )
+                        Text(
+                            text = transfer.detail,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted
+                        )
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Dismiss", color = TextMuted)
+                }
+            }
+        }
+
+        is DataTransferState.Error -> {
+            Column {
+                Row(verticalAlignment = Alignment.Top) {
+                    Icon(
+                        imageVector = Icons.Default.ErrorOutline,
+                        contentDescription = null,
+                        tint = FireRed,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = transfer.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = FireRed
+                    )
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Dismiss", color = TextMuted)
+                }
+            }
+        }
+
+        is DataTransferState.Cancelled -> {
+            Column {
+                Text(
+                    text = transfer.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextMuted
+                )
+                TextButton(onClick = onDismiss) {
+                    Text("Dismiss", color = TextMuted)
+                }
+            }
+        }
+
+        DataTransferState.Idle,
+        is DataTransferState.ReadyToImport -> Unit
     }
 }
 

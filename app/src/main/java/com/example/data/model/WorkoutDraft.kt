@@ -42,8 +42,14 @@ data class WorkoutDraft(
     val plannedDate: Long = 0L,
     /** Timezone-stable `yyyyMMdd` key of [plannedDate]. */
     val plannedDateKey: Long = 0L,
+    /** Schedule that supplied the workout, or 0 for a standalone Routine. */
+    val scheduleId: Long = 0L,
+    /** Schedule goal strategy captured at start. */
+    val scheduleGoal: String = "",
     /** The prescribed targets of the day, so the routine workout can be rebuilt exactly. */
-    val routineItems: List<RoutineExerciseItem> = emptyList()
+    val routineItems: List<RoutineExerciseItem> = emptyList(),
+    /** Exercises added during this session that are not part of the saved routine. */
+    val sessionOnlyExerciseIds: Set<Long> = emptySet()
 ) {
     val isRoutine: Boolean get() = kind == KIND_ROUTINE
 
@@ -77,7 +83,12 @@ object WorkoutDraftCodec {
                 put("dayNote", draft.dayNote)
                 put("plannedDate", draft.plannedDate)
                 put("plannedDateKey", draft.plannedDateKey)
+                put("scheduleId", draft.scheduleId)
+                put("scheduleGoal", draft.scheduleGoal)
                 put("routineItems", RoutineParser.serializeExercises(draft.routineItems))
+                put("sessionOnlyExerciseIds", JSONArray().apply {
+                    draft.sessionOnlyExerciseIds.sorted().forEach { put(it) }
+                })
             }
         }
         return root.toString()
@@ -114,6 +125,14 @@ object WorkoutDraftCodec {
                 emptyList()
             }
 
+            val sessionOnlyIds = mutableSetOf<Long>()
+            root.optJSONArray("sessionOnlyExerciseIds")?.let { array ->
+                for (i in 0 until array.length()) {
+                    val id = array.optLong(i, 0L)
+                    if (id > 0L) sessionOnlyIds.add(id)
+                }
+            }
+
             WorkoutDraft(
                 kind = kind,
                 title = root.optString("title", ""),
@@ -136,7 +155,10 @@ object WorkoutDraftCodec {
                 // rather than guessed, so a resumed workout cannot invent schedule adherence.
                 plannedDate = root.optLong("plannedDate", 0L),
                 plannedDateKey = root.optLong("plannedDateKey", 0L),
-                routineItems = routineItems
+                scheduleId = root.optLong("scheduleId", 0L),
+                scheduleGoal = root.optString("scheduleGoal", ""),
+                routineItems = routineItems,
+                sessionOnlyExerciseIds = sessionOnlyIds
             )
         } catch (e: Exception) {
             // A truncated or hand edited draft is not worth crashing over.
@@ -157,6 +179,17 @@ object WorkoutDraftCodec {
         put("distanceKm", set.distanceKm)
         put("isCompleted", set.isCompleted)
         put("timestamp", set.timestamp)
+        // Warm-up and rest are set-level choices. Both are written explicitly so a restored draft
+        // keeps the exact state the athlete left, including an inherited rest (null).
+        put("isWarmup", set.isWarmup)
+        put("setUid", set.setUid)
+        if (set.parentSetUid == null) put("parentSetUid", JSONObject.NULL) else put("parentSetUid", set.parentSetUid)
+        put("dropIndex", set.dropIndex)
+        if (set.restSecondsOverride == null) {
+            put("restSecondsOverride", JSONObject.NULL)
+        } else {
+            put("restSecondsOverride", set.restSecondsOverride)
+        }
         // The body weight the set was done at. It has to survive the round trip: a restored
         // workout whose sets lost their body weight would be measured against whatever the
         // athlete weighs today, which is not what they lifted.
@@ -177,6 +210,21 @@ object WorkoutDraftCodec {
         distanceKm = obj.optDouble("distanceKm", 0.0),
         isCompleted = obj.optBoolean("isCompleted", true),
         timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
+        // A draft written before warm-ups existed has no flag: it was a normal set, never a guessed
+        // warm-up. A missing rest override means "inherit", not zero.
+        isWarmup = obj.optBoolean("isWarmup", false),
+        // optString turns JSON null into the literal "null". Reading the raw value keeps a main
+        // set a main set; otherwise every restored row became an orphan drop on the next normalize.
+        setUid = (obj.opt("setUid") as? String)?.takeIf { it.isNotBlank() }
+            ?: LoggedSet.newUid(),
+        parentSetUid = (obj.opt("parentSetUid") as? String)
+            ?.takeIf { it.isNotBlank() && it != "null" },
+        dropIndex = obj.optInt("dropIndex", 0).coerceAtLeast(0),
+        restSecondsOverride = if (obj.has("restSecondsOverride") && !obj.isNull("restSecondsOverride")) {
+            obj.optInt("restSecondsOverride", 0).takeIf { it >= 0 }
+        } else {
+            null
+        },
         // A draft written before the snapshot existed has no body weight: 0 means "not recorded",
         // which is the same thing a set logged back then meant.
         bodyWeightKg = obj.optDouble("bodyWeightKg", 0.0)

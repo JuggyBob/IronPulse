@@ -1,10 +1,16 @@
 # AI tools
 
-IronPulse gives its AI models a small, fixed set of application-owned tools so an answer can be
-based on the athlete's real exercise library, current routine and completed workout history instead
-of a guess. The tools are defined by the application, not by a provider: Google, OpenAI, Anthropic,
+IronPulse gives its AI models a small, fixed set of **eleven** application-owned tools so an answer
+can be based on the athlete's real exercise library, single-workout Routines, active seven-day
+Schedule and completed workout history instead of a guess. Nine are read-only; two only create
+proposals. The tools are defined by the application, not by a provider: Google, OpenAI, Anthropic,
 OpenRouter, xAI and a custom OpenAI-compatible endpoint all see the same tool catalog, the same
 validation and the same limits.
+
+The data model is the 5.0 one: a **Routine** is one workout, a **Schedule** is the week, and every
+exercise carries its own ordered `supportedFields`. Tool results therefore include explicit fields,
+distance, warm-up flags, per-set rest and drop-set parent links rather than inferring them from an
+exercise type.
 
 Personal-data tools are available only after **Settings -> AI Data Access -> Allow AI Coach to
 access workout data** is explicitly enabled. The dispatcher enforces that permission on every
@@ -107,7 +113,7 @@ All errors use this shape:
 | `invalid_arguments` | The JSON could not be parsed, a required argument is missing, a type or range is wrong, or a value is too long. The result includes `correctArgumentsSchema` and `howToCorrect`. |
 | `not_found` | The requested exercise or routine does not exist. |
 | `no_routines` | The athlete has no saved routines, so a routine lookup cannot return one. |
-| `no_active_routine` | No routine is currently scheduled, or the active routine has no weekly days. |
+| `no_active_routine` | No Schedule is currently active, or the active Schedule has no configured weekday slots. |
 | `permission_denied` | The tool is not available because AI workout-data access is disabled. |
 | `exercise_not_in_day` / `invalid_day` | The proposed routine change does not match the current routine. |
 | `exercise_not_found` / `exercise_exists` | A replacement must be a real catalog exercise or a genuinely new generated exercise. |
@@ -235,8 +241,8 @@ Results are sorted by lower-cased name. The response reports the full filtered `
 
 ### `get_routine`
 
-**Purpose:** read one saved routine and its training days, including each entry's sets, reps, holds
-and per-entry rest default.
+**Purpose:** read one saved **single-workout Routine**, including each entry's explicit fields,
+sets, reps, holds, distance, per-entry rest default and drop-set defaults.
 
 | Argument | Type | Required | Rules |
 |---|---|---|---|
@@ -259,28 +265,33 @@ No saved routines at all returns `no_routines`. A selector that matches nothing 
   "selectedMostRecent": false,
   "routine": {
     "id": 4,
-    "name": "Push / Pull / Legs",
-    "description": "…",
-    "goal": "Hypertrophy",
-    "daysPerWeek": 6,
+    "name": "Push Day",
+    "description": "Chest, shoulders and triceps",
+    "goal": "Strength & Muscle Growth",
+    "daysPerWeek": 1,
     "createdAt": 1760000000000,
     "days": [
       {
         "weekday": 0,
-        "day": "Monday",
-        "title": "Push",
-        "note": "…",
+        "day": "",
+        "title": "",
+        "note": "",
         "exercises": [
           {
+            "exerciseId": 99,
             "name": "Barbell Bench Press",
+            "exerciseType": "STANDARD_WEIGHT",
+            "supportedFields": ["weight", "reps"],
             "equipment": "Barbell",
             "sets": 4,
             "reps": 8,
-            "weightKg": 0.0,
+            "weightKg": 70.0,
             "addedWeightKg": 0.0,
             "holdSeconds": 0,
-            "restSeconds": 45,
-            "prescription": "4 sets x 8 reps"
+            "distanceKm": 0.0,
+            "restSeconds": 150,
+            "prescription": "4 sets x 8 reps",
+            "dropSets": []
           }
         ]
       }
@@ -289,40 +300,42 @@ No saved routines at all returns `no_routines`. A selector that matches nothing 
 }
 ```
 
-`restSeconds` is the routine-entry default (0 means the rest timer stays manual). It is read from
-the routine JSON, not from the shared exercise definition, so the same movement can rest differently
-in two routines.
+`daysPerWeek` remains for archive compatibility, but a current Routine is always one workout.
+`restSeconds` is the routine-entry default (0 means the rest timer stays manual). It is read from the
+routine JSON, not from the shared exercise definition, so the same movement can rest differently in
+two Routines. `supportedFields` and `dropSets` are the same data the workout and Routine editor use.
 
 ---
 
 ### `list_routines`
 
-**Purpose:** list saved routines with a compact summary before answering questions about the plan.
+**Purpose:** list saved single-workout Routines with a compact summary before answering questions
+about the plan.
 
 | Argument | Type | Required | Rules |
 |---|---|---|---|
-| `limit` | integer | no | 1–50, default 20. |
+| `limit` | integer | no | 1-50, default 20. |
 
 ```json
 {
   "ok": true,
-  "total": 3,
-  "count": 3,
+  "total": 5,
+  "count": 5,
   "routines": [
     {
       "id": 4,
-      "name": "Push / Pull / Legs",
-      "goal": "Hypertrophy",
-      "daysPerWeek": 6,
+      "name": "Push Day",
+      "goal": "Strength & Muscle Growth",
+      "daysPerWeek": 1,
       "createdAt": 1760000000000,
-      "exerciseCount": 22
+      "exerciseCount": 4
     }
   ]
 }
 ```
 
-`exerciseCount` is the number of entries across all seven days. The full plan is only returned by
-`get_routine`, which keeps this listing small.
+`exerciseCount` is the number of exercises in that one workout. The full exercise list is returned by
+`get_routine`, which keeps this listing small. Use `get_current_routine` for the active week.
 
 ---
 
@@ -338,25 +351,42 @@ session questions.
 | `limit` | integer | no | 1–20, default 10. |
 | `offset` | integer | no | 0–200, default 0. |
 
-Returns session id/title/date/start/end/duration, routine link, completed set count, and up to 120
-completed sets per session with set number, exercise identity/type, weight, added weight, reps,
-hold seconds, cardio minutes, distance and body-weight snapshot. `hasMore` identifies another page.
+Returns session id/title/date/start/end/duration, routine/schedule link, completed set count, and up
+to 120 completed sets per session with set number, exercise identity/type, explicit supported fields,
+weight, added weight, reps, hold seconds, cardio minutes, distance, body-weight snapshot, warm-up
+flag, per-set rest override, set UID, parent UID and drop index. `hasMore` identifies another page.
 
 ---
 
 ### `get_current_routine`
 
-**Purpose:** return the active weekly schedule exactly as the routine feature sees it, including
-rest days and exercise order.
+**Purpose:** return the active seven-day Schedule exactly as the Plan feature sees it, including
+rest days, assigned Routine ids and exercise order.
 
 | Argument | Type | Required | Rules |
 |---|---|---|---|
-| none | — | — | The active routine is read from preferences. |
+| none | - | - | The active Schedule is read from preferences. |
 
-The result contains `routineId`, `routineName`, and all seven days with weekday, title, rest-day
-flag, note and each exercise's id, name, type, category, equipment, sets, reps, weight, added weight,
-hold seconds, rest seconds, prescription and a bounded instruction excerpt. With no active routine
-the tool returns `no_active_routine` instead of guessing.
+The result contains `scheduleId`, `scheduleName`, compatibility aliases `routineId`/`routineName`,
+and all seven days with weekday, day name, title, assigned Routine id, rest-day flag, note and each
+exercise's id, name, type, category, equipment, sets, reps, weight, added weight, hold seconds,
+distance, rest seconds, prescription, `supportedFields`, `dropSets` and a bounded instruction
+excerpt. With no active Schedule the tool returns `no_active_routine` instead of guessing.
+
+---
+
+### `get_active_workout`
+
+**Purpose:** inspect the workout that is currently in progress, including unsaved sets.
+
+| Argument | Type | Required | Rules |
+|---|---|---|---|
+| none | - | - | Reads the active workout draft. |
+
+The result contains the draft kind, title, start time, exercise ids, routine items, completed/total
+set counts, and each set with its exercise identity, set number, weight, added weight, reps, hold,
+distance, completion state, warm-up flag, rest override, set UID, parent UID and drop index. With no
+live session it returns `"found": false` and makes no guess.
 
 ---
 
@@ -383,16 +413,16 @@ empty result has `"found": false`, reveals whether the exercise exists in the ca
 
 | Argument | Type | Required | Rules |
 |---|---|---|---|
-| `routineId` | integer | no | Must be the currently active routine. |
+| `routineId` | integer | no | Must be the active Schedule id returned by `get_current_routine`. |
 | `weekday` | integer | yes | 1 = Monday … 7 = Sunday. |
-| `removeExerciseName` | string | yes | Must exist in that day. |
+| `removeExerciseName` | string | yes | Must exist in that Schedule day. |
 | `replacementExerciseId` | integer | conditional | Existing catalog exercise. |
 | `replacementExerciseName` | string | yes | Name of the existing or generated replacement. |
 | `newExercise` | object | conditional | Complete generated-exercise record; only when no catalog movement fits. |
 | `reason` | string | no | Short explanation shown on the approval card. |
 
 The response contains a structured proposal and the note that nothing has changed. The app renders
-it inside the conversation. **Grant permission** triggers a fresh permission check, active-routine
+it inside the conversation. **Grant permission** triggers a fresh permission check, active-Schedule
 check, routine-signature stale check and one transaction that either replaces the slot or inserts
 the generated exercise and replaces the slot together. **Reject** changes nothing. A proposal is
 one-time and cannot authorize a second edit.

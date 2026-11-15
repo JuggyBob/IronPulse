@@ -172,22 +172,29 @@ class RestTimerController(
         val cleanName = name.trim().ifBlank { "Rest Timer" }
         val cleanSeconds = totalSeconds.coerceAtLeast(5)
         scope.launch {
-            val currentList = savedRestTimers.value.toMutableList()
-            val existingIndex = currentList.indexOfFirst { it.name.equals(cleanName, ignoreCase = true) }
-            val newTimer = CustomRestTimer(name = cleanName, totalSeconds = cleanSeconds)
-            if (existingIndex >= 0) {
-                currentList[existingIndex] = newTimer
-            } else {
-                currentList.add(newTimer)
+            // Atomic read-modify-write: two quick saves, or a delete immediately after a save,
+            // must not start from a stale snapshot.
+            preferences.updateRestTimers { current ->
+                val updated = current.toMutableList()
+                val existingIndex = updated.indexOfFirst {
+                    it.name.equals(cleanName, ignoreCase = true)
+                }
+                val newTimer = CustomRestTimer(name = cleanName, totalSeconds = cleanSeconds)
+                if (existingIndex >= 0) {
+                    updated[existingIndex] = newTimer
+                } else {
+                    updated.add(newTimer)
+                }
+                updated
             }
-            preferences.saveRestTimers(currentList)
         }
     }
 
     fun deleteCustomTimer(id: String) {
         scope.launch {
-            val currentList = savedRestTimers.value.filter { it.id != id }
-            preferences.saveRestTimers(currentList)
+            preferences.updateRestTimers { current ->
+                current.filter { it.id != id }
+            }
         }
     }
 }

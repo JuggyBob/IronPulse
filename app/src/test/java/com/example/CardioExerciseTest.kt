@@ -115,7 +115,14 @@ class CardioExerciseTest {
 
     @Test
     fun `a cardio exercise offers time and distance and never a load`() {
-        val fields = MusclePartResolver.trackedFields(ExerciseType.CARDIO)
+        val fields = MusclePartResolver.trackedFields(
+            Exercise(
+                name = "Run",
+                category = "Calisthenics",
+                exerciseType = ExerciseType.CARDIO,
+                supportedFields = "timeSeconds,distanceKm"
+            )
+        )
 
         assertTrue(fields.contains("Time (minutes)"))
         assertTrue(fields.contains("Distance"))
@@ -124,19 +131,19 @@ class CardioExerciseTest {
     }
 
     @Test
-    fun `the other three types keep their own fields`() {
-        assertEquals(
-            listOf("Sets", "Reps", "Weight"),
-            MusclePartResolver.trackedFields(ExerciseType.STANDARD_WEIGHT)
+    fun `a cardio classification can still be configured with other fields`() {
+        // The type is a classification. A rowing machine interval that also records strokes is
+        // allowed to declare reps, and the metadata must show what the exercise actually records.
+        val fields = MusclePartResolver.trackedFields(
+            Exercise(
+                name = "Rowing intervals",
+                category = "Calisthenics",
+                exerciseType = ExerciseType.CARDIO,
+                supportedFields = "timeSeconds,distanceKm,reps"
+            )
         )
-        assertEquals(
-            listOf("Sets", "Reps", "Added weight"),
-            MusclePartResolver.trackedFields(ExerciseType.ADDED_WEIGHT)
-        )
-        assertEquals(
-            listOf("Sets", "Reps", "Hold (seconds)"),
-            MusclePartResolver.trackedFields(ExerciseType.PURE_BODYWEIGHT)
-        )
+
+        assertEquals(listOf("Sets", "Time (minutes)", "Distance", "Reps"), fields)
     }
 
     @Test

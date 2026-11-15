@@ -419,8 +419,7 @@ private fun RoutineExerciseItemRow(
     // makes it wide enough to wrap onto its own line, and the load belongs to the athlete anyway.
     val displayPrescription = remember(item.prescription, item.equipment) {
         RoutineParser.shortPrescription(item.prescription, item.equipment).ifBlank {
-            if (item.targetHoldSeconds > 0) "${item.targetSets} sets x ${item.targetHoldSeconds}s"
-            else "${item.targetSets} sets x ${item.targetReps} reps"
+            RoutineParser.buildPrescription(item)
         }
     }
 

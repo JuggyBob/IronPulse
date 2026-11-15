@@ -242,16 +242,93 @@ class MonthlyExerciseAnalyzerTest {
             "TOTAL SETS LOGGED: 2",
             "TOTAL VOLUME: 1090 kg-reps",
             "BEST ESTIMATED 1RM: 101.3 kg",
-            "HIGHEST REP COUNT IN A SINGLE SET: 8",
+            "HIGHEST REP COUNT IN A SINGLE WORKING SET: 8",
             "PER DAY BREAKDOWN"
         ).forEach { expected ->
             assertTrue("payload should contain \"$expected\"", payload.contains(expected))
         }
+        assertTrue(payload.contains("isWarmup=false"))
         // Numbers are always formatted for the model with a dot decimal separator
         assertTrue(payload.contains("101.3"))
         assertTrue(!payload.contains("101,3"))
-        // One line per training day
-        assertEquals(2, payload.lines().count { it.startsWith("- ") })
+        // One line per training day in the day breakdown, separate from the individual set list
+        val dayBreakdown = payload.substringAfter("PER DAY BREAKDOWN")
+        assertEquals(2, dayBreakdown.lines().count { it.startsWith("- ") })
+    }
+
+    @Test
+    fun `warmup sets do not raise max reps or working one rep max but do add volume`() {
+        val normal = benchSet(1, 2, 100.0, 5, 2)
+        val warmup = benchSet(2, 1, 120.0, 15, 2).copy(isWarmup = true)
+        val summary = MonthlyExerciseAnalyzer.build(
+            exerciseName = "Barbell Bench Press",
+            exerciseType = ExerciseType.STANDARD_WEIGHT,
+            weightUnit = WeightUnit.KG,
+            sets = listOf(warmup, normal),
+            bodyWeightForSet = { 80.0 },
+            nowMillis = now
+        )
+
+        assertEquals(2, summary.setCount)
+        assertEquals(1, summary.warmupSetCount)
+        assertEquals(1, summary.workingSetCount)
+        assertTrue(summary.hasWorkingSets)
+        assertEquals(5, summary.maxReps)
+        assertEquals(112.5, summary.bestOneRm, 0.001)
+        assertTrue(summary.bestOneRmSource.contains("100kg"))
+        // 120x15 warm-up + 100x5 working = 1800 + 500
+        assertEquals(2300.0, summary.totalVolume, 0.001)
+        assertEquals(1, summary.setEntries.count { it.isWarmup })
+        assertEquals(0.0, summary.setEntries.first { it.isWarmup }.estimatedOneRm, 0.001)
+        assertTrue(summary.setEntries.first { it.isWarmup }.volume > 0.0)
+    }
+
+    @Test
+    fun `only warmup sets produce no working record`() {
+        val warmupA = benchSet(1, 1, 40.0, 20, 2).copy(isWarmup = true)
+        val warmupB = benchSet(2, 2, 60.0, 15, 2).copy(isWarmup = true)
+        val summary = MonthlyExerciseAnalyzer.build(
+            exerciseName = "Barbell Bench Press",
+            exerciseType = ExerciseType.STANDARD_WEIGHT,
+            weightUnit = WeightUnit.KG,
+            sets = listOf(warmupA, warmupB),
+            bodyWeightForSet = { 80.0 },
+            nowMillis = now
+        )
+
+        assertEquals(2, summary.setCount)
+        assertEquals(0, summary.workingSetCount)
+        assertEquals(2, summary.warmupSetCount)
+        assertTrue(!summary.hasWorkingSets)
+        assertEquals(0, summary.maxReps)
+        assertEquals(0.0, summary.bestOneRm, 0.001)
+        assertEquals("no working sets logged", summary.bestOneRmSource)
+        // Warm-ups still count as training volume
+        assertEquals(40.0 * 20 + 60.0 * 15, summary.totalVolume, 0.001)
+        assertEquals(2, summary.setEntries.size)
+        assertTrue(summary.setEntries.all { it.isWarmup })
+    }
+
+    @Test
+    fun `prompt payload marks warmups explicitly and explains the rule`() {
+        val normal = benchSet(1, 2, 100.0, 5, 2)
+        val warmup = benchSet(2, 1, 40.0, 12, 2).copy(isWarmup = true)
+        val summary = MonthlyExerciseAnalyzer.build(
+            exerciseName = "Barbell Bench Press",
+            exerciseType = ExerciseType.STANDARD_WEIGHT,
+            weightUnit = WeightUnit.KG,
+            sets = listOf(warmup, normal),
+            bodyWeightForSet = { 80.0 },
+            nowMillis = now
+        )
+
+        val payload = summary.toPromptPayload(MonthlyExerciseAnalyzer.WINDOW_DAYS)
+        assertTrue(payload.contains("WARM-UP SETS: 1"))
+        assertTrue(payload.contains("WORKING SETS: 1"))
+        assertTrue(payload.contains("isWarmup=true"))
+        assertTrue(payload.contains("isWarmup=false"))
+        assertTrue(payload.contains("WARM-UP RULES"))
+        assertTrue(payload.contains("included in TOTAL VOLUME"))
     }
 
     private fun timestampOf(year: Int, month: Int, day: Int, hour: Int, minute: Int): Long =

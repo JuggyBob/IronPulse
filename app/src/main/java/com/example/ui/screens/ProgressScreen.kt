@@ -93,6 +93,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import com.example.ui.components.AppVersionFooter
+import com.example.ui.components.DropSetBranchConnector
+import com.example.ui.components.orderedSetRows
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -122,6 +124,7 @@ import com.example.ui.components.ActivityHeatmapCard
 import com.example.ui.components.AiUnavailableDialog
 import com.example.ui.components.MarkdownView
 import com.example.ui.components.MuscleBodyMap
+import com.example.ui.components.WarmupBadge
 import com.example.ui.components.WorkoutHistoryDialog
 import com.example.ui.components.ProgressionLineChart
 import com.example.ui.theme.CoralOrange
@@ -250,7 +253,7 @@ fun ProgressScreen(
     }
 
     val hasAddedWeight = remember(exerciseHistorySets) {
-        exerciseHistorySets.any { it.addedWeight > 0.0 || (it.exerciseType == ExerciseType.ADDED_WEIGHT && it.addedWeight == 0.0) }
+        exerciseHistorySets.any { it.addedWeight > 0.0 }
     }
 
     val historyDateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
@@ -276,7 +279,9 @@ fun ProgressScreen(
     // history. This keeps the numbering continuous (1, 2, 3...) after a set was deleted, while
     // still showing the real set number when a weight filter hides part of the day.
     val setPositionById = remember(exerciseHistorySets) {
-        LoggedSetNumbering.positionsBySetId(exerciseHistorySets)
+        // The day card can hold several sessions; number the main sets continuously across the
+        // day so two workouts do not both show "Set 1". Session ordering is handled below.
+        LoggedSetNumbering.mainSetPositionsBySetId(exerciseHistorySets)
     }
 
     val progressListState = rememberLazyListState()
@@ -1750,60 +1755,108 @@ private fun SessionHistoryDayCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            setsOnDate.forEach { set ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(
-                            text = "Set ${setPositionById[set.id] ?: set.setNumber}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextMuted,
-                            modifier = Modifier.width(48.dp)
+            // A date can hold more than one workout. Keep each session's main sets and drops
+            // together instead of ordering the whole day by set number.
+            val orderedRows = setsOnDate
+                .groupBy { it.sessionId }
+                .values
+                .flatMap { sessionSets -> orderedSetRows(sessionSets) }
+            orderedRows.forEach { ordered ->
+                val content: @Composable () -> Unit = {
+                    ProgressRecordedSetRow(
+                        set = ordered.set,
+                        label = if (ordered.isDrop) {
+                            "D${ordered.set.dropIndex}"
+                        } else {
+                            "Set ${setPositionById[ordered.set.id] ?: ordered.set.setNumber}"
+                        },
+                        isDrop = ordered.isDrop,
+                        userProfile = userProfile,
+                        weightUnit = weightUnit,
+                        onDeleteSet = onDeleteSet
+                    )
+                }
+                if (ordered.isDrop) {
+                    Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+                        // The label column is 48 dp wide; its centre is 24 dp.
+                        DropSetBranchConnector(
+                            isLastChild = ordered.isLastChild,
+                            width = 48.dp,
+                            gutter = 24.dp
                         )
-
-                        // The load the set actually moved, and the work done with it.
-                        //
-                        // The load is the same text the workout history shows, so the
-                        // same set is never described two different ways. A bodyweight
-                        // set says the body weight it was done at: an empty weight field
-                        // used to read as "+0 kg", which is the opposite of what the
-                        // athlete did.
-                        val bodyweightAtSet =
-                            BodyWeightTimeline.bodyWeightForSet(set, userProfile.currentWeightKg)
-                        val descriptor = when (set.exerciseType) {
-                            ExerciseType.CARDIO -> describeCardioSet(set, weightUnit)
-                            else -> "${WorkoutMetrics.loadLabel(set, bodyweightAtSet, weightUnit)} x ${describeLoggedSetEffort(set)}"
-                        }
-                        Text(
-                            text = descriptor,
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
-                            color = ElectricCyan
-                        )
+                        Box(modifier = Modifier.weight(1f)) { content() }
                     }
-
-                    IconButton(
-                        onClick = { onDeleteSet(set) },
-                        modifier = Modifier
-                            .size(24.dp)
-                            .testTag("delete_set_${set.id}")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Delete Set",
-                            tint = TextMuted.copy(alpha = 0.7f),
-                            modifier = Modifier.size(15.dp)
-                        )
-                    }
+                } else {
+                    content()
                 }
             }
+        }
+    }
+}
+
+/**
+ * One recorded set in the per-exercise history.
+ *
+ * Same values and delete affordance as before; drop sets differ only in their D-number, colour and
+ * the branch drawn by the caller. Existing workouts with no drops keep the exact old row shape.
+ */
+@Composable
+private fun ProgressRecordedSetRow(
+    set: LoggedSet,
+    label: String,
+    isDrop: Boolean,
+    userProfile: com.example.data.model.UserProfile,
+    weightUnit: WeightUnit,
+    onDeleteSet: (LoggedSet) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontWeight = if (isDrop) FontWeight.Bold else FontWeight.Normal
+                ),
+                color = if (isDrop) ElectricCyan else TextMuted,
+                modifier = Modifier.width(48.dp)
+            )
+
+            if (set.isWarmup) {
+                WarmupBadge(compact = true)
+                Spacer(modifier = Modifier.width(4.dp))
+            }
+
+            val bodyweightAtSet =
+                BodyWeightTimeline.bodyWeightForSet(set, userProfile.currentWeightKg)
+            val descriptor = WorkoutMetrics.historyLine(set, bodyweightAtSet, weightUnit)
+            Text(
+                text = descriptor,
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                color = ElectricCyan,
+                maxLines = 2
+            )
+        }
+
+        IconButton(
+            onClick = { onDeleteSet(set) },
+            modifier = Modifier
+                .size(24.dp)
+                .testTag("delete_set_${set.id}")
+        ) {
+            Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = if (isDrop) "Delete Drop Set" else "Delete Set",
+                tint = TextMuted.copy(alpha = 0.7f),
+                modifier = Modifier.size(15.dp)
+            )
         }
     }
 }

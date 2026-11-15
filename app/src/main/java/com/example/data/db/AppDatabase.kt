@@ -12,6 +12,7 @@ import com.example.data.dao.ExerciseDao
 import com.example.data.dao.GeminiSummaryDao
 import com.example.data.dao.SavedRoutineDao
 import com.example.data.dao.ScheduleDao
+import com.example.data.dao.SchedulePlanDao
 import com.example.data.dao.UserProfileDao
 import com.example.data.dao.WorkoutAiSummaryDao
 import com.example.data.dao.WorkoutDao
@@ -23,6 +24,8 @@ import com.example.data.model.ExerciseType
 import com.example.data.model.GeminiSummary
 import com.example.data.model.LoggedSet
 import com.example.data.model.SavedRoutine
+import com.example.data.model.ScheduleDaySlot
+import com.example.data.model.SchedulePlan
 import com.example.data.model.ScheduledWorkoutDay
 import com.example.data.model.UserProfile
 import com.example.data.model.WorkoutAiSummary
@@ -47,9 +50,11 @@ import kotlinx.coroutines.sync.withLock
         ChatMessageEntity::class,
         GeminiSummary::class,
         ScheduledWorkoutDay::class,
-        WorkoutAiSummary::class
+        WorkoutAiSummary::class,
+        SchedulePlan::class,
+        ScheduleDaySlot::class
     ],
-    version = 15,
+    version = 19,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -59,6 +64,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun userProfileDao(): UserProfileDao
     abstract fun savedRoutineDao(): SavedRoutineDao
     abstract fun scheduleDao(): ScheduleDao
+    abstract fun schedulePlanDao(): SchedulePlanDao
     abstract fun bodyWeightDao(): BodyWeightDao
     abstract fun chatDao(): ChatDao
     abstract fun geminiSummaryDao(): GeminiSummaryDao
@@ -493,6 +499,156 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            private fun hasColumn(db: SupportSQLiteDatabase, table: String, column: String): Boolean {
+                db.query("PRAGMA table_info(`$table`)").use { cursor ->
+                    val nameIndex = cursor.getColumnIndex("name")
+                    while (cursor.moveToNext()) {
+                        if (nameIndex >= 0 && cursor.getString(nameIndex) == column) return true
+                    }
+                }
+                return false
+            }
+
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!hasColumn(db, "saved_routines", "modelVersion")) {
+                    db.execSQL(
+                        "ALTER TABLE `saved_routines` ADD COLUMN `modelVersion` INTEGER NOT NULL DEFAULT 0"
+                    )
+                }
+                if (!hasColumn(db, "workout_sessions", "scheduleId")) {
+                    db.execSQL(
+                        "ALTER TABLE `workout_sessions` ADD COLUMN `scheduleId` INTEGER NOT NULL DEFAULT 0"
+                    )
+                }
+                if (!hasColumn(db, "workout_sessions", "scheduleGoal")) {
+                    db.execSQL(
+                        "ALTER TABLE `workout_sessions` ADD COLUMN `scheduleGoal` TEXT NOT NULL DEFAULT ''"
+                    )
+                }
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `schedules` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `description` TEXT NOT NULL,
+                        `goal` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `legacyRoutineId` INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_schedules_createdAt` ON `schedules` (`createdAt`)"
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `schedule_days` (
+                        `scheduleId` INTEGER NOT NULL,
+                        `weekday` INTEGER NOT NULL,
+                        `routineId` INTEGER,
+                        PRIMARY KEY(`scheduleId`, `weekday`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_schedule_days_routineId` " +
+                        "ON `schedule_days` (`routineId`)"
+                )
+            }
+        }
+
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            private fun hasColumn(db: SupportSQLiteDatabase, table: String, column: String): Boolean {
+                db.query("PRAGMA table_info(`$table`)").use { cursor ->
+                    val nameIndex = cursor.getColumnIndex("name")
+                    while (cursor.moveToNext()) {
+                        if (nameIndex >= 0 && cursor.getString(nameIndex) == column) return true
+                    }
+                }
+                return false
+            }
+
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Existing exercises keep their behaviour through the type fallback until the
+                // dataset reseed writes an explicit field list. Custom and edited rows stay empty,
+                // which is a deliberate legacy-safe state rather than a guessed configuration.
+                if (!hasColumn(db, "exercises", "supportedFields")) {
+                    db.execSQL(
+                        "ALTER TABLE `exercises` ADD COLUMN `supportedFields` TEXT NOT NULL DEFAULT ''"
+                    )
+                }
+            }
+        }
+
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            private fun hasColumn(db: SupportSQLiteDatabase, table: String, column: String): Boolean {
+                db.query("PRAGMA table_info(`$table`)").use { cursor ->
+                    val nameIndex = cursor.getColumnIndex("name")
+                    while (cursor.moveToNext()) {
+                        if (nameIndex >= 0 && cursor.getString(nameIndex) == column) return true
+                    }
+                }
+                return false
+            }
+
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Every existing set was a top-level working or warm-up set. A null parent is the
+                // explicit non-drop state: no row is guessed into a drop set from its position,
+                // its load or its number. The legacy UID is deterministic so a draft or an old
+                // backup can still be matched to the same row.
+                if (!hasColumn(db, "logged_sets", "setUid")) {
+                    db.execSQL(
+                        "ALTER TABLE `logged_sets` ADD COLUMN `setUid` TEXT NOT NULL DEFAULT ''"
+                    )
+                }
+                if (!hasColumn(db, "logged_sets", "parentSetUid")) {
+                    db.execSQL(
+                        "ALTER TABLE `logged_sets` ADD COLUMN `parentSetUid` TEXT"
+                    )
+                }
+                if (!hasColumn(db, "logged_sets", "dropIndex")) {
+                    db.execSQL(
+                        "ALTER TABLE `logged_sets` ADD COLUMN `dropIndex` INTEGER NOT NULL DEFAULT 0"
+                    )
+                }
+                db.execSQL(
+                    "UPDATE `logged_sets` SET `setUid` = 'legacy-' || `id` " +
+                        "WHERE `setUid` IS NULL OR `setUid` = ''"
+                )
+            }
+        }
+
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            private fun hasColumn(db: SupportSQLiteDatabase, table: String, column: String): Boolean {
+                db.query("PRAGMA table_info(`$table`)").use { cursor ->
+                    val nameIndex = cursor.getColumnIndex("name")
+                    while (cursor.moveToNext()) {
+                        if (nameIndex >= 0 && cursor.getString(nameIndex) == column) return true
+                    }
+                }
+                return false
+            }
+
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Every existing set was a normal working set before warm-ups existed. The default
+                // is the whole migration: no row can be guessed into a warm-up from its position or
+                // load, and no value or timestamp is rewritten.
+                if (!hasColumn(db, "logged_sets", "isWarmup")) {
+                    db.execSQL(
+                        "ALTER TABLE `logged_sets` ADD COLUMN `isWarmup` INTEGER NOT NULL DEFAULT 0"
+                    )
+                }
+                // Null means "inherit the existing rest default". A nullable column lets a set
+                // distinguish an explicit 0 (no timer) from never having chosen a value.
+                if (!hasColumn(db, "logged_sets", "restSecondsOverride")) {
+                    db.execSQL(
+                        "ALTER TABLE `logged_sets` ADD COLUMN `restSecondsOverride` INTEGER"
+                    )
+                }
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -514,7 +670,11 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_11_12,
                         MIGRATION_12_13,
                         MIGRATION_13_14,
-                        MIGRATION_14_15
+                        MIGRATION_14_15,
+                        MIGRATION_15_16,
+                        MIGRATION_16_17,
+                        MIGRATION_17_18,
+                        MIGRATION_18_19
                     )
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .addCallback(DatabasePrepopulationCallback(context))
@@ -597,8 +757,10 @@ abstract class AppDatabase : RoomDatabase() {
                     //    is left exactly as it is.
                     exerciseDao.retagCustomBodyweightExercises()
 
-                    // 5. Keep logged set exercise types in sync with the catalog
-                    database.workoutDao().syncLoggedSetExerciseTypes()
+                    // 5. Logged sets keep the type they were recorded under. The catalog can be
+                    //    reclassified (and its supported fields edited) without rewriting what the
+                    //    athlete actually did; the field-driven UI reads the current configuration
+                    //    from the exercise, not a historical set snapshot.
 
                     // 6. Fill any body weight snapshot that is still 0.
                     //
@@ -623,6 +785,11 @@ abstract class AppDatabase : RoomDatabase() {
                     //    done in SQL. It runs here, once, and every routine it has already done
                     //    carries a flag that keeps it from being looked at again.
                     migrateRoutineSchedules(database)
+
+                    // 8. Split the 4.4 multi-day routines into standalone Routines and Schedules.
+                    //    Legacy rows stay behind with modelVersion = 1 so old workout links remain
+                    //    readable, while the new UI only sees modelVersion >= 2.
+                    RoutineModelMigration.migrate(database)
                 }
             }
         }

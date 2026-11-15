@@ -63,7 +63,98 @@ object BackupSchemaMigrations {
         }
     }
 
-    val all: List<BackupSchemaMigration> = listOf(MigrateV1ToV2)
+    /**
+     * v3 adds the normalized Schedule layer. Legacy multi-day routines remain in `routines`; the
+     * importer converts them after restore. New-format archives carry `schedules` and their seven
+     * weekday slots alongside the existing frozen routine DTOs.
+     */
+    object MigrateV2ToV3 : BackupSchemaMigration {
+        override val fromVersion: Int = 2
+        override val toVersion: Int = 3
+
+        override fun migrate(sections: MutableMap<String, JsonNode.Obj>) {
+            val routines = sections[BackupFormat.SECTION_ROUTINES] ?: return
+            if (routines["schedules"] == null) routines["schedules"] = JsonNode.Arr()
+            if (routines["scheduleSlots"] == null) routines["scheduleSlots"] = JsonNode.Arr()
+            // Old routine rows are intentionally modelVersion 0; the DB migration converts them.
+        }
+    }
+
+    /**
+     * v4 adds per-set warm-up and rest override fields.
+     *
+     * Both are additive. Legacy sets become normal sets (`isWarmup = false`) and inherit the old
+     * rest behaviour (`restSecondsOverride = null`). No existing value is touched.
+     */
+    object MigrateV3ToV4 : BackupSchemaMigration {
+        override val fromVersion: Int = 3
+        override val toVersion: Int = 4
+
+        override fun migrate(sections: MutableMap<String, JsonNode.Obj>) {
+            val workouts = sections[BackupFormat.SECTION_WORKOUTS] ?: return
+            val sets = workouts["sets"] as? JsonNode.Arr ?: return
+            sets.values.forEach { node ->
+                val set = node as? JsonNode.Obj ?: return@forEach
+                if (set["isWarmup"] == null) set["isWarmup"] = JsonNode.Bool(false)
+                if (set["restSecondsOverride"] == null) {
+                    set["restSecondsOverride"] = JsonNode.Null
+                }
+            }
+        }
+    }
+
+    /**
+     * v5 adds stable set UIDs and the optional drop-set parent link.
+     *
+     * Existing sets become top-level main sets with deterministic `legacy-<id>` UIDs. No row is
+     * classified as a drop set, and no historical value is touched.
+     */
+    object MigrateV4ToV5 : BackupSchemaMigration {
+        override val fromVersion: Int = 4
+        override val toVersion: Int = 5
+
+        override fun migrate(sections: MutableMap<String, JsonNode.Obj>) {
+            val workouts = sections[BackupFormat.SECTION_WORKOUTS] ?: return
+            val sets = workouts["sets"] as? JsonNode.Arr ?: return
+            sets.values.forEachIndexed { index, node ->
+                val set = node as? JsonNode.Obj ?: return@forEachIndexed
+                val id = (set["id"] as? JsonNode.Num)?.toLong() ?: 0L
+                if (set["setUid"] == null || (set["setUid"] as? JsonNode.Str)?.value.isNullOrBlank()) {
+                    set["setUid"] = JsonNode.Str(if (id > 0L) "legacy-$id" else "legacy-set-$index")
+                }
+                if (set["parentSetUid"] == null) set["parentSetUid"] = JsonNode.Null
+                if (set["dropIndex"] == null) set["dropIndex"] = JsonNode.Num("0")
+            }
+        }
+    }
+
+    /**
+     * v6 adds the explicit per-exercise field list. Old exercises are left empty: the type fallback
+     * remains authoritative until the catalogue reseed or the athlete configures fields.
+     */
+    object MigrateV5ToV6 : BackupSchemaMigration {
+        override val fromVersion: Int = 5
+        override val toVersion: Int = 6
+
+        override fun migrate(sections: MutableMap<String, JsonNode.Obj>) {
+            val exercises = sections[BackupFormat.SECTION_EXERCISES] ?: return
+            val rows = exercises["exercises"] as? JsonNode.Arr ?: return
+            rows.values.forEach { node ->
+                val exercise = node as? JsonNode.Obj ?: return@forEach
+                if (exercise["supportedFields"] == null) {
+                    exercise["supportedFields"] = JsonNode.Str("")
+                }
+            }
+        }
+    }
+
+    val all: List<BackupSchemaMigration> = listOf(
+        MigrateV1ToV2,
+        MigrateV2ToV3,
+        MigrateV3ToV4,
+        MigrateV4ToV5,
+        MigrateV5ToV6
+    )
 
     fun migrate(
         sections: MutableMap<String, JsonNode.Obj>,

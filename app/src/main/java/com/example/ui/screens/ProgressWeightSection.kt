@@ -6,12 +6,14 @@
  */
 package com.example.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,6 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -82,8 +85,7 @@ fun BodyWeightProgressSection(
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.getDefault()) }
 
     Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        modifier = modifier.fillMaxWidth()
     ) {
         Card(
             modifier = Modifier.fillMaxWidth().testTag("body_weight_timeline_card"),
@@ -146,6 +148,9 @@ fun BodyWeightProgressSection(
             }
         }
 
+        // The timeline card and the logs belong together: the old 16dp gap plus the 48dp header
+        // row left a wide empty band between the two cards.
+        Spacer(modifier = Modifier.height(10.dp))
         if (weightLogs.isEmpty()) {
             Text(
                 text = "No weigh-in logs recorded yet. Tap 'Log Today' above to start tracking.",
@@ -154,31 +159,49 @@ fun BodyWeightProgressSection(
                 modifier = Modifier.testTag("weigh_in_logs_empty")
             )
         } else {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "WEIGH-IN LOGS (${weightLogs.size})",
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    color = TextWhite,
-                    modifier = Modifier.weight(1f)
-                )
-                if (weighInsExpanded) {
-                    TextButton(
-                        onClick = { weighInsExpanded = false },
-                        modifier = Modifier.testTag("collapse_weigh_in_logs")
-                    ) { Text("Hide all", color = ElectricCyan, fontWeight = FontWeight.Bold) }
+            Column(modifier = Modifier.fillMaxWidth().testTag("weigh_in_logs_section")) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 32.dp)
+                        .testTag("weigh_in_logs_header"),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "WEIGH-IN LOGS (${weightLogs.size})",
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                        color = TextWhite,
+                        modifier = Modifier.weight(1f)
+                    )
+                    // Only the expanded state has an action. The row reserves the same 48dp
+                    // height in both states, so swapping the action in cannot push the panel
+                    // down; the collapsed card already provides its own View all button.
+                    if (weighInsExpanded) {
+                        Text(
+                            text = "Hide all",
+                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                            color = ElectricCyan,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable { weighInsExpanded = false }
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                .testTag("collapse_weigh_in_logs")
+                        )
+                    }
                 }
+                // The header-to-panel gap is explicit so it cannot change when the panel swaps
+                // between the compact summary and the expanded log. The collapsed reference is
+                // the only spacing used here.
+                Spacer(modifier = Modifier.height(8.dp))
+                WeighInLogsPanel(
+                    expanded = weighInsExpanded,
+                    logs = sortedLogs,
+                    weightUnit = weightUnit,
+                    dateFormat = dateFormat,
+                    onShowAll = { weighInsExpanded = true },
+                    onDelete = { viewModel.deleteWeightLog(it) }
+                )
             }
-            WeighInLogsPanel(
-                expanded = weighInsExpanded,
-                logs = sortedLogs,
-                weightUnit = weightUnit,
-                dateFormat = dateFormat,
-                onShowAll = { weighInsExpanded = true },
-                onDelete = { viewModel.deleteWeightLog(it) }
-            )
         }
     }
 

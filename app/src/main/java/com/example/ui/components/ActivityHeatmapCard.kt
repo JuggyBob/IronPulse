@@ -24,6 +24,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,8 +80,18 @@ fun ActivityHeatmapCard(
 
     // Land on the most recent weeks: a year of history scrolled to its empty start would hide
     // everything the athlete just did.
-    LaunchedEffect(weeks) {
-        scrollState.scrollTo(scrollState.maxValue)
+    //
+    // The card sits in a LazyColumn item, so scrolling the page down disposes it and scrolling back
+    // re-creates it. rememberScrollState already saves the offset across that, but this effect used
+    // to run again on every re-entry and force the view back to the newest week. The flag is saved
+    // with the item, so the initial jump happens exactly once and the athlete's chosen month is
+    // never overwritten by vertical scrolling.
+    var landedOnLatest by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(weeks, scrollState.maxValue) {
+        if (!landedOnLatest && scrollState.maxValue > 0) {
+            scrollState.scrollTo(scrollState.maxValue)
+            landedOnLatest = true
+        }
     }
 
     Column(

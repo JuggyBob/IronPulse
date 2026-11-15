@@ -7,6 +7,7 @@
 package com.example.data.ai
 
 import com.example.data.model.ExerciseType
+import com.example.data.model.RoutineDropSet
 import com.example.data.model.RoutineExerciseItem
 import com.example.data.model.RoutineParser
 import org.json.JSONArray
@@ -27,8 +28,11 @@ data class ProposedRoutineExercise(
     val targetWeightKg: Double = 0.0,
     val targetAddedWeightKg: Double = 0.0,
     val targetHoldSeconds: Int = 0,
+    val targetDistanceKm: Double = 0.0,
     val restSeconds: Int = 90,
-    val prescription: String = ""
+    val prescription: String = "",
+    /** Optional children, grouped under their 1-based main set index. */
+    val dropSets: List<RoutineDropSet> = emptyList()
 ) {
     fun toRoutineItem(weekday: Int, dayTitle: String, dayNote: String): RoutineExerciseItem =
         RoutineExerciseItem(
@@ -42,11 +46,13 @@ data class ProposedRoutineExercise(
             targetWeight = targetWeightKg,
             targetAddedWeightKg = targetAddedWeightKg,
             targetHoldSeconds = targetHoldSeconds,
+            targetDistanceKm = targetDistanceKm,
             restSeconds = restSeconds,
             prescription = prescription,
             weekday = weekday,
             dayTitle = dayTitle,
-            dayNote = dayNote
+            dayNote = dayNote,
+            dropSets = dropSets
         )
 
     fun toJson(): JSONObject = JSONObject().apply {
@@ -61,11 +67,65 @@ data class ProposedRoutineExercise(
         put("weightKg", targetWeightKg)
         put("addedWeightKg", targetAddedWeightKg)
         put("holdSeconds", targetHoldSeconds)
+        put("distanceKm", targetDistanceKm)
         put("restSeconds", restSeconds)
         put("prescription", prescription)
+        if (dropSets.isNotEmpty()) {
+            put("dropSets", JSONArray().apply {
+                dropSets.sortedWith(compareBy({ it.mainSetIndex }, { it.dropIndex })).forEach { drop ->
+                    put(JSONObject().apply {
+                        put("mainSet", drop.mainSetIndex)
+                        put("drop", drop.dropIndex)
+                        put("reps", drop.targetReps)
+                        put("holdSeconds", drop.targetHoldSeconds)
+                        put("distanceKm", drop.targetDistanceKm)
+                        put("weightKg", drop.targetWeight)
+                        put("addedWeightKg", drop.targetAddedWeightKg)
+                        put("restSeconds", drop.restSeconds)
+                    })
+                }
+            })
+        }
     }
 
     companion object {
+        /**
+         * Reads optional drop-set children. A missing array is no drop sets, and a child is clamped
+         * to a real main set so a malformed proposal can never create an orphan.
+         */
+        private fun parseDropSets(obj: JSONObject, mainSetCount: Int): List<RoutineDropSet> {
+            val array = obj.optJSONArray("dropSets") ?: return emptyList()
+            val result = mutableListOf<RoutineDropSet>()
+            for (i in 0 until array.length()) {
+                val drop = array.optJSONObject(i) ?: continue
+                val mainSet = drop.optInt(
+                    "mainSet",
+                    drop.optInt("mainSetIndex", 1)
+                ).coerceIn(1, mainSetCount.coerceAtLeast(1))
+                result += RoutineDropSet(
+                    mainSetIndex = mainSet,
+                    dropIndex = drop.optInt("drop", drop.optInt("dropIndex", i + 1)).coerceAtLeast(1),
+                    targetReps = drop.optInt("reps", 0).coerceIn(0, 100),
+                    targetHoldSeconds = drop.optInt("holdSeconds", 0).coerceIn(0, 600),
+                    targetDistanceKm = drop.optDouble("distanceKm", 0.0).coerceAtLeast(0.0),
+                    targetWeight = drop.optDouble("weightKg", drop.optDouble("weight", 0.0))
+                        .coerceAtLeast(0.0),
+                    targetAddedWeightKg = drop.optDouble(
+                        "addedWeightKg",
+                        drop.optDouble("addedWeight", 0.0)
+                    ).coerceAtLeast(0.0),
+                    restSeconds = drop.optInt("restSeconds", 0).coerceIn(0, 600)
+                )
+            }
+            return result
+                .groupBy { it.mainSetIndex }
+                .flatMap { (_, rows) ->
+                    rows.sortedBy { it.dropIndex }.mapIndexed { index, drop ->
+                        drop.copy(dropIndex = index + 1)
+                    }
+                }
+        }
+
         fun fromJson(obj: JSONObject): ProposedRoutineExercise? {
             val name = obj.optString("name").trim()
             if (name.isBlank()) return null
@@ -105,8 +165,10 @@ data class ProposedRoutineExercise(
                 targetWeightKg = obj.optDouble("weightKg", 0.0).coerceAtLeast(0.0),
                 targetAddedWeightKg = obj.optDouble("addedWeightKg", 0.0).coerceAtLeast(0.0),
                 targetHoldSeconds = hold,
+                targetDistanceKm = obj.optDouble("distanceKm", 0.0).coerceAtLeast(0.0),
                 restSeconds = obj.optInt("restSeconds", 90).coerceIn(0, 600),
-                prescription = prescription
+                prescription = prescription,
+                dropSets = parseDropSets(obj, sets)
             )
         }
     }

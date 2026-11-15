@@ -83,6 +83,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -152,6 +153,7 @@ fun AiCoachScreen(
     viewModel: MainViewModel,
     onNavigateToLogWorkout: () -> Unit,
     onNavigateToSavedRoutines: () -> Unit,
+    onChatDrawerOpenChanged: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var selectedSubTab by remember { mutableIntStateOf(0) }
@@ -233,7 +235,10 @@ fun AiCoachScreen(
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
             when (selectedSubTab) {
-                0 -> AiChatView(viewModel)
+                0 -> AiChatView(
+                    viewModel = viewModel,
+                    onChatDrawerOpenChanged = onChatDrawerOpenChanged
+                )
                 1 -> AiRoutineGeneratorView(
                     viewModel = viewModel,
                     onStartRoutine = {
@@ -257,7 +262,10 @@ fun AiCoachScreen(
 }
 
 @Composable
-fun AiChatView(viewModel: MainViewModel) {
+fun AiChatView(
+    viewModel: MainViewModel,
+    onChatDrawerOpenChanged: (Boolean) -> Unit = {}
+) {
     val messages by viewModel.chatMessages.collectAsStateWithLifecycle()
     val isLoading by viewModel.isChatLoading.collectAsStateWithLifecycle()
     val aiDataAccessEnabled by viewModel.aiWorkoutDataAccess.collectAsStateWithLifecycle()
@@ -266,6 +274,15 @@ fun AiChatView(viewModel: MainViewModel) {
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val coroutineScope = rememberCoroutineScope()
+
+    // Let the host hide the bottom dock while the history drawer is open. The dock overlays the
+    // whole app, so leaving it visible covers the last chat in a long history list.
+    LaunchedEffect(drawerState.targetValue) {
+        onChatDrawerOpenChanged(drawerState.targetValue == DrawerValue.Open)
+    }
+    DisposableEffect(Unit) {
+        onDispose { onChatDrawerOpenChanged(false) }
+    }
 
     var inputQuery by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -282,6 +299,18 @@ fun AiChatView(viewModel: MainViewModel) {
             listState.animateScrollToItem(messages.lastIndex)
         }
     }
+
+    // The composer reserves 92dp for the floating dock. When the history drawer opens, the dock
+    // slides down out of the way; leaving the composer in place exposed an empty strip on the
+    // side without a drawer. The clearance animates with the same spec and duration as the dock's
+    // exit so the two move as one piece, and it returns to 92dp when the drawer closes. While the
+    // keyboard is open the dock is already hidden, so no clearance is needed either.
+    val drawerOpen = drawerState.targetValue == DrawerValue.Open
+    val dockClearance by animateDpAsState(
+        targetValue = if (imeBottom > 0 || drawerOpen) 0.dp else 92.dp,
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+        label = "ai_chat_input_dock_clearance"
+    )
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -638,8 +667,10 @@ fun AiChatView(viewModel: MainViewModel) {
                 shadowElevation = 8.dp,
                 // The floating dock is an overlay, not a Scaffold bottom bar, so the input must
                 // reserve its own clearance. While the keyboard is open the dock is hidden and the
-                // root's imePadding already lifts the input, so no extra gap is added.
-                modifier = Modifier.padding(bottom = if (imeBottom > 0) 0.dp else 92.dp)
+                // root's imePadding already lifts the input, so no extra gap is added. The same
+                // applies while the drawer is open; dockClearance handles both cases in sync with
+                // the dock animation.
+                modifier = Modifier.padding(bottom = dockClearance)
             ) {
                 Row(
                     modifier = Modifier
@@ -1328,7 +1359,9 @@ fun AiRoutineGeneratorView(
                                         text = "$d",
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 16.sp,
-                                        color = if (selected) OnAccent else TextWhite,
+                                        // The selected chip is a translucent accent surface, not a
+                                        // solid one: OnAccent is black and disappears on it.
+                                        color = if (selected) ElectricCyan else TextWhite,
                                         maxLines = 1,
                                         softWrap = false,
                                         textAlign = TextAlign.Center
@@ -1337,7 +1370,7 @@ fun AiRoutineGeneratorView(
                                         text = "days",
                                         fontSize = 9.sp,
                                         color = if (selected) {
-                                            OnAccent.copy(alpha = 0.82f)
+                                            ElectricCyan.copy(alpha = 0.82f)
                                         } else {
                                             TextMuted
                                         },
@@ -1461,19 +1494,15 @@ fun AiRoutineGeneratorView(
 
                             Button(
                                 onClick = {
-                                    // The day count comes from the parsed answer, never from the preset
-                                    val realDays = RoutineParser.parseDays(generatedText, allExercises)
-                                        .size.coerceAtLeast(1)
-                                    val title = "AI $goal ($realDays-Day)"
-                                    viewModel.saveRoutine(
-                                        SavedRoutine(
-                                            name = title,
+                                    val items = RoutineParser.parseExercises(generatedText, allExercises)
+                                    if (items.isNotEmpty()) {
+                                        viewModel.createPlanFromItems(
+                                            name = "AI $goal",
                                             description = "AI Generated for $goal using $equipment",
-                                            daysPerWeek = realDays,
                                             goal = goal,
-                                            exercisesJson = generatedText
+                                            items = items
                                         )
-                                    )
+                                    }
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
                                 shape = RoundedCornerShape(8.dp),
@@ -1523,23 +1552,20 @@ fun AiRoutineGeneratorView(
                         // Start Workout
                         Button(
                             onClick = {
-                                val parsedDays = RoutineParser.parseDays(generatedText, allExercises)
-                                val realDays = parsedDays.size.coerceAtLeast(1)
-                                val routine = SavedRoutine(
-                                    name = "AI $goal Session",
-                                    description = "AI Program Protocol",
-                                    daysPerWeek = realDays,
-                                    goal = goal,
-                                    exercisesJson = generatedText
-                                )
-                                if (parsedDays.size > 1) {
-                                    generatedRoutineForDayPicker = routine
-                                } else {
-                                    safeStartRoutine {
-                                        viewModel.saveRoutine(routine)
-                                        viewModel.startRoutineWorkout(routine)
-                                        onStartRoutine()
-                                    }
+                                val items = RoutineParser.parseExercises(generatedText, allExercises)
+                                if (items.isNotEmpty()) {
+                                    val realDays = items.map { it.weekday }.distinct().size.coerceAtLeast(1)
+                                    viewModel.createPlanFromItems(
+                                        name = "AI $goal Session",
+                                        description = "AI Program Protocol",
+                                        goal = goal,
+                                        items = items,
+                                        onCreated = { created ->
+                                            created.routineIds.firstOrNull()?.let { firstId ->
+                                                viewModel.startRoutineById(firstId) { onStartRoutine() }
+                                            }
+                                        }
+                                    )
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = MintGreen, contentColor = OnAccent),
@@ -1800,7 +1826,7 @@ fun SavedRoutinesView(
                             showCreateRoutineDialog = true
                         },
                         isScheduledWeek = activeRoutineId == routine.id,
-                        onScheduleWeek = { viewModel.setActiveRoutine(routine.id) }
+                        onScheduleWeek = { viewModel.setActiveSchedule(routine.id) }
                     )
                 }
             }

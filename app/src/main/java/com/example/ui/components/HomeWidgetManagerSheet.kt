@@ -391,7 +391,7 @@ private fun EnabledWidgetCard(
                     )
                     if (widget == HomeWidget.WEEK && !hasWeekRoutine) {
                         Text(
-                            text = "Appears once you schedule a routine.",
+                            text = "Appears once you activate a Schedule.",
                             style = MaterialTheme.typography.labelSmall,
                             color = GoldenAmber
                         )

@@ -4,6 +4,7 @@ import com.example.data.model.ExerciseType
 import com.example.data.model.LoggedSet
 import com.example.data.model.LoggedSetNumbering
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 import java.util.Calendar
 
@@ -106,6 +107,49 @@ class LoggedSetNumberingTest {
         val positions = LoggedSetNumbering.positionsBySetId(sets)
 
         assertEquals(listOf(1, 2, 3), listOf(positions[7L], positions[8L], positions[9L]))
+    }
+
+
+    @Test
+    fun `drop sets do not consume top-level set numbers`() {
+        val main1 = set(1L, 1, day1).copy(setUid = "m1")
+        val drop1 = set(10L, 1, day1 + 100).copy(
+            setUid = "d1",
+            parentSetUid = "m1",
+            dropIndex = 1
+        )
+        val drop2 = set(11L, 1, day1 + 200).copy(
+            setUid = "d2",
+            parentSetUid = "m1",
+            dropIndex = 2
+        )
+        val main2 = set(2L, 2, day1 + 300).copy(setUid = "m2")
+        val main3 = set(3L, 3, day1 + 400).copy(setUid = "m3")
+
+        val positions = LoggedSetNumbering.mainSetPositionsBySetId(
+            listOf(main1, drop1, drop2, main2, main3)
+        )
+
+        assertEquals(listOf(1, 2, 3), listOf(positions[1L], positions[2L], positions[3L]))
+        assertFalse(positions.containsKey(10L))
+        assertFalse(positions.containsKey(11L))
+    }
+
+
+    @Test
+    fun `two sessions on one day each number their own main sets`() {
+        val firstSession = listOf(
+            set(1L, 1, day1).copy(setUid = "a1"),
+            set(2L, 2, day1 + 100).copy(setUid = "a2")
+        )
+        val secondSession = listOf(
+            set(3L, 1, day1 + 200).copy(sessionId = 2L, setUid = "b1"),
+            set(4L, 2, day1 + 300).copy(sessionId = 2L, setUid = "b2")
+        )
+
+        val positions = LoggedSetNumbering.mainSetPositionsBySession(firstSession + secondSession)
+
+        assertEquals(listOf(1, 2, 1, 2), listOf(positions[1L], positions[2L], positions[3L], positions[4L]))
     }
 
     private fun timestampOf(year: Int, month: Int, day: Int, hour: Int, minute: Int): Long =

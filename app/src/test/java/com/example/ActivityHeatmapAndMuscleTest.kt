@@ -194,18 +194,37 @@ class MusclePartResolverTest {
     }
 
     @Test
-    fun `the fields logged follow the exercise type`() {
+    fun `the fields logged follow the exercise configuration, not its type`() {
+        fun exercise(type: String, fields: String) = Exercise(
+            name = "Test movement",
+            category = "Core",
+            exerciseType = type,
+            supportedFields = fields
+        )
+
         assertEquals(
             listOf("Sets", "Reps", "Added weight"),
-            MusclePartResolver.trackedFields(ExerciseType.ADDED_WEIGHT)
+            MusclePartResolver.trackedFields(exercise(ExerciseType.ADDED_WEIGHT, "reps,addedWeight"))
+        )
+        // The Plank case: a bodyweight classification that also supports a hold and added load.
+        assertEquals(
+            listOf("Sets", "Hold (seconds)", "Added weight"),
+            MusclePartResolver.trackedFields(
+                exercise(ExerciseType.PURE_BODYWEIGHT, "holdSeconds,addedWeight")
+            )
         )
         assertEquals(
-            listOf("Sets", "Reps", "Hold (seconds)"),
-            MusclePartResolver.trackedFields(ExerciseType.PURE_BODYWEIGHT)
+            listOf("Sets", "Weight", "Reps"),
+            MusclePartResolver.trackedFields(
+                exercise(ExerciseType.STANDARD_WEIGHT, "weight,reps")
+            )
         )
+        // Same type, different explicit fields: the classification must not flatten them.
         assertEquals(
-            listOf("Sets", "Reps", "Weight"),
-            MusclePartResolver.trackedFields(ExerciseType.STANDARD_WEIGHT)
+            listOf("Sets", "Reps"),
+            MusclePartResolver.trackedFields(
+                exercise(ExerciseType.PURE_BODYWEIGHT, "reps")
+            )
         )
     }
 }

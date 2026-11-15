@@ -152,6 +152,7 @@ fun HomeScreen(
     val unit by viewModel.weightUnit.collectAsStateWithLifecycle()
     val weekStartsOnMonday by viewModel.weekStartFlow.collectAsStateWithLifecycle()
     val savedRoutines by viewModel.savedRoutines.collectAsStateWithLifecycle()
+    val schedules by viewModel.schedules.collectAsStateWithLifecycle()
     val activeRoutine by viewModel.activeRoutine.collectAsStateWithLifecycle()
     val activeRoutineDays by viewModel.activeRoutineDays.collectAsStateWithLifecycle()
     val activeRoutineWorkout by viewModel.activeRoutineWorkout.collectAsStateWithLifecycle()
@@ -211,7 +212,7 @@ fun HomeScreen(
     var hiddenWidgetIds by remember {
         mutableStateOf(widgetConfig.hiddenIds ?: HomeWidget.defaultHiddenIds)
     }
-    // The week card only exists when a routine is scheduled, so it is filtered out of the drag
+    // The week card only exists when a Schedule is active, so it is filtered out of the drag
     // list rather than occupying an invisible slot.
     val hasWeekWidget = activeRoutine != null && activeRoutineDays.isNotEmpty()
     val visibleWidgets = remember(orderedWidgets, hasWeekWidget) {
@@ -425,13 +426,15 @@ fun HomeScreen(
                         todayDay = activeRoutineDays.firstOrNull { it.weekday == today },
                         todayWeekday = today,
                         hasRoutines = savedRoutines.isNotEmpty(),
+                        hasSchedules = schedules.isNotEmpty(),
                         hasActiveRoutine = routine != null,
                         workoutInProgress = activeRoutineWorkout != null || activeSession != null,
                         hasPendingDraft = pendingDraft != null,
                         onStart = { day ->
-                            viewModel.startRoutineWorkout(
-                                routine ?: return@TodayWorkoutCard,
-                                targetWeekday = day.weekday
+                            viewModel.startScheduledWorkout(
+                                routineId = day.routineId,
+                                weekday = day.weekday,
+                                plannedDate = 0L
                             )
                         },
                         onChooseRoutine = onOpenSavedRoutines,
@@ -458,17 +461,19 @@ fun HomeScreen(
                 }
 
                 HomeWidget.WEEK -> activeRoutine?.let { routine ->
+                    val weekdayOrder = Weekday.ordered(weekStartsOnMonday)
                     WeekScheduleCard(
-                        days = activeRoutineDays,
+                        days = activeRoutineDays.sortedBy { weekdayOrder.indexOf(it.weekday) },
                         today = today,
                         now = now,
                         weekStartsOnMonday = weekStartsOnMonday,
                         completedScheduledDays = completedScheduledDays,
                         shortDateFormat = shortDateFormat,
                         onStartDay = { day ->
-                            viewModel.startRoutineWorkout(
-                                routine,
-                                targetWeekday = day.weekday
+                            viewModel.startScheduledWorkout(
+                                routineId = day.routineId,
+                                weekday = day.weekday,
+                                plannedDate = 0L
                             )
                         }
                     )
@@ -875,6 +880,7 @@ private fun TodayWorkoutCard(
     todayDay: RoutineDay?,
     todayWeekday: Int,
     hasRoutines: Boolean,
+    hasSchedules: Boolean,
     hasActiveRoutine: Boolean,
     workoutInProgress: Boolean,
     hasPendingDraft: Boolean,
@@ -924,35 +930,38 @@ private fun TodayWorkoutCard(
                     PrimaryHomeButton(text = "Resume Workout", onClick = onResume)
                 }
 
-                // Nothing to train and nothing saved yet.
-                !hasRoutines -> {
+                // No Schedule exists yet.
+                !hasSchedules -> {
                     Text(
-                        text = "No routines yet",
+                        text = "No schedule yet",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = TextWhite
                     )
                     Text(
-                        text = "Create a weekly plan and IronPulse will tell you what to train each day.",
+                        text = if (hasRoutines) {
+                            "Create a Schedule and assign your standalone Routines to its weekdays."
+                        } else {
+                            "Create a Routine for each workout, then combine them into a weekly Schedule."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted
                     )
-                    PrimaryHomeButton(text = "Create a Routine", onClick = onChooseRoutine)
+                    PrimaryHomeButton(text = "Create a Schedule", onClick = onChooseRoutine)
                 }
 
-                // Routines exist, but none of them is the week the athlete is following.
+                // Schedules exist, but none is active.
                 !hasActiveRoutine -> {
                     Text(
-                        text = "Choose your week",
+                        text = "No active schedule",
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                         color = TextWhite
                     )
                     Text(
-                        text = "Pick the saved routine you are following this week and it will be " +
-                            "planned onto the days of the week.",
+                        text = "Choose which Schedule should drive today's workout and the rest of the week.",
                         style = MaterialTheme.typography.bodySmall,
                         color = TextMuted
                     )
-                    PrimaryHomeButton(text = "Saved Routines", onClick = onChooseRoutine)
+                    PrimaryHomeButton(text = "Choose a Schedule", onClick = onChooseRoutine)
                 }
 
                 // Today is a rest day.
@@ -997,7 +1006,7 @@ private fun TodayWorkoutCard(
 }
 
 /**
- * The seven days of the scheduled routine.
+ * The seven days of the active Schedule.
  */
 @Composable
 private fun WeekScheduleCard(
@@ -1353,12 +1362,7 @@ private fun RecentWorkoutCard(
                             exerciseSets.sortedBy { it.setNumber }.forEach { set ->
                                 val bodyweight =
                                     BodyWeightTimeline.bodyWeightForSet(set, profileWeightKg)
-                                val load = if (set.exerciseType == ExerciseType.CARDIO) {
-                                    describeCardioSet(set, weightUnit)
-                                } else {
-                                    "${WorkoutMetrics.loadLabel(set, bodyweight, weightUnit)} × " +
-                                        describeLoggedSetEffort(set)
-                                }
+                                val load = WorkoutMetrics.historyLine(set, bodyweight, weightUnit)
                                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     Text(
                                         text = "•",

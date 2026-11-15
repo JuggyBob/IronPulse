@@ -8,40 +8,62 @@
 The Room schema version and the app `versionName` are deliberately **not** used to parse an archive.
 Changing Room tables does not invalidate old backups.
 
-The current values are `formatVersion = 1` and `dataSchemaVersion = 2`, defined in `BackupFormat`.
+The current values are `formatVersion = 1` and **`dataSchemaVersion = 6`**, defined in
+`BackupFormat`.
 
-## Data schema v2
+## Data schema history
 
-v2 is additive. `MigrateV1ToV2` gives an old archive:
+| Version | Migration | What it adds | Safe defaults |
+|---|---|---|---|
+| 1 | — | Initial frozen DTOs | — |
+| 2 | `MigrateV1ToV2` | Post-workout summaries, three widget themes, AI workout-data and post-workout-summary switches | Empty summary list, `ironpulse` widget themes, both switches `false` |
+| 3 | `MigrateV2ToV3` | Schedules and seven weekday slots, routine model versions | Empty schedule/slot arrays; legacy routine rows stay `modelVersion = 0` and are converted after restore |
+| 4 | `MigrateV3ToV4` | `isWarmup`, `restSecondsOverride` | `false`, `null` (normal, inherited set) |
+| 5 | `MigrateV4ToV5` | `setUid`, `parentSetUid`, `dropIndex` | Deterministic `legacy-<id>` UID, `null` parent, `0` index; no row is guessed into a drop set |
+| 6 | `MigrateV5ToV6` | `exercises.supportedFields` | Empty string, which keeps the legacy type fallback |
 
-- an empty `ai.workoutSummaries` list;
-- three `preferences.widgetThemes` entries defaulted to `ironpulse`;
-- `aiWorkoutDataAccess = false` and `postWorkoutAiSummaries = false`.
+The registry only accepts contiguous steps: v1→v2→v3→v4→v5→v6, never a jump. A missing step is a
+programming error and produces `UNSUPPORTED_SCHEMA` before destination data is touched.
 
-The same DTO shapes are read for both versions: absent optional fields fall back to their Kotlin
-default. Exported v2 archives carry the immutable post-workout summaries, the per-message proposal
-metadata and the three independent widget themes. The v1 fixture remains the compatibility contract.
+## What a 4.4.0 archive looks like
+
+A 4.4.0 export is data schema 2. It has:
+
+- `profile` and `preferences`, including `activeRoutineId`;
+- `dashboard`;
+- user-owned `exercises`;
+- `workouts` (sessions and sets without warm-up/drop fields);
+- `routines` with multi-day JSON and materialized schedule days;
+- `progress` and `ai`.
+
+On import, the archive is migrated to schema 6 in memory. The legacy multi-day routines are then
+converted by the same Room migration used for an in-place upgrade: one Schedule plus one standalone
+Routine per distinct workout day. If the archive carried `activeRoutineId`, the migrated Schedule is
+promoted to active once it exists.
+
+The 4.4.0 → 5.0.0 release validation restored a real schema-2 archive into a fresh install; the two
+logged sets survived and the active Schedule appeared automatically.
 
 ## Why the DTOs are frozen
 
-`BackupSchema.kt` is the on-disk contract. Do not rename, repurpose or delete a field in a shipped DTO,
-even if the Kotlin property would read better. A rename changes the JSON key and breaks old archives.
-Create a new DTO version and migrate old JSON into it.
+`BackupSchema.kt` is the on-disk contract. Do not rename, repurpose or delete a field in a shipped
+DTO, even if the Kotlin property would read better. A rename changes the JSON key and breaks old
+archives. Create a new DTO version and migrate old JSON into it.
 
 `BackupJson` uses Moshi codegen adapters. Unknown fields are ignored by the current adapter, but that
 is not a substitute for a migration: a field that carries user data must be mapped deliberately.
 
-## Adding data schema v2
+## Adding a data schema version
 
-1. **Freeze the old DTOs.** Leave every `*V1` class and its field names untouched.
-2. **Add new DTOs.** Add `*V2` classes only for sections whose shape actually changes. Unchanged
-   sections can continue to use their v1 class.
+1. **Freeze the old DTOs.** Leave every shipped class and its field names untouched.
+2. **Add new DTOs.** Add a new version only for sections whose shape actually changes. Unchanged
+   sections can continue to use their existing class.
 3. **Add a migration.** Implement `BackupSchemaMigration`:
 
    ```kotlin
-   object MigrateV1ToV2 : BackupSchemaMigration {
-       override val fromVersion = 1
-       override val toVersion = 2
+   object MigrateV6ToV7 : BackupSchemaMigration {
+       override val fromVersion = 6
+       override val toVersion = 7
        override fun migrate(sections: MutableMap<String, JsonNode.Obj>) {
            val profile = sections.getValue(BackupFormat.SECTION_PROFILE)
            // Rename, add with a documented default, or transform. Never silently drop user data.
@@ -50,31 +72,22 @@ is not a substitute for a migration: a field that carries user data must be mapp
    }
    ```
 
-4. **Register it.** Append it to `BackupSchemaMigrations.all`. The registry only accepts contiguous
-   steps: v1→v2→v3, never a jump.
-5. **Bump the version.** Set `BackupFormat.CURRENT_DATA_SCHEMA_VERSION = 2` and keep
-   `MIN_SUPPORTED_DATA_SCHEMA_VERSION` at the oldest schema you still support. If you deliberately
-   stop supporting v1, raise the minimum and document it; do not silently guess at v0 data.
-6. **Change the current parser.** `BackupMapper.fromPayload` should parse v2 DTOs after migration.
-   `inspectFile` already parses older payloads as `JsonNode`, migrates to the current schema, renders
-   the bytes, and then runs the current mapper.
+4. **Register it.** Append it to `BackupSchemaMigrations.all`.
+5. **Bump the version.** Set `BackupFormat.CURRENT_DATA_SCHEMA_VERSION = 7` and keep
+   `MIN_SUPPORTED_DATA_SCHEMA_VERSION` at the oldest schema you still support.
+6. **Change the current parser.** `BackupMapper.fromPayload` should parse the new DTOs after
+   migration. `inspectFile` already parses older payloads as `JsonNode`, migrates to the current
+   schema, renders the bytes, and then runs the current mapper.
 7. **Update the manifest.** New exports automatically use the new current data schema. Section paths
-   can stay the same. If the container structure changes, bump `formatVersion` separately and update
-   `BackupArchiveReader`.
+   can stay the same. If the container structure changes, bump `formatVersion` separately.
 8. **Add fixtures.**
    - Keep `app/src/test/resources/backups/v1-minimal.ironpulse` unchanged forever as the v1 fixture.
-   - Generate a new `v2-*.ironpulse` fixture after the implementation is stable.
+   - Keep representative v2/v4/v6 fixtures for the drop-set and field migrations.
    - Add a test that imports each fixture and checks representative values and relationships.
-9. **Test the migration path.** Add tests to `BackupSchemaMigrationTest` for:
-   - the exact step sequence;
-   - preservation of ids, timestamps and numeric literals;
-   - documented defaults for new fields;
-   - renamed fields;
-   - enum changes;
-   - a missing step failing rather than guessing;
-   - a newer-than-current schema failing before destination changes.
-10. **Update docs.** Add the version to `BACKUP_FORMAT.md` and this guide. Record what changed and why
-    a default is safe.
+9. **Test the migration path.** Add tests for the exact step sequence, id/timestamp/numeric
+   preservation, documented defaults, renamed fields, enum changes, a missing step failing rather
+   than guessing, and a newer-than-current schema failing before destination changes.
+10. **Update docs.** Add the version to `BACKUP_FORMAT.md` and this guide.
 
 ## Rules for migrations
 
@@ -101,8 +114,8 @@ guarantee.
   changed.
 - A backup with `formatVersion > CURRENT` is rejected with "newer IronPulse format".
 - A backup below the minimum supported version is rejected without guessing.
-- Missing migration steps are a programming error and produce `UNSUPPORTED_SCHEMA`; the UI reports it
-  and the destination is untouched.
+- Missing migration steps produce `UNSUPPORTED_SCHEMA`; the UI reports it and the destination is
+  untouched.
 
 ## Where the code lives
 
@@ -111,4 +124,5 @@ guarantee.
 - `JsonNode.kt` — mutable JSON tree with exact numeric literals.
 - `BackupSchemaMigrations.kt` — registry and range gate.
 - `UserDataBackupManager.inspectFile` — migration call site.
-- `BackupV1FixtureTest`, `BackupSchemaMigrationTest` — compatibility tests.
+- `BackupV1FixtureTest`, `BackupSchemaMigrationTest`, `DropSetMigrationTest`,
+  `ExerciseFieldBackupTest` — compatibility tests.

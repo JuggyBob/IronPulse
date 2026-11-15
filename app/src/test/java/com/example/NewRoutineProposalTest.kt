@@ -149,13 +149,29 @@ class NewRoutineProposalTest {
         assertEquals(3, result.exerciseCount)
         assertEquals(listOf("Banded Front Squat"), result.createdExercises)
 
-        val stored = db.savedRoutineDao().getRoutineById(result.routineId)
-        assertNotNull(stored)
-        val days = RoutineParser.parseWeek(stored!!.exercisesJson, db.exerciseDao().getAllExercisesList())
-        assertEquals(listOf("Push-up"), days.first { it.weekday == 1 }.exercises.map { it.exerciseName })
+        val stored = db.savedRoutineDao().getUserRoutinesOnce()
+        assertEquals(2, stored.size)
+        val schedules = db.schedulePlanDao().getAllSchedulesOnce()
+        assertEquals(1, schedules.size)
+        val slots = db.schedulePlanDao().getDaysForScheduleOnce(schedules.single().id)
+        assertEquals(7, slots.size)
+        val mondayRoutine = slots.first { it.weekday == 1 }.routineId?.let { id ->
+            stored.first { it.id == id }
+        }
+        val wednesdayRoutine = slots.first { it.weekday == 3 }.routineId?.let { id ->
+            stored.first { it.id == id }
+        }
+        assertNotNull(mondayRoutine)
+        assertNotNull(wednesdayRoutine)
+        assertEquals(
+            listOf("Push-up"),
+            RoutineParser.parseSingleWorkout(mondayRoutine!!.exercisesJson, db.exerciseDao().getAllExercisesList())
+                .map { it.exerciseName }
+        )
         assertEquals(
             listOf("Pull-up", "Banded Front Squat"),
-            days.first { it.weekday == 3 }.exercises.map { it.exerciseName }
+            RoutineParser.parseSingleWorkout(wednesdayRoutine!!.exercisesJson, db.exerciseDao().getAllExercisesList())
+                .map { it.exerciseName }
         )
         assertNotNull(db.exerciseDao().getExerciseByName("Banded Front Squat"))
     }

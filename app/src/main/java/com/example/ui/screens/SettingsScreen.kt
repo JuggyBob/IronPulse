@@ -7,11 +7,16 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -19,9 +24,12 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,10 +39,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -110,12 +120,14 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -141,7 +153,9 @@ import com.example.data.ai.AiToolMode
 import com.example.data.model.UserProfile
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.ui.components.AccentColorPickerDialog
+import com.example.ui.components.OperationStatusCard
 import com.example.ui.components.AthleteProfileCard
+import com.example.ui.components.CloudBackupPanel
 import com.example.ui.components.HomeWidget
 import com.example.ui.components.HomeWidgetManagerSheet
 import com.example.ui.components.SupportProjectCard
@@ -166,6 +180,7 @@ import com.example.ui.theme.TextWhite
 import com.example.ui.theme.ThemeMode
 import com.example.ui.theme.OnAccent
 import com.example.ui.theme.OnDanger
+import com.example.util.LauncherIconOption
 import com.example.ui.viewmodel.MainViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -182,6 +197,7 @@ import androidx.compose.material3.SwitchDefaults
 private enum class SettingsPage(val title: String, val subtitle: String, val depth: Int) {
     HUB("Settings", "Your account, appearance, tools and data", 0),
     APPEARANCE("Appearance", "Theme, accent colour, glass, widgets and animation", 1),
+    APP_ICON("App Icon", "Choose the icon Android shows on your home screen", 2),
     USER_PREFERENCES("User Preferences", "Units, week start, autosave, rest alerts and demos", 1),
     AI_TOOLS("AI Tools", "Data access and provider credentials", 1),
     AI_DATA_ACCESS("AI Data Access", "Choose what the AI Coach may read", 2),
@@ -212,9 +228,14 @@ fun SettingsScreen(
     // toggle in the IronPulse card, and both have to see the same settings.
     val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
     val dataTransferState by viewModel.dataTransferState.collectAsStateWithLifecycle()
+    val cloudBackupState by viewModel.cloudBackupState.collectAsStateWithLifecycle()
     val aiWorkoutDataAccess by viewModel.aiWorkoutDataAccess.collectAsStateWithLifecycle()
     val postWorkoutAiSummaries by viewModel.postWorkoutAiSummaries.collectAsStateWithLifecycle()
+    // Reactive provider readiness: the warning below the summaries switch disappears as soon as a
+    // key or endpoint is saved and returns if it is removed.
+    val hasConfiguredAiKey by viewModel.hasConfiguredAiKey.collectAsStateWithLifecycle()
     val savedCustomAccents by viewModel.savedCustomAccents.collectAsStateWithLifecycle()
+    val launcherIcon by viewModel.launcherIcon.collectAsStateWithLifecycle()
     val widgetConfig by viewModel.homeWidgetConfig.collectAsStateWithLifecycle()
     val widgetPhotoPath by viewModel.homeWidgetPhotoPath.collectAsStateWithLifecycle()
     val weeklyGoal by viewModel.homeWidgetWeeklyGoal.collectAsStateWithLifecycle()
@@ -235,6 +256,7 @@ fun SettingsScreen(
     }
     val goBack: () -> Unit = {
         settingsPage = when (settingsPage) {
+            SettingsPage.APP_ICON -> SettingsPage.APPEARANCE
             SettingsPage.AI_DATA_ACCESS, SettingsPage.API_KEY_SETUP -> SettingsPage.AI_TOOLS
             SettingsPage.EXERCISE_DATABASE, SettingsPage.DATA_MANAGEMENT -> SettingsPage.DATA
             SettingsPage.HUB -> {
@@ -253,6 +275,15 @@ fun SettingsScreen(
     var showAccentColorPicker by remember { mutableStateOf(false) }
     var widgetsRestored by remember { mutableStateOf(false) }
     var widgetsRestoreFailed by remember { mutableStateOf(false) }
+    var launcherIconNotice by remember { mutableStateOf<LauncherIconOption?>(null) }
+    var launcherIconNoticeId by remember { mutableStateOf(0) }
+
+    LaunchedEffect(launcherIconNoticeId) {
+        if (launcherIconNotice != null) {
+            delay(3_200)
+            launcherIconNotice = null
+        }
+    }
 
     LaunchedEffect(widgetsRestored, widgetsRestoreFailed) {
         if (widgetsRestored || widgetsRestoreFailed) {
@@ -339,6 +370,17 @@ fun SettingsScreen(
             }
             viewModel.inspectUserDataImport(uri)
         }
+    }
+    val cloudFolderLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            viewModel.selectCloudBackupFolder(uri, enableAuto = false)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshCloudBackupStatus()
     }
 
     LaunchedEffect(dataTransferState) {
@@ -431,8 +473,10 @@ fun SettingsScreen(
     }
 
 
+    Box(modifier = modifier.fillMaxSize()) {
     AnimatedContent(
         targetState = settingsPage,
+        modifier = Modifier.fillMaxSize(),
         transitionSpec = {
             val forward = targetState.depth >= initialState.depth
             (
@@ -449,7 +493,7 @@ fun SettingsScreen(
     ) { page ->
     LazyColumn(
         state = if (page == SettingsPage.HUB) hubListState else subListState,
-        modifier = modifier
+        modifier = Modifier
             .fillMaxSize()
             .background(DarkBg)
             .padding(horizontal = 16.dp),
@@ -513,8 +557,25 @@ fun SettingsScreen(
                 )
             }
             item {
+                AppIconEntryCard(
+                    selected = LauncherIconOption.fromKey(launcherIcon),
+                    onOpen = { settingsPage = SettingsPage.APP_ICON }
+                )
+            }
+            item {
                 HomeTabWidgetConfigurationCard(
                     onConfigure = { showWidgetManager = true }
+                )
+            }
+        } else if (page == SettingsPage.APP_ICON) {
+            item {
+                AppIconPickerSection(
+                    selectedKey = launcherIcon,
+                    onSelect = {
+                        viewModel.setLauncherIcon(it.key)
+                        launcherIconNotice = it
+                        launcherIconNoticeId += 1
+                    }
                 )
             }
         } else if (page == SettingsPage.USER_PREFERENCES) {
@@ -659,6 +720,42 @@ fun SettingsScreen(
                         onCheckedChange = { viewModel.setPostWorkoutAiSummaries(it) },
                         tag = "settings_post_workout_ai_summaries"
                     )
+
+                    // The switch stays enabled on purpose: an athlete may prepare the setting
+                    // before connecting a provider. This card only says the feature cannot run
+                    // yet, and takes them straight to the provider/key page.
+                    if (!hasConfiguredAiKey) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        OperationStatusCard(
+                            label = "Setup needed",
+                            title = "No AI provider connected",
+                            detail = "Post-workout AI summaries may not work correctly until you " +
+                                "connect a provider and save its API key.",
+                            isError = true,
+                            modifier = Modifier.testTag("post_workout_ai_key_warning"),
+                            action = {
+                                Button(
+                                    onClick = { settingsPage = SettingsPage.API_KEY_SETUP },
+                                    modifier = Modifier
+                                        .heightIn(min = 36.dp)
+                                        .testTag("post_workout_ai_connect_provider"),
+                                    shape = RoundedCornerShape(9.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = FireRed,
+                                        contentColor = TextWhite
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Text(
+                                        text = "Connect a provider",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    )
+                                }
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -1503,62 +1600,49 @@ fun SettingsScreen(
 
                         is DataTransferState.Success -> {
                             Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = transfer.title,
-                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                color = MintGreen,
+                            OperationStatusCard(
+                                label = if (transfer.operation == BackupOperation.EXPORT) {
+                                    "Export complete"
+                                } else {
+                                    "Import complete"
+                                },
+                                title = transfer.title,
+                                detail = transfer.detail,
+                                onDismiss = { viewModel.dismissDataTransferMessage() },
+                                dismissTestTag = "dismiss_data_transfer_button",
                                 modifier = Modifier.testTag("data_transfer_success")
                             )
-                            Text(
-                                text = transfer.detail,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextMuted
-                            )
-                            TextButton(
-                                onClick = { viewModel.dismissDataTransferMessage() },
-                                modifier = Modifier.testTag("dismiss_data_transfer_button")
-                            ) {
-                                Text("Dismiss", color = TextMuted)
-                            }
                         }
 
                         is DataTransferState.Error -> {
                             Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = transfer.message,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = FireRed,
+                            OperationStatusCard(
+                                label = "Backup not completed",
+                                title = "Nothing was replaced",
+                                detail = buildString {
+                                    append(transfer.message)
+                                    if (transfer.destinationPreserved) {
+                                        append(" Your existing IronPulse data was not replaced.")
+                                    }
+                                },
+                                isError = true,
+                                onDismiss = { viewModel.dismissDataTransferMessage() },
+                                dismissTestTag = "dismiss_data_transfer_button",
                                 modifier = Modifier.testTag("data_transfer_error")
                             )
-                            if (transfer.destinationPreserved) {
-                                Text(
-                                    text = "Your existing IronPulse data was not replaced.",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MintGreen
-                                )
-                            }
-                            TextButton(
-                                onClick = { viewModel.dismissDataTransferMessage() },
-                                modifier = Modifier.testTag("dismiss_data_transfer_button")
-                            ) {
-                                Text("Dismiss", color = TextMuted)
-                            }
                         }
 
                         is DataTransferState.Cancelled -> {
                             Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = transfer.message,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = TextMuted,
+                            OperationStatusCard(
+                                label = "Backup cancelled",
+                                title = "No changes were made",
+                                detail = transfer.message,
+                                neutral = true,
+                                onDismiss = { viewModel.dismissDataTransferMessage() },
+                                dismissTestTag = "dismiss_data_transfer_button",
                                 modifier = Modifier.testTag("data_transfer_cancelled")
                             )
-                            TextButton(
-                                onClick = { viewModel.dismissDataTransferMessage() },
-                                modifier = Modifier.testTag("dismiss_data_transfer_button")
-                            ) {
-                                Text("Dismiss", color = TextMuted)
-                            }
                         }
 
                         DataTransferState.Idle -> Unit
@@ -1572,10 +1656,33 @@ fun SettingsScreen(
                         lineHeight = 16.sp
                     )
 
-                    Spacer(modifier = Modifier.height(14.dp))
-                    HorizontalDivider(color = DarkBorder)
-                    Spacer(modifier = Modifier.height(14.dp))
+                }
+            }
+        }
 
+        if (page == SettingsPage.DATA_MANAGEMENT) item {
+            CloudBackupPanel(
+                state = cloudBackupState,
+                onChooseFolder = { cloudFolderLauncher.launch(null) },
+                onChangeFolder = { cloudFolderLauncher.launch(null) },
+                onDisconnect = { viewModel.disconnectCloudBackup() },
+                onToggleAuto = { viewModel.setCloudBackupAutoEnabled(it) },
+                onBackupNow = { viewModel.backupNow() },
+                onDismissMessage = { viewModel.dismissCloudBackupMessage() }
+            )
+        }
+
+        // The destructive reset stays last, after both the portable backup and the cloud backup.
+        if (page == SettingsPage.DATA_MANAGEMENT) item {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("delete_data_card"),
+                colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                shape = RoundedCornerShape(16.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Default.DeleteSweep,
@@ -1626,6 +1733,30 @@ fun SettingsScreen(
             }
         }
     }
+    }
+
+        AnimatedVisibility(
+            visible = launcherIconNotice != null,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(start = 16.dp, end = 16.dp, bottom = 100.dp)
+                .testTag("app_icon_bottom_notice"),
+            enter = slideInVertically(
+                initialOffsetY = { it },
+                animationSpec = tween(220)
+            ) + fadeIn(tween(160)),
+            exit = slideOutVertically(
+                targetOffsetY = { it },
+                animationSpec = tween(180)
+            ) + fadeOut(tween(140))
+        ) {
+            OperationStatusCard(
+                label = "App icon",
+                title = "${launcherIconNotice?.label ?: ""} selected",
+                detail = "The launcher icon has been updated.",
+                onDismiss = { launcherIconNotice = null }
+            )
+        }
     }
 
     if (showAiAccessInfoDialog) {
@@ -1830,6 +1961,7 @@ fun SettingsScreen(
                         Text(
                             text = "• All workout sessions, logged sets and diary notes\n" +
                                     "• All saved & AI generated routines\n" +
+                                    "• All Schedules and their weekday assignments, including the active Schedule\n" +
                                     "• All body weight entries and profile data (name, height, weights, age)\n" +
                                     "• The entire AI coach chat history\n" +
                                     "• All saved AI monthly summaries\n" +
@@ -2620,6 +2752,184 @@ fun SettingsScreen(
                 viewModel.setAccentColor(hex)
                 showAccentColorPicker = false
             }
+        )
+    }
+}
+
+@Composable
+private fun AppIconEntryCard(
+    selected: LauncherIconOption,
+    onOpen: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpen)
+            .testTag("open_app_icon_picker"),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(16.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Image(
+                painter = painterResource(selected.previewRes),
+                contentDescription = selected.label,
+                modifier = Modifier
+                    .size(58.dp)
+                    .clip(RoundedCornerShape(15.dp))
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "App Icon",
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                    color = TextWhite
+                )
+                Text(
+                    text = "${selected.label} - Tap to choose another",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextMuted
+                )
+            }
+            Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = ElectricCyan
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AppIconPickerSection(
+    selectedKey: String,
+    onSelect: (LauncherIconOption) -> Unit
+) {
+    val selected = LauncherIconOption.fromKey(selectedKey)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("app_icon_picker"),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            "Choose your launcher icon",
+            style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+            color = TextWhite
+        )
+        Text(
+            "The selected icon becomes the real Android launcher icon. Some launchers take a " +
+                "moment to refresh their cache. The setting is kept across restarts and updates.",
+            style = MaterialTheme.typography.bodySmall,
+            color = TextMuted,
+            lineHeight = 18.sp
+        )
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            LauncherIconOption.all.forEach { option ->
+                val isSelected = option == selected
+                val selectionScale by animateFloatAsState(
+                    targetValue = if (isSelected) 1.04f else 1f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessMediumLow
+                    ),
+                    label = "app_icon_selection_scale_${option.key}"
+                )
+                val cardColor by animateColorAsState(
+                    targetValue = if (isSelected) ElectricCyan.copy(alpha = 0.10f) else DarkSurface,
+                    animationSpec = tween(220),
+                    label = "app_icon_card_color_${option.key}"
+                )
+                val borderColor by animateColorAsState(
+                    targetValue = if (isSelected) ElectricCyan else DarkBorder,
+                    animationSpec = tween(220),
+                    label = "app_icon_border_color_${option.key}"
+                )
+                val borderWidth by animateDpAsState(
+                    targetValue = if (isSelected) 1.5.dp else 1.dp,
+                    animationSpec = tween(220),
+                    label = "app_icon_border_width_${option.key}"
+                )
+                Surface(
+                    modifier = Modifier
+                        .width(164.dp)
+                        .scale(selectionScale)
+                        .clickable { onSelect(option) }
+                        .testTag("app_icon_option_${option.key}"),
+                    color = cardColor,
+                    shape = RoundedCornerShape(15.dp),
+                    border = androidx.compose.foundation.BorderStroke(borderWidth, borderColor)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Image(
+                            painter = painterResource(option.previewRes),
+                            contentDescription = option.label,
+                            modifier = Modifier
+                                .size(96.dp)
+                                .clip(RoundedCornerShape(24.dp))
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            option.label,
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                            color = if (isSelected) ElectricCyan else TextWhite,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                        Text(
+                            option.description,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextMuted,
+                            maxLines = 2,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            lineHeight = 14.sp
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            AnimatedVisibility(
+                                visible = isSelected,
+                                enter = scaleIn(initialScale = 0.4f) + fadeIn(tween(160)),
+                                exit = fadeOut(tween(100))
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = null,
+                                        tint = ElectricCyan,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                }
+                            }
+                            Text(
+                                if (isSelected) "Selected" else "Tap to use",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = if (isSelected) ElectricCyan else TextMuted
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        Text(
+            "Icon changes use Android activity aliases. IronPulse keeps one launcher entry active " +
+                "at a time; returning to IronPulse restores the original icon.",
+            style = MaterialTheme.typography.labelSmall,
+            color = TextDim
         )
     }
 }
@@ -3969,7 +4279,7 @@ private fun AiWorkoutAccessInfoDialog(onDismiss: () -> Unit) {
  * will not come back with the backup.
  */
 @Composable
-private fun ImportDataConfirmationDialog(
+internal fun ImportDataConfirmationDialog(
     preview: BackupPreview,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit

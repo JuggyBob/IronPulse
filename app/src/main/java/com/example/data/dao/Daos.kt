@@ -15,6 +15,8 @@ import com.example.data.model.Exercise
 import com.example.data.model.GeminiSummary
 import com.example.data.model.LoggedSet
 import com.example.data.model.SavedRoutine
+import com.example.data.model.ScheduleDaySlot
+import com.example.data.model.SchedulePlan
 import com.example.data.model.ScheduledWorkoutDay
 import com.example.data.model.SessionWithSets
 import com.example.data.model.UserProfile
@@ -118,6 +120,7 @@ interface ExerciseDao {
             ELSE 'ADDED_WEIGHT'
         END
         WHERE isCustom = 1
+          AND TRIM(supportedFields) = ''
           AND exerciseType = 'STANDARD_WEIGHT'
           AND LOWER(TRIM(equipment)) = 'bodyweight'
           AND EXISTS (
@@ -153,7 +156,7 @@ interface ExerciseDao {
         SET name = :name, category = :category, exerciseType = :exerciseType,
             equipment = :equipment, description = :description,
             instructions = :instructions, bodyPart = :bodyPart, target = :target,
-            secondaryMuscles = :secondaryMuscles
+            secondaryMuscles = :secondaryMuscles, supportedFields = :supportedFields
         WHERE id = :id AND (isCustom = 1 OR isAiGenerated = 1)
         """
     )
@@ -167,7 +170,8 @@ interface ExerciseDao {
         instructions: String,
         bodyPart: String,
         target: String,
-        secondaryMuscles: String
+        secondaryMuscles: String,
+        supportedFields: String
     ): Int
 
     /**
@@ -190,7 +194,7 @@ interface ExerciseDao {
         SET name = :name, category = :category, exerciseType = :exerciseType,
             equipment = :equipment, description = :description,
             instructions = :instructions, bodyPart = :bodyPart, target = :target,
-            secondaryMuscles = :secondaryMuscles
+            secondaryMuscles = :secondaryMuscles, supportedFields = :supportedFields
         WHERE id = :id
         """
     )
@@ -204,7 +208,8 @@ interface ExerciseDao {
         instructions: String,
         bodyPart: String,
         target: String,
-        secondaryMuscles: String
+        secondaryMuscles: String,
+        supportedFields: String
     ): Int
 
     /**
@@ -282,7 +287,7 @@ interface ExerciseDao {
         SET name = :name, category = :category, bodyPart = :bodyPart, target = :target,
             secondaryMuscles = :secondaryMuscles, exerciseType = :exerciseType,
             instructions = :instructions, equipment = :equipment, mediaPath = :mediaPath,
-            sourceId = :sourceId
+            sourceId = :sourceId, supportedFields = :supportedFields
         WHERE id = :id AND isCustom = 0
         """
     )
@@ -297,7 +302,8 @@ interface ExerciseDao {
         instructions: String,
         equipment: String,
         mediaPath: String,
-        sourceId: String
+        sourceId: String,
+        supportedFields: String
     ): Int
 
     /**
@@ -323,7 +329,8 @@ interface ExerciseDao {
                 instructions = u.instructions,
                 equipment = u.equipment,
                 mediaPath = u.mediaPath,
-                sourceId = u.sourceId
+                sourceId = u.sourceId,
+                supportedFields = u.supportedFields
             )
         }
     }
@@ -341,7 +348,8 @@ data class DatasetExerciseUpdate(
     val instructions: String,
     val equipment: String,
     val mediaPath: String,
-    val sourceId: String
+    val sourceId: String,
+    val supportedFields: String
 )
 
 @Dao
@@ -558,6 +566,68 @@ interface ScheduleDao {
     suspend fun deleteAllScheduleDays()
 }
 
+/**
+ * The new weekly Schedule layer. A Schedule owns seven stable weekday slots; each slot references
+ * one standalone Routine or is a rest day.
+ */
+@Dao
+interface SchedulePlanDao {
+    @Query("SELECT * FROM schedules ORDER BY createdAt DESC")
+    fun getAllSchedules(): Flow<List<SchedulePlan>>
+
+    @Query("SELECT * FROM schedules ORDER BY createdAt DESC")
+    suspend fun getAllSchedulesOnce(): List<SchedulePlan>
+
+    @Query("SELECT * FROM schedules WHERE id = :id LIMIT 1")
+    suspend fun getScheduleById(id: Long): SchedulePlan?
+
+    @Query("SELECT * FROM schedules WHERE legacyRoutineId = :legacyRoutineId LIMIT 1")
+    suspend fun getByLegacyRoutineId(legacyRoutineId: Long): SchedulePlan?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSchedule(schedule: SchedulePlan): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSchedules(schedules: List<SchedulePlan>)
+
+    @Update
+    suspend fun updateSchedule(schedule: SchedulePlan)
+
+    @Delete
+    suspend fun deleteSchedule(schedule: SchedulePlan)
+
+    @Query("DELETE FROM schedules")
+    suspend fun deleteAllSchedules()
+
+    @Query("SELECT * FROM schedule_days WHERE scheduleId = :scheduleId ORDER BY weekday ASC")
+    fun getDaysForSchedule(scheduleId: Long): Flow<List<ScheduleDaySlot>>
+
+    @Query("SELECT * FROM schedule_days WHERE scheduleId = :scheduleId ORDER BY weekday ASC")
+    suspend fun getDaysForScheduleOnce(scheduleId: Long): List<ScheduleDaySlot>
+
+    @Query("SELECT * FROM schedule_days ORDER BY scheduleId ASC, weekday ASC")
+    fun getAllScheduleSlots(): Flow<List<ScheduleDaySlot>>
+
+    @Query("SELECT * FROM schedule_days ORDER BY scheduleId ASC, weekday ASC")
+    suspend fun getAllScheduleSlotsOnce(): List<ScheduleDaySlot>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertDay(day: ScheduleDaySlot)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertDays(days: List<ScheduleDaySlot>)
+
+    @Query("DELETE FROM schedule_days WHERE scheduleId = :scheduleId")
+    suspend fun deleteDaysForSchedule(scheduleId: Long)
+
+    /** Routine deletion turns every future assignment into a rest day. */
+    @Query("UPDATE schedule_days SET routineId = NULL WHERE routineId = :routineId")
+    suspend fun clearRoutineReferences(routineId: Long)
+
+    @Query("DELETE FROM schedule_days")
+    suspend fun deleteAllScheduleSlots()
+}
+
 @Dao
 interface UserProfileDao {
     @Query("SELECT * FROM user_profile WHERE id = 1 LIMIT 1")
@@ -577,6 +647,13 @@ interface UserProfileDao {
 interface SavedRoutineDao {
     @Query("SELECT * FROM saved_routines ORDER BY createdAt DESC")
     fun getAllRoutines(): Flow<List<SavedRoutine>>
+
+    /** New single-workout routines only; legacy multi-day rows remain hidden for history. */
+    @Query("SELECT * FROM saved_routines WHERE modelVersion >= 2 ORDER BY createdAt DESC")
+    fun getUserRoutines(): Flow<List<SavedRoutine>>
+
+    @Query("SELECT * FROM saved_routines WHERE modelVersion >= 2 ORDER BY createdAt DESC")
+    suspend fun getUserRoutinesOnce(): List<SavedRoutine>
 
     /** One routine by its stable id, for the read-only routine lookup tool. */
     @Query("SELECT * FROM saved_routines WHERE id = :id LIMIT 1")
@@ -622,6 +699,16 @@ interface SavedRoutineDao {
         daysPerWeek: Int,
         scheduleVersion: Int
     )
+
+    /** Legacy multi-day routines awaiting the 4.5 single-workout split. */
+    @Query("SELECT * FROM saved_routines WHERE modelVersion = 0")
+    suspend fun getRoutinesNeedingModelMigration(): List<SavedRoutine>
+
+    @Query("UPDATE saved_routines SET modelVersion = :modelVersion WHERE id = :id")
+    suspend fun updateRoutineModelVersion(id: Long, modelVersion: Int)
+
+    @Query("DELETE FROM saved_routines WHERE id = :id")
+    suspend fun deleteRoutineById(id: Long)
 }
 
 @Dao

@@ -186,7 +186,7 @@ class HomeWidgetManagerTest {
         }
 
         composeTestRule
-            .onNodeWithText("Appears once you schedule a routine.")
+            .onNodeWithText("Appears once you activate a Schedule.")
             .assertExists()
     }
 

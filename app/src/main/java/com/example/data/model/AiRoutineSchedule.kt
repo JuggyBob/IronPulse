@@ -254,13 +254,25 @@ object AiRoutineSchedule {
         if (RoutineParser.looksLikeProseNotExercise(name)) return null
 
         val matched = resolveExercise(name)
+        // The exercise's explicit configuration is authoritative. A model that still emits an old
+        // field combination must not put a value into a column the UI will never show.
+        val fields = matched?.exerciseFields
+        fun supports(field: ExerciseField): Boolean = fields == null || field in fields
+
         val sets = obj.optInt("sets", 3).coerceIn(1, 10)
-        val hold = obj.optInt("holdSeconds", 0).coerceAtLeast(0)
+        var hold = obj.optInt("holdSeconds", 0).coerceAtLeast(0)
         var reps = obj.optInt("reps", 8).coerceAtLeast(0)
         // A rep based movement must never end up as a hold only set.
         if (reps <= 0 && hold <= 0) reps = 8
-        val weight = obj.optDouble("weight", 0.0).coerceAtLeast(0.0)
-        val addedWeight = obj.optDouble("addedWeight", 0.0).coerceAtLeast(0.0)
+        var weight = obj.optDouble("weight", 0.0).coerceAtLeast(0.0)
+        var addedWeight = obj.optDouble("addedWeight", 0.0).coerceAtLeast(0.0)
+        var distanceKm = obj.optDouble("distanceKm", 0.0).coerceAtLeast(0.0)
+        if (!supports(ExerciseField.REPS)) reps = 0
+        if (!supports(ExerciseField.HOLD_SECONDS) && !supports(ExerciseField.TIME_SECONDS)) hold = 0
+        if (!supports(ExerciseField.WEIGHT)) weight = 0.0
+        if (!supports(ExerciseField.ADDED_WEIGHT)) addedWeight = 0.0
+        if (!supports(ExerciseField.DISTANCE_KM)) distanceKm = 0.0
+
         val equipment = matched?.equipment ?: obj.optString("equipment", "")
 
         val prescription = RoutineParser.shortPrescription(
@@ -270,11 +282,12 @@ object AiRoutineSchedule {
             when {
                 hold > 0 && reps > 0 -> "$sets sets x $reps reps / ${hold}s"
                 hold > 0 -> "$sets sets x ${hold}s"
+                distanceKm > 0.0 -> "$sets sets x ${distanceKm} km"
                 else -> "$sets sets x $reps reps"
             }
         }
 
-        return RoutineExerciseItem(
+        val item = RoutineExerciseItem(
             exerciseId = matched?.id ?: obj.optLong("id", 0L),
             exerciseName = matched?.name ?: name,
             exerciseType = matched?.exerciseType
@@ -286,11 +299,87 @@ object AiRoutineSchedule {
             targetWeight = weight,
             targetAddedWeightKg = addedWeight,
             targetHoldSeconds = hold,
+            targetDistanceKm = distanceKm,
             prescription = prescription,
             weekday = weekday,
             dayTitle = focus,
-            dayNote = note
+            dayNote = note,
+            dropSets = readDropSets(obj, sets, fields)
         )
+        // shortPrescription intentionally drops a trailing hold/distance. Rebuild only in that case
+        // so a rep range or a hand-written prescription otherwise survives untouched.
+        return if (hold > 0 || distanceKm > 0.0) {
+            item.copy(prescription = RoutineParser.buildPrescription(item))
+        } else {
+            item
+        }
+    }
+
+    /**
+     * Reads optional drop-set children from an AI answer.
+     *
+     * The provider may use either the compact keys the app writes (`mainSet`, `drop`) or the
+     * longer descriptive keys. A child is clamped to a real main set and its siblings are
+     * renumbered, so a malformed answer can never produce an orphan or a duplicate child index.
+     */
+    private fun readDropSets(
+        obj: JSONObject,
+        mainSetCount: Int,
+        fields: List<ExerciseField>?
+    ): List<RoutineDropSet> {
+        val array = obj.optJSONArray("dropSets") ?: return emptyList()
+        val result = mutableListOf<RoutineDropSet>()
+        fun supports(field: ExerciseField): Boolean = fields == null || field in fields
+        for (i in 0 until array.length()) {
+            val drop = array.optJSONObject(i) ?: continue
+            val mainSet = drop.optInt(
+                "mainSet",
+                drop.optInt("mainSetIndex", 1)
+            ).coerceIn(1, mainSetCount.coerceAtLeast(1))
+            result += RoutineDropSet(
+                mainSetIndex = mainSet,
+                dropIndex = drop.optInt("drop", drop.optInt("dropIndex", i + 1)).coerceAtLeast(1),
+                targetReps = if (supports(ExerciseField.REPS)) {
+                    drop.optInt("reps", 0).coerceIn(0, 100)
+                } else {
+                    0
+                },
+                targetHoldSeconds = if (
+                    supports(ExerciseField.HOLD_SECONDS) || supports(ExerciseField.TIME_SECONDS)
+                ) {
+                    drop.optInt("holdSeconds", 0).coerceIn(0, 86400)
+                } else {
+                    0
+                },
+                targetDistanceKm = if (supports(ExerciseField.DISTANCE_KM)) {
+                    drop.optDouble("distanceKm", 0.0).coerceAtLeast(0.0)
+                } else {
+                    0.0
+                },
+                targetWeight = if (supports(ExerciseField.WEIGHT)) {
+                    drop.optDouble("weight", drop.optDouble("weightKg", 0.0))
+                        .coerceAtLeast(0.0)
+                } else {
+                    0.0
+                },
+                targetAddedWeightKg = if (supports(ExerciseField.ADDED_WEIGHT)) {
+                    drop.optDouble(
+                        "addedWeight",
+                        drop.optDouble("addedWeightKg", 0.0)
+                    ).coerceAtLeast(0.0)
+                } else {
+                    0.0
+                },
+                restSeconds = drop.optInt("restSeconds", 0).coerceIn(0, 600)
+            )
+        }
+        return result
+            .groupBy { it.mainSetIndex }
+            .flatMap { (_, rows) ->
+                rows.sortedBy { it.dropIndex }.mapIndexed { index, drop ->
+                    drop.copy(dropIndex = index + 1)
+                }
+            }
     }
 
     /** Reads a JSON value as text, without turning a missing value into the word "null". */

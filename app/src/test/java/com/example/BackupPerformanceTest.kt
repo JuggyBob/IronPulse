@@ -14,7 +14,7 @@ import com.example.data.backup.ChatMessageV1
 import com.example.data.backup.ChatSessionV1
 import com.example.data.backup.ExerciseV1
 import com.example.data.backup.GeminiSummaryV1
-import com.example.data.backup.LoggedSetV1
+import com.example.data.backup.LoggedSetV2
 import com.example.data.backup.RoutinesSectionV1
 import com.example.data.backup.SavedRoutineV1
 import com.example.data.backup.ScheduledWorkoutDayV1
@@ -74,7 +74,7 @@ class BackupPerformanceTest {
             )
         }
         val sets = (0 until setCount).map { index ->
-            LoggedSetV1(
+            LoggedSetV2(
                 id = 100_000L + index,
                 sessionId = 1_000L + (index % sessionCount),
                 exerciseId = 500_000L + (index % exerciseCount),
@@ -150,6 +150,8 @@ class BackupPerformanceTest {
             sets = sets,
             routines = routines,
             scheduleDays = schedule,
+            schedules = emptyList(),
+            scheduleSlots = emptyList(),
             bodyWeightLogs = weights,
             chatSessions = chats,
             chatMessages = messages,

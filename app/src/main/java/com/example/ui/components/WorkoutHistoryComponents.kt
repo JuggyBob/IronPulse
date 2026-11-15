@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -85,6 +86,7 @@ import com.example.data.model.describeLoggedSetEffort
 import com.example.data.model.WeightUnit
 import com.example.data.model.WeightConversion
 import com.example.data.model.LoggedSet
+import com.example.data.model.DropSetRules
 import com.example.data.model.WorkoutMetrics
 import com.example.data.model.WorkoutSession
 import com.example.ui.theme.DarkBg
@@ -1042,14 +1044,18 @@ fun WorkoutDayDetailView(
             // Summary Stats Row
             item {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(IntrinsicSize.Min),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Surface(
                         color = DarkSurfaceVariant,
                         shape = RoundedCornerShape(10.dp),
                         border = BorderStroke(1.dp, DarkBorder),
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
                     ) {
                         Column(modifier = Modifier.padding(10.dp)) {
                             Text("EXERCISES", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp)
@@ -1065,7 +1071,9 @@ fun WorkoutDayDetailView(
                         color = DarkSurfaceVariant,
                         shape = RoundedCornerShape(10.dp),
                         border = BorderStroke(1.dp, DarkBorder),
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
                     ) {
                         Column(modifier = Modifier.padding(10.dp)) {
                             Text("TOTAL SETS", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp)
@@ -1082,25 +1090,36 @@ fun WorkoutDayDetailView(
                             color = DarkSurfaceVariant,
                             shape = RoundedCornerShape(10.dp),
                             border = BorderStroke(1.dp, DarkBorder),
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
                         ) {
                             Column(modifier = Modifier.padding(10.dp)) {
                                 Text("VOLUME", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp)
                                 // The number on its own line and the unit under it: "1280 kg-reps"
                                 // does not fit on one line in a tile this narrow.
-                                Text(
-                                    text = formatWeightDisplay(WeightConversion.fromKg(totalVolumeKg, weightUnit)),
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                    color = GoldenAmber,
-                                    maxLines = 1,
-                                    softWrap = false,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = "$unit-reps",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = TextMuted
-                                )
+                                Row(verticalAlignment = Alignment.Bottom) {
+                                    Text(
+                                        text = formatWeightDisplay(WeightConversion.fromKg(totalVolumeKg, weightUnit)),
+                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                        color = GoldenAmber,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(modifier = Modifier.width(2.dp))
+                                    Text(
+                                        text = "$unit-reps",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                                        color = TextMuted,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Ellipsis,
+                                        // The number is the metric. If the tile is very narrow,
+                                        // the unit gives way first instead of hiding the value.
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                }
                             }
                         }
                     }
@@ -1179,8 +1198,14 @@ fun WorkoutDayDetailView(
                                     shape = RoundedCornerShape(6.dp),
                                     border = BorderStroke(1.dp, MintGreen.copy(alpha = 0.4f))
                                 ) {
+                                    val mainCount = sets.count { !it.isDropSet }
+                                    val dropCount = sets.count { it.isDropSet }
                                     Text(
-                                        text = "${sets.size} Sets",
+                                        text = if (dropCount > 0) {
+                                            "$mainCount Sets + $dropCount Drops"
+                                        } else {
+                                            "$mainCount Sets"
+                                        },
                                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                         color = MintGreen,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
@@ -1206,77 +1231,46 @@ fun WorkoutDayDetailView(
 
                             Spacer(modifier = Modifier.height(4.dp))
 
-                            // Sets Rows
-                            sets.forEachIndexed { idx, set ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    // Set Number
-                                    Text(
-                                        text = "#${idx + 1}",
-                                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                        color = TextWhite,
-                                        modifier = Modifier.width(42.dp)
-                                    )
-
-                                    // Reps or Hold Duration
-                                    Text(
-                                        text = describeLoggedSetEffort(set),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = TextWhite,
-                                        modifier = Modifier.weight(1f)
-                                    )
-
-                                    // Weight: always the real load that was lifted, never a bare
-                                    // "Bodyweight" label. A cardio set has no load at all, so it takes
-                                    // this column for its distance and time instead, which keeps the
-                                    // run's numbers in the history list rather than only in the
-                                    // Progress tab.
-                                    // The body weight the set was done at, not today's.
-                                    val bodyweightAtSet =
-                                        BodyWeightTimeline.bodyWeightForSet(set, userProfile.currentWeightKg)
-                                    val weightText = WorkoutMetrics.loadLabel(set, bodyweightAtSet, weightUnit)
-                                    Text(
-                                        text = weightText,
-                                        style = MaterialTheme.typography.bodySmall.copy(
-                                            color = if (
-                                                set.exerciseType == ExerciseType.CARDIO ||
-                                                set.addedWeight > 0.0 ||
-                                                set.weight > 0.0
-                                            ) {
-                                                ElectricCyan
-                                            } else {
-                                                TextMuted
-                                            }
-                                        ),
-                                        modifier = Modifier.weight(1f),
-                                        maxLines = 2,
-                                        textAlign = TextAlign.End
-                                    )
-
-                                    // Status
-                                    Box(
-                                        modifier = Modifier.width(48.dp),
-                                        contentAlignment = Alignment.CenterEnd
-                                    ) {
-                                        if (set.isCompleted) {
-                                            Icon(
-                                                imageVector = Icons.Default.Check,
-                                                contentDescription = "Completed",
-                                                tint = MintGreen,
-                                                modifier = Modifier.size(16.dp)
+                            // Main sets and their branches. orderedSetRows is shared with the
+                            // active workout and Progress, so a child can never be shown as an
+                            // unrelated top-level set.
+                            val orderedRows = orderedSetRows(sets)
+                            orderedRows.forEachIndexed { idx, ordered ->
+                                if (ordered.isDrop) {
+                                    Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+                                        // The set label column is 8 dp padding + 42 dp text. The
+                                        // branch grows from its centre, not from the card edge.
+                                        DropSetBranchConnector(
+                                            isLastChild = ordered.isLastChild,
+                                            width = 42.dp,
+                                            gutter = 29.dp
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .padding(horizontal = 4.dp)
+                                        ) {
+                                            HistoryRecordedSetRow(
+                                                set = ordered.set,
+                                                label = "D${ordered.set.dropIndex}",
+                                                isDrop = true,
+                                                currentBodyWeightKg = userProfile.currentWeightKg,
+                                                weightUnit = weightUnit
                                             )
-                                        } else {
-                                            Text("-", color = TextMuted, style = MaterialTheme.typography.bodySmall)
                                         }
                                     }
+                                } else {
+                                    HistoryRecordedSetRow(
+                                        set = ordered.set,
+                                        label = "#${ordered.set.setNumber}",
+                                        isDrop = false,
+                                        currentBodyWeightKg = userProfile.currentWeightKg,
+                                        weightUnit = weightUnit,
+                                        modifier = Modifier.padding(horizontal = 8.dp)
+                                    )
                                 }
 
-                                if (idx < sets.size - 1) {
+                                if (idx < orderedRows.lastIndex) {
                                     HorizontalDivider(
                                         color = DarkBorder.copy(alpha = 0.35f),
                                         thickness = 0.5.dp
@@ -1302,6 +1296,90 @@ fun WorkoutDayDetailView(
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp))
             Spacer(modifier = Modifier.width(6.dp))
             Text("Back to All Workouts", fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+/**
+ * One recorded set in workout history.
+ *
+ * Main sets keep the original row layout. Drop sets reuse the same columns, with a D-number and
+ * the branch drawn by the caller; nothing about the values or status icons differs.
+ */
+@Composable
+private fun HistoryRecordedSetRow(
+    set: LoggedSet,
+    label: String,
+    isDrop: Boolean,
+    currentBodyWeightKg: Double,
+    weightUnit: WeightUnit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+            color = if (isDrop) ElectricCyan else TextWhite,
+            modifier = Modifier.width(42.dp)
+        )
+
+        Row(
+            modifier = Modifier.weight(1f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (set.isWarmup) {
+                WarmupBadge(compact = true)
+                Spacer(modifier = Modifier.width(4.dp))
+            }
+            Text(
+                text = WorkoutMetrics.recordedEffortLabel(set, weightUnit),
+                style = MaterialTheme.typography.bodySmall,
+                color = TextWhite,
+                maxLines = 2
+            )
+        }
+
+        val bodyweightAtSet = BodyWeightTimeline.bodyWeightForSet(set, currentBodyWeightKg)
+        val weightText = WorkoutMetrics.loadLabel(set, bodyweightAtSet, weightUnit)
+        Text(
+            text = weightText,
+            style = MaterialTheme.typography.bodySmall.copy(
+                color = if (
+                    set.distanceKm > 0.0 ||
+                    set.holdDurationSeconds > 0 ||
+                    set.addedWeight > 0.0 ||
+                    set.weight > 0.0
+                ) {
+                    ElectricCyan
+                } else {
+                    TextMuted
+                }
+            ),
+            modifier = Modifier.weight(1f),
+            maxLines = 2,
+            textAlign = TextAlign.End
+        )
+
+        Box(
+            modifier = Modifier.width(48.dp),
+            contentAlignment = Alignment.CenterEnd
+        ) {
+            if (set.isCompleted) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = "Completed",
+                    tint = MintGreen,
+                    modifier = Modifier.size(16.dp)
+                )
+            } else {
+                Text("-", color = TextMuted, style = MaterialTheme.typography.bodySmall)
+            }
         }
     }
 }

@@ -34,6 +34,29 @@ object ExerciseMedia {
     fun hasDatasetMedia(mediaPath: String): Boolean = gifUrl(mediaPath) != null
 
     /**
+     * The still thumbnail that belongs to the same dataset record.
+     *
+     * The dataset ships both a 180x180 JPG and an animated GIF for every exercise. The GIF is
+     * roughly fourteen times larger (about 124 KB versus 8.8 KB for the first record), so the
+     * exercise list must not download it just to paint a 56dp tile. The detail view still uses
+     * [gifUrl]; this is only for compact rows.
+     */
+    fun thumbnailUrl(mediaPath: String): String? {
+        val path = mediaPath.trim().trimStart('/')
+        if (!path.startsWith("videos/") || !path.endsWith(".gif", ignoreCase = true)) return null
+        val base = path.removePrefix("videos/").removeSuffix(".gif")
+        return RAW_BASE + "images/" + base + ".jpg"
+    }
+
+    /** The value to hand a list-row image loader: a local still, or the dataset's static JPG. */
+    fun thumbnailModel(localUri: String, localIsVideo: Boolean, mediaPath: String): Any? =
+        when {
+            isUsableLocalUri(localUri) && localIsVideo -> null
+            isUsableLocalUri(localUri) -> localUri.trim()
+            else -> thumbnailUrl(mediaPath) ?: gifUrl(mediaPath)
+        }
+
+    /**
      * Whether a media slot may be pointed at something the athlete picked from their gallery.
      *
      * Only for exercises they own. The shipped library is locked, so attaching a photo of the

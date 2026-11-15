@@ -67,6 +67,7 @@ class QuickWorkoutSessionControllerTest {
     }
 
     private fun controller(
+        defaultRestSeconds: Int = 0,
         onDraftCleared: () -> Unit = {},
         onWidgetsChanged: () -> Unit = {},
         onSessionSaved: (Long) -> Unit = {}
@@ -75,6 +76,7 @@ class QuickWorkoutSessionControllerTest {
         scope = scope,
         currentBodyWeightKg = { 80.0 },
         resolveBodyWeightKg = { 80.0 },
+        defaultRestForExercise = { defaultRestSeconds },
         stopRestTimer = {},
         refreshBenchmarks = {},
         clearWorkoutDraft = onDraftCleared,
@@ -146,5 +148,14 @@ class QuickWorkoutSessionControllerTest {
         assertTrue(controller.activeSets.value.isEmpty())
         assertTrue(controller.activeSessionExercises.value.isEmpty())
         assertTrue(draftCleared)
+    }
+
+    @Test
+    fun `a per-exercise rest default seeds the first set`() {
+        val controller = controller(defaultRestSeconds = 90)
+        controller.startNewSession()
+        controller.addExercise(exercise())
+
+        assertEquals(90, controller.activeSets.value.single().restSecondsOverride)
     }
 }

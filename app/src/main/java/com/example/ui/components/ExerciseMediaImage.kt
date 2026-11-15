@@ -236,10 +236,7 @@ fun ExerciseGifThumbnail(
     modifier: Modifier = Modifier
 ) {
     val source = ExerciseMedia.resolve(localUri, localIsVideo, mediaPath)
-    val hasMedia = source != ExerciseMedia.Source.NONE
-    // A video has no useful poster frame here: fetching one through an image loader would try to
-    // decode the video file as a bitmap and show nothing. The play badge already says what it is.
-    val skipFetch = source == ExerciseMedia.Source.LOCAL_VIDEO
+    val thumbnail = ExerciseMedia.thumbnailModel(localUri, localIsVideo, mediaPath)
 
     Box(
         modifier = modifier
@@ -249,24 +246,20 @@ fun ExerciseGifThumbnail(
             .testTag("exercise_gif_thumbnail"),
         contentAlignment = Alignment.Center
     ) {
-        if (hasMedia && !skipFetch) {
-            // Still frames only, always, regardless of the autoplay setting.
-            //
-            // The still-frame loader is the whole point: the animation belongs to the detail view,
-            // where the athlete asked to see the exercise. A list of hundreds of rows would otherwise
-            // decode and run an animated drawable per visible row, which is the reported bug and a
-            // cost the autoplay setting cannot express, because that setting governs the detail view.
-            //
-            // See IronPulseApp.stillFrames for why a different loader achieves a static first frame.
+        if (thumbnail != null) {
+            // The list uses the dataset's static JPG, not the animation. Downloading a 124 KB GIF
+            // to paint a 56dp row made the first scroll after a fresh install wait on hundreds of
+            // image requests; the matching 180x180 JPG is about 8.8 KB. The animated GIF remains
+            // the detail-view media.
             SubcomposeAsyncImage(
-                model = ExerciseMedia.model(localUri, localIsVideo, mediaPath),
+                model = thumbnail,
                 imageLoader = IronPulseApp.stillFrames(LocalContext.current.applicationContext),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
                 filterQuality = FilterQuality.Low,
-                loading = { ExerciseGifLoading(modifier = Modifier.fillMaxSize()) },
-                error = { ExerciseGifLoading(modifier = Modifier.fillMaxSize()) }
+                loading = { ExerciseGifLoading(modifier = Modifier.fillMaxSize(), pulse = false) },
+                error = { ExerciseGifLoading(modifier = Modifier.fillMaxSize(), pulse = false) }
             )
         }
 
@@ -280,9 +273,9 @@ fun ExerciseGifThumbnail(
                     .size(22.dp)
                     .align(Alignment.Center)
             )
-        } else if (!hasMedia) {
+        } else if (thumbnail == null) {
             // Never fetch anything: the path is blank, so there is no request to make.
-            ExerciseGifLoading(modifier = Modifier.fillMaxSize())
+            ExerciseGifLoading(modifier = Modifier.fillMaxSize(), pulse = false)
         }
     }
 }
@@ -321,8 +314,11 @@ private fun ExerciseGifPlaceholder(modifier: Modifier = Modifier) {
  * sized: the point is only to say something is arriving, not to imply progress.
  */
 @Composable
-private fun ExerciseGifLoading(modifier: Modifier = Modifier) {
-    val pulse = pulseAlpha()
+private fun ExerciseGifLoading(
+    modifier: Modifier = Modifier,
+    pulse: Boolean = true
+) {
+    val pulseValue = if (pulse) pulseAlpha() else 0.6f
     Box(
         modifier = modifier.background(ElectricCyan.copy(alpha = 0.04f)),
         contentAlignment = Alignment.Center
@@ -330,7 +326,7 @@ private fun ExerciseGifLoading(modifier: Modifier = Modifier) {
         Icon(
             imageVector = Icons.Default.FitnessCenter,
             contentDescription = "Loading animation",
-            tint = ElectricCyan.copy(alpha = pulse * 0.6f),
+            tint = ElectricCyan.copy(alpha = pulseValue * 0.6f),
             modifier = Modifier.size(24.dp)
         )
     }

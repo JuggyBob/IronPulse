@@ -52,6 +52,31 @@ class DatasetSeederTest {
         DatasetSeeder.seedFresh(ApplicationProvider.getApplicationContext<Context>(), db.exerciseDao())
 
     @Test
+    fun `the seeded catalogue carries its explicit field configuration`() = runBlocking {
+        seed()
+        val all = db.exerciseDao().getAllExercisesList()
+
+        assertTrue("every shipped exercise must declare its fields", all.all { it.supportedFields.isNotBlank() })
+
+        val weightedPlank = all.first { it.name == "Weighted Front Plank" }
+        assertEquals("holdSeconds,addedWeight", weightedPlank.supportedFields)
+        assertEquals(
+            listOf(
+                com.example.data.model.ExerciseField.HOLD_SECONDS,
+                com.example.data.model.ExerciseField.ADDED_WEIGHT
+            ),
+            weightedPlank.exerciseFields
+        )
+
+        val sitUp = all.first { it.name == "3/4 Sit-Up" }
+        assertEquals("reps", sitUp.supportedFields)
+
+        // A carry cannot be recorded with reps alone.
+        val carry = all.first { it.name == "Farmers Walk" }
+        assertEquals("weight,timeSeconds,distanceKm", carry.supportedFields)
+    }
+
+    @Test
     fun `the whole dataset is imported with its media and instructions`() = runBlocking {
         seed()
 

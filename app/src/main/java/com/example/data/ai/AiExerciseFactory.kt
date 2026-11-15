@@ -7,6 +7,8 @@
 package com.example.data.ai
 
 import com.example.data.model.Exercise
+import com.example.data.model.ExerciseField
+import com.example.data.model.ExerciseFieldCatalog
 import com.example.data.model.ExerciseSchema
 import com.example.data.model.ExerciseType
 import com.example.data.model.GibberishNameDetector
@@ -55,6 +57,7 @@ object AiExerciseFactory {
         val validType = when (rawType) {
             ExerciseType.ADDED_WEIGHT -> ExerciseType.ADDED_WEIGHT
             ExerciseType.PURE_BODYWEIGHT -> ExerciseType.PURE_BODYWEIGHT
+            ExerciseType.CARDIO -> ExerciseType.CARDIO
             else -> ExerciseType.STANDARD_WEIGHT
         }
         val equipment = obj.optString("equipment", "").trim().ifBlank { "Bodyweight" }
@@ -75,6 +78,15 @@ object AiExerciseFactory {
             (0 until arr.length())
                 .mapNotNull { ExerciseSchema.canonicalTarget(arr.optString(it)).takeIf(String::isNotBlank) }
         }.orEmpty()
+        val rawFields = obj.optJSONArray("supportedFields")
+        val requestedFields = rawFields?.let { arr ->
+            (0 until arr.length()).mapNotNull { index -> ExerciseField.fromId(arr.optString(index)) }
+        }.orEmpty()
+        val fields = runCatching {
+            ExerciseFieldCatalog.validate(
+                requestedFields.ifEmpty { ExerciseFieldCatalog.defaultsForType(validType) }
+            )
+        }.getOrElse { ExerciseFieldCatalog.defaultsForType(validType) }
 
         return Exercise(
             name = name,
@@ -89,7 +101,8 @@ object AiExerciseFactory {
             mediaPath = "",
             sourceId = "",
             isCustom = true,
-            isAiGenerated = true
+            isAiGenerated = true,
+            supportedFields = ExerciseFieldCatalog.serialize(fields)
         )
     }
 

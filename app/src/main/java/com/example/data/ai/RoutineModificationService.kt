@@ -12,6 +12,7 @@ import com.example.data.model.Exercise
 import com.example.data.model.RoutineExerciseItem
 import com.example.data.model.RoutineParser
 import com.example.data.model.SavedRoutine
+import com.example.data.repository.PlanRepository
 
 data class RoutineChangeResult(
     val routineId: Long,
@@ -28,7 +29,8 @@ data class RoutineCreationResult(
     val routineName: String,
     val trainingDays: Int,
     val exerciseCount: Int,
-    val createdExercises: List<String>
+    val createdExercises: List<String>,
+    val scheduleId: Long? = null
 )
 
 /**
@@ -124,25 +126,22 @@ class RoutineModificationService(private val db: AppDatabase) {
                 if (items.isEmpty()) error("The proposed routine has no exercises.")
 
                 val trainingDays = items.map { it.weekday }.distinct().size
-                val saved = SavedRoutine(
-                    name = proposal.routineName.take(120),
-                    description = "AI Coach routine • ${items.size} exercises • " +
+                val created = PlanRepository(db).createPlanFromItems(
+                    name = proposal.routineName,
+                    description = "AI Coach plan • ${items.size} exercises • " +
                         "$trainingDays training day${if (trainingDays == 1) "" else "s"}",
-                    daysPerWeek = trainingDays,
                     goal = proposal.goal.take(160),
-                    exercisesJson = RoutineParser.serializeExercises(items),
-                    scheduleVersion = 1
+                    items = items
                 )
-                val routineId = db.savedRoutineDao().insertRoutine(saved)
-                if (routineId <= 0L) error("The routine could not be saved.")
-                val stored = db.savedRoutineDao().getRoutineById(routineId)
-                    ?: error("The saved routine could not be read back.")
+                val routineId = created.routineIds.firstOrNull()
+                    ?: error("The proposed routine has no exercises.")
                 RoutineCreationResult(
-                    routineId = stored.id,
-                    routineName = stored.name,
+                    routineId = routineId,
+                    routineName = proposal.routineName,
                     trainingDays = trainingDays,
                     exerciseCount = items.size,
-                    createdExercises = createdNames
+                    createdExercises = createdNames,
+                    scheduleId = created.scheduleId
                 )
             }
         }
@@ -165,6 +164,63 @@ class RoutineModificationService(private val db: AppDatabase) {
                     error("The routine changed after this proposal was created.")
                 }
                 val exercises = db.exerciseDao().getAllExercisesList()
+
+                if (routine.modelVersion >= 2) {
+                    val items = RoutineParser.parseSingleWorkout(routine.exercisesJson, exercises)
+                    val removedIndex = items.indexOfFirst {
+                        it.exerciseName.trim().equals(proposal.removeExerciseName, ignoreCase = true)
+                    }
+                    if (removedIndex < 0) {
+                        error("The exercise to remove is no longer in the routine.")
+                    }
+                    val removed = items[removedIndex]
+                    val replacementExercise: Exercise = when {
+                        proposal.replacementExerciseId != null -> {
+                            db.exerciseDao().getExerciseById(proposal.replacementExerciseId)
+                                ?: error("The replacement exercise no longer exists.")
+                        }
+                        proposal.generatedExercise != null -> {
+                            val generated = proposal.generatedExercise
+                            if (db.exerciseDao().getExerciseByName(generated.name) != null) {
+                                error("An exercise with that name now exists; approve an existing one instead.")
+                            }
+                            val id = db.exerciseDao().insert(generated.toExercise())
+                            if (id <= 0L) error("The AI-generated exercise could not be created.")
+                            db.exerciseDao().getExerciseById(id)
+                                ?: error("The AI-generated exercise could not be read back.")
+                        }
+                        else -> error("The proposal has no replacement exercise.")
+                    }
+                    val replacementItem = removed.copy(
+                        exerciseId = replacementExercise.id,
+                        exerciseName = replacementExercise.name,
+                        exerciseType = replacementExercise.exerciseType,
+                        category = replacementExercise.category,
+                        equipment = replacementExercise.equipment,
+                        weekday = 0,
+                        dayTitle = "",
+                        dayNote = ""
+                    )
+                    val updated = items.toMutableList().also { it[removedIndex] = replacementItem }
+                    val json = RoutineParser.serializeExercises(updated)
+                    db.savedRoutineDao().insertRoutine(
+                        routine.copy(
+                            exercisesJson = json,
+                            daysPerWeek = 1,
+                            modelVersion = 2,
+                            scheduleVersion = 1
+                        )
+                    )
+                    return@withTransaction RoutineChangeResult(
+                        routineId = routine.id,
+                        routineName = routine.name,
+                        weekdayName = routine.name,
+                        removedExercise = removed.exerciseName,
+                        addedExercise = replacementExercise.name,
+                        generatedExerciseId = proposal.generatedExercise?.let { replacementExercise.id }
+                    )
+                }
+
                 val days = RoutineParser.parseWeek(routine.exercisesJson, exercises)
                 val day = days.firstOrNull { it.weekday == proposal.weekday }
                     ?: error("The proposed weekday is no longer in the routine.")

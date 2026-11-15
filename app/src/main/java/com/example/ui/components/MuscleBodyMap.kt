@@ -437,19 +437,33 @@ fun MuscleBodyMap(
     maxFigureHeight: Dp = 430.dp,
     modifier: Modifier = Modifier,
     activeParts: Set<MusclePart> = emptySet(),
-    pendingParts: Set<MusclePart> = emptySet()
+    pendingParts: Set<MusclePart> = emptySet(),
+    /**
+     * Optional per-body-part completion fractions, 0..1.
+     *
+     * Non-empty progress colour is the workout-completion mode: each muscle belly is lerped from
+     * its neutral fill toward the accent by the completed-set fraction. The exercise-detail mode
+     * leaves this empty and keeps the existing binary highlight.
+     */
+    progress: Map<MusclePart, Float> = emptyMap(),
+    /** Draw only the two figures, with no frame, labels or caption. */
+    compact: Boolean = false
 ) {
     val frontShapes = remember { muscleShapes(true) }
     val backShapes = remember { muscleShapes(false) }
 
-    Column(
-        modifier = modifier
+    val containerModifier = if (compact) {
+        modifier.fillMaxWidth()
+    } else {
+        modifier
             .fillMaxWidth()
             .background(DarkBg, RoundedCornerShape(14.dp))
             .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
             .padding(horizontal = 10.dp, vertical = 10.dp)
             .testTag("muscle_body_map")
-    ) {
+    }
+
+    Column(modifier = containerModifier) {
         Row(modifier = Modifier.fillMaxWidth()) {
             BodyFigure(
                 isFront = true,
@@ -457,40 +471,48 @@ fun MuscleBodyMap(
                 highlighted = highlighted,
                 activeParts = activeParts,
                 pendingParts = pendingParts,
+                progress = progress,
                 onSelect = onSelect,
                 maxFigureHeight = maxFigureHeight,
+                compact = compact,
                 modifier = Modifier
                     .weight(1f)
                     .testTag("muscle_body_front")
             )
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(if (compact) 2.dp else 6.dp))
             BodyFigure(
                 isFront = false,
                 shapes = backShapes,
                 highlighted = highlighted,
                 activeParts = activeParts,
                 pendingParts = pendingParts,
+                progress = progress,
                 onSelect = onSelect,
                 maxFigureHeight = maxFigureHeight,
+                compact = compact,
                 modifier = Modifier
                     .weight(1f)
                     .testTag("muscle_body_back")
             )
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
+        if (!compact) {
+            Spacer(modifier = Modifier.height(6.dp))
 
-        Text(
-            text = when {
-                onSelect == null && highlighted != null -> "Muscles trained: ${highlighted.label}"
-                onSelect == null -> "Muscles trained"
-                else -> "Tap a muscle to filter the exercises"
-            },
-            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
-            color = TextMuted,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth()
-        )
+            Text(
+                text = when {
+                    progress.isNotEmpty() ->
+                        "${progress.count { it.value > 0f }} body parts in progress"
+                    onSelect == null && highlighted != null -> "Muscles trained: ${highlighted.label}"
+                    onSelect == null -> "Muscles trained"
+                    else -> "Tap a muscle to filter the exercises"
+                },
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.SemiBold),
+                color = TextMuted,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
     }
 }
 
@@ -501,8 +523,10 @@ private fun BodyFigure(
     highlighted: MusclePart?,
     activeParts: Set<MusclePart>,
     pendingParts: Set<MusclePart>,
+    progress: Map<MusclePart, Float>,
     onSelect: ((MusclePart) -> Unit)?,
     maxFigureHeight: Dp,
+    compact: Boolean,
     modifier: Modifier = Modifier
 ) {
     val currentOnSelect = rememberUpdatedState(onSelect)
@@ -511,12 +535,14 @@ private fun BodyFigure(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(
-            text = if (isFront) "FRONT" else "BACK",
-            style = MaterialTheme.typography.labelSmall,
-            color = TextMuted
-        )
-        Spacer(modifier = Modifier.height(4.dp))
+        if (!compact) {
+            Text(
+                text = if (isFront) "FRONT" else "BACK",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+        }
         BoxWithConstraints {
             val figureWidth = maxWidth
             val naturalHeight = figureWidth * (BODY_HEIGHT / BODY_WIDTH)
@@ -553,6 +579,7 @@ private fun BodyFigure(
                     highlighted = highlighted,
                     activeParts = activeParts,
                     pendingParts = pendingParts,
+                    progress = progress,
                     scale = scale,
                     offsetX = (size.width - BODY_WIDTH * scale) / 2f,
                     offsetY = (size.height - BODY_HEIGHT * scale) / 2f
@@ -569,6 +596,7 @@ private fun DrawScope.drawFigure(
     highlighted: MusclePart?,
     activeParts: Set<MusclePart>,
     pendingParts: Set<MusclePart>,
+    progress: Map<MusclePart, Float>,
     scale: Float,
     offsetX: Float,
     offsetY: Float
@@ -581,6 +609,7 @@ private fun DrawScope.drawFigure(
             highlighted = highlighted,
             activeParts = activeParts,
             pendingParts = pendingParts,
+            progress = progress,
             scaleX = scale,
             scaleY = scale,
             lineWidth = lineWidth
@@ -594,6 +623,7 @@ private fun DrawScope.drawFigureBody(
     highlighted: MusclePart?,
     activeParts: Set<MusclePart>,
     pendingParts: Set<MusclePart>,
+    progress: Map<MusclePart, Float>,
     scaleX: Float,
     scaleY: Float,
     lineWidth: Float
@@ -623,7 +653,14 @@ private fun DrawScope.drawFigureBody(
     shapes.forEach { shape ->
         val isActive = shape.part in activelyHighlighted
         val isPending = !isActive && shape.part in pendingParts
+        val progressValue = progress[shape.part]?.coerceIn(0f, 1f) ?: 0f
+        val neutralFill = if (shape.outlined) {
+            MuscleRest
+        } else {
+            ThemeRuntime.palette.muscle.absFill
+        }
         val fill = when {
+            progressValue > 0f -> lerp(neutralFill, ElectricCyan, progressValue)
             isActive -> ElectricCyan
             isPending -> ElectricCyan.copy(alpha = 0.34f)
             activelyHighlighted.isNotEmpty() || pendingParts.isNotEmpty() -> if (shape.outlined) {
@@ -635,6 +672,7 @@ private fun DrawScope.drawFigureBody(
             else -> ThemeRuntime.palette.muscle.absFill
         }
         val outline = when {
+            progressValue > 0f -> lerp(MuscleLine, ActiveMuscleOutline, progressValue)
             isActive -> ActiveMuscleOutline
             isPending -> ElectricCyan.copy(alpha = 0.55f)
             else -> MuscleLine

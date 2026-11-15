@@ -25,7 +25,7 @@ import com.example.data.backup.BodyWeightLogV1
 import com.example.data.backup.ChatMessageV1
 import com.example.data.backup.ChatSessionV1
 import com.example.data.backup.GeminiSummaryV1
-import com.example.data.backup.LoggedSetV1
+import com.example.data.backup.LoggedSetV2
 import com.example.data.backup.PreferencesSectionV1
 import com.example.data.backup.ProfileSectionV1
 import com.example.data.backup.ProgressSectionV1
@@ -33,6 +33,8 @@ import com.example.data.backup.RestTimerV1
 import com.example.data.backup.RoomProfileV1
 import com.example.data.backup.RoutinesSectionV1
 import com.example.data.backup.SavedRoutineV1
+import com.example.data.backup.ScheduleV1
+import com.example.data.backup.ScheduleDaySlotV1
 import com.example.data.backup.ScheduledWorkoutDayV1
 import com.example.data.backup.WorkoutSessionV1
 import com.example.data.backup.WorkoutsSectionV1
@@ -191,10 +193,10 @@ object BackupTestFixtures {
                 )
             ),
             sets = listOf(
-                LoggedSetV1(100L, 10L, 9001L, "Edited Library Press", "STANDARD_WEIGHT", 1, 82.5, 0.0, 5, 0, 0.0, true, 1_759_000_100_000L, 81.25),
-                LoggedSetV1(101L, 10L, 1001L, "Custom Cable Row", "STANDARD_WEIGHT", 2, 60.0, 0.0, 8, 0, 0.0, true, 1_759_000_200_000L, 81.25),
-                LoggedSetV1(102L, 11L, 1002L, "AI Sled Push", "CARDIO", 1, 0.0, 0.0, 0, 0, 1.25, true, 1_759_300_100_000L, 81.25),
-                LoggedSetV1(103L, 11L, 1001L, "Custom Cable Row", "STANDARD_WEIGHT", 1, 57.5, 2.5, 10, 0, 0.0, false, 1_759_300_200_000L, 81.25)
+                LoggedSetV2(100L, 10L, 9001L, "Edited Library Press", "STANDARD_WEIGHT", 1, 82.5, 0.0, 5, 0, 0.0, true, 1_759_000_100_000L, 81.25),
+                LoggedSetV2(101L, 10L, 1001L, "Custom Cable Row", "STANDARD_WEIGHT", 2, 60.0, 0.0, 8, 0, 0.0, true, 1_759_000_200_000L, 81.25),
+                LoggedSetV2(102L, 11L, 1002L, "AI Sled Push", "CARDIO", 1, 0.0, 0.0, 0, 0, 1.25, true, 1_759_300_100_000L, 81.25),
+                LoggedSetV2(103L, 11L, 1001L, "Custom Cable Row", "STANDARD_WEIGHT", 1, 57.5, 2.5, 10, 0, 0.0, false, 1_759_300_200_000L, 81.25)
             ),
             routines = listOf(
                 SavedRoutineV1(
@@ -212,6 +214,23 @@ object BackupTestFixtures {
                 ScheduledWorkoutDayV1(1_758_988_800_000L, 20250930L, 20L, 2, "Upper A", 4, 1_758_900_000_000L),
                 ScheduledWorkoutDayV1(1_758_988_800_000L + 86_400_000L, 20251001L, 20L, 3, "Rest", 0, 1_758_900_000_000L)
             ),
+            schedules = listOf(
+                ScheduleV1(
+                    id = 50L,
+                    name = "New Weekly Plan",
+                    description = "Normalized schedule",
+                    goal = "Hypertrophy & Strength",
+                    createdAt = 1_758_000_000_000L,
+                    legacyRoutineId = 20L
+                )
+            ),
+            scheduleSlots = (1..7).map { weekday ->
+                ScheduleDaySlotV1(
+                    scheduleId = 50L,
+                    weekday = weekday,
+                    routineId = if (weekday == 1 || weekday == 4) 20L else null
+                )
+            },
             bodyWeightLogs = listOf(
                 BodyWeightLogV1(30L, 81.25, 1_759_000_000_000L, "Morning"),
                 BodyWeightLogV1(31L, 80.95, 1_759_500_000_000L, "")

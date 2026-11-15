@@ -155,6 +155,7 @@ open class BackupPreferencesStore(private val context: Context) {
             preferences.aiWorkoutDataAccess?.let { prefs[UserPreferencesRepository.AI_WORKOUT_DATA_ACCESS] = it }
             preferences.postWorkoutAiSummaries?.let { prefs[UserPreferencesRepository.POST_WORKOUT_AI_SUMMARIES] = it }
             preferences.activeRoutineId?.let { prefs[UserPreferencesRepository.ACTIVE_ROUTINE_ID] = it }
+            preferences.activeScheduleId?.let { prefs[UserPreferencesRepository.ACTIVE_SCHEDULE_ID] = it }
             preferences.restTimers?.let { timers ->
                 prefs[UserPreferencesRepository.SAVED_REST_TIMERS_JSON] = encodeRestTimers(timers)
             }
@@ -338,6 +339,7 @@ open class BackupPreferencesStore(private val context: Context) {
             aiWorkoutDataAccess = prefs[UserPreferencesRepository.AI_WORKOUT_DATA_ACCESS],
             postWorkoutAiSummaries = prefs[UserPreferencesRepository.POST_WORKOUT_AI_SUMMARIES],
             activeRoutineId = prefs[UserPreferencesRepository.ACTIVE_ROUTINE_ID],
+            activeScheduleId = prefs[UserPreferencesRepository.ACTIVE_SCHEDULE_ID],
             restTimers = timers,
             benchmark = benchmark,
             ai = ai,
@@ -458,6 +460,7 @@ open class BackupPreferencesStore(private val context: Context) {
             UserPreferencesRepository.ANDROID_WIDGET_THEME_WEEKLY,
             UserPreferencesRepository.ANDROID_WIDGET_THEME_PROFILE,
             UserPreferencesRepository.ACTIVE_ROUTINE_ID,
+            UserPreferencesRepository.ACTIVE_SCHEDULE_ID,
             UserPreferencesRepository.HOME_WIDGET_ORDER,
             UserPreferencesRepository.HOME_WIDGET_HIDDEN,
             UserPreferencesRepository.HOME_WIDGET_PHOTO_PATH,

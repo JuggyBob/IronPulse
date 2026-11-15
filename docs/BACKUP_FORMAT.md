@@ -13,7 +13,7 @@
 ## Internal structure
 
 ```text
-IronPulse_Backup_2026-11-04.ironpulse
+IronPulse_Backup_2026-11-15.ironpulse
 ├── manifest.json
 ├── checksums.json
 ├── payload/
@@ -40,7 +40,7 @@ destination category on import.
 |---|---|
 | `format` | Always `ironpulse-backup`. |
 | `formatVersion` | Container/manifest structure version. Currently `1`. |
-| `dataSchemaVersion` | Serialized user-data schema. Currently `2`. It is independent of both the app version and the Room schema. |
+| `dataSchemaVersion` | Serialized user-data schema. Currently `6`. It is independent of both the app version and the Room schema. |
 | `appVersionName`, `appVersionCode` | Source IronPulse version. Informational; never used to decide how to parse. |
 | `exportedAt` | ISO-8601 UTC timestamp with milliseconds. |
 | `exportedAtEpochMillis` | Same instant in epoch milliseconds, for display without timezone parsing. |
@@ -82,14 +82,28 @@ A failure at any point produces a user-facing error and leaves destination data 
 | Section | DTO | Contents |
 |---|---|---|
 | `profile` | `ProfileSectionV1` | DataStore profile fields and Room profile fields; `customApiKey` is not present. |
-| `preferences` | `PreferencesSectionV1` | Explicit allowlist of non-secret preferences, including the theme, accent color, Liquid Glass/fullscreen flags, benchmark records, rest timers, AI provider/model/tool-mode selections, the AI Coach workout-data and post-workout-summary switches, and the three independent Android widget themes. |
+| `preferences` | `PreferencesSectionV1` | Explicit allowlist of non-secret preferences, including the theme, accent color, Liquid Glass/fullscreen flags, benchmark records, rest timers, AI provider/model/tool-mode selections, the AI Coach workout-data and post-workout-summary switches, the active Routine/Schedule id and the three independent Android widget themes. |
 | `dashboard` | `DashboardSectionV1` | Widget order, hidden ids, weekly goal and Home photo metadata. |
-| `exercises` | `ExerciseSectionV1` | User-created/AI exercises, athlete-edited library rows, and the edited-library id set. Local media fields are absent. |
-| `workouts` | `WorkoutsSectionV1` | All `WorkoutSessionV1` rows and all `LoggedSetV1` rows, ids preserved. |
-| `routines` | `RoutinesSectionV1` | All saved routines and all materialized schedule days, ids/date keys preserved. |
+| `exercises` | `ExerciseSectionV1` | User-created/AI exercises, athlete-edited library rows, the edited-library id set and each exercise's `supportedFields`. Local media fields are absent. |
+| `workouts` | `WorkoutsSectionV2` | All `WorkoutSessionV1` rows and all `LoggedSetV2` rows, ids preserved. A set carries `isWarmup`, `restSecondsOverride`, `setUid`, `parentSetUid` and `dropIndex`. |
+| `routines` | `RoutinesSectionV1` | All saved Routines (`modelVersion` included), all Schedules, all seven weekday slots and all materialized schedule days. |
 | `progress` | `ProgressSectionV1` | All body-weight logs. |
-| `ai` | `AiSectionV1` | All chat sessions, all messages (including routine-proposal kind/payload/status), all saved Gemini summaries, and every immutable post-workout AI summary keyed by workout id. |
+| `ai` | `AiSectionV1` | All chat sessions, all messages (including routine-proposal kind/payload/status), all saved monthly summaries, and every immutable post-workout AI summary keyed by workout id. |
 | `files/widget_photo.*` | binary | The referenced Home photo, stored without recompression. |
+
+## Data schema history
+
+| Version | Change |
+|---|---|
+| 1 | Initial frozen DTOs. |
+| 2 | Adds post-workout AI summaries and the three Android widget themes; adds the AI workout-data and post-workout-summary switches, both defaulting to off. |
+| 3 | Adds Schedules, weekday slots and routine model versions. Legacy rows stay `modelVersion = 0` and are converted after restore. |
+| 4 | Adds `isWarmup` and `restSecondsOverride`. Legacy sets become normal, inherited sets. |
+| 5 | Adds `setUid`, `parentSetUid` and `dropIndex`. Legacy sets receive deterministic `legacy-<id>` UIDs and are never guessed into drop sets. |
+| 6 | Adds `exercises.supportedFields` with an empty default, preserving the legacy type fallback. |
+
+The migration registry is contiguous: v1→v2→v3→v4→v5→v6. A newer schema is rejected before any
+destination data is touched, and a gap is a programming error that fails loudly.
 
 ## Compression and limits
 
@@ -120,6 +134,7 @@ Never present in the archive:
 - `profile_avatar_path` and the profile picture file.
 - Exercise `customMediaUri`, `customMediaIsVideo`, and custom exercise media bytes.
 - Built-in library rows the athlete never edited.
+- Per-exercise default rest and the launcher-icon choice (device-local settings).
 - Downloaded update APKs, caches, crash/debug logs, dataset-version cache and cached GitHub release
   metadata.
 

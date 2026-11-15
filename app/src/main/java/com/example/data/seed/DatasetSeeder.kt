@@ -4,6 +4,8 @@ import android.content.Context
 import com.example.data.dao.DatasetExerciseUpdate
 import com.example.data.dao.ExerciseDao
 import com.example.data.model.Exercise
+import com.example.data.model.ExerciseField
+import com.example.data.model.ExerciseFieldCatalog
 import com.example.data.model.ExerciseSchema
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -23,7 +25,8 @@ data class DatasetExercise(
     val secondaryMuscles: List<String>,
     val instructions: String,
     val gifUrl: String,
-    val exerciseType: String
+    val exerciseType: String,
+    val supportedFields: String
 ) {
     fun toExercise(): Exercise = Exercise(
         name = name,
@@ -35,7 +38,8 @@ data class DatasetExercise(
         instructions = instructions,
         equipment = equipment,
         mediaPath = gifUrl,
-        sourceId = id
+        sourceId = id,
+        supportedFields = supportedFields
     )
 
     fun toUpdate(rowId: Long) = DatasetExerciseUpdate(
@@ -49,7 +53,8 @@ data class DatasetExercise(
         instructions = instructions,
         equipment = equipment,
         mediaPath = gifUrl,
-        sourceId = id
+        sourceId = id,
+        supportedFields = supportedFields
     )
 }
 
@@ -88,7 +93,7 @@ object DatasetSeeder {
      * dropdown could not reproduce. The rows already on disk need the same correction, so the
      * reseed has to run once more.
      */
-    const val DATASET_VERSION = 4
+    const val DATASET_VERSION = 5
 
     private const val PREFS = "ironpulse_dataset"
     private const val KEY_VERSION = "dataset_version"
@@ -171,6 +176,15 @@ object DatasetSeeder {
         return (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
             val secondary = o.optJSONArray("secondaryMuscles") ?: JSONArray()
+            val exerciseType = o.optString("exerciseType", "STANDARD_WEIGHT")
+            val rawFields = o.optJSONArray("fields")
+            val fields = if (rawFields == null) {
+                ExerciseFieldCatalog.defaultsForType(exerciseType)
+            } else {
+                (0 until rawFields.length()).mapNotNull { index ->
+                    ExerciseField.fromId(rawFields.optString(index, ""))
+                }
+            }
             DatasetExercise(
                 id = o.getString("id"),
                 name = o.getString("name"),
@@ -185,7 +199,8 @@ object DatasetSeeder {
                     .map { ExerciseSchema.canonicalTarget(secondary.getString(it)) },
                 instructions = o.optString("instructions", ""),
                 gifUrl = o.optString("gifUrl", ""),
-                exerciseType = o.optString("exerciseType", "STANDARD_WEIGHT")
+                exerciseType = exerciseType,
+                supportedFields = ExerciseFieldCatalog.serialize(fields)
             )
         }
     }

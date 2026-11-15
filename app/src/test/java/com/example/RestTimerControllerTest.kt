@@ -9,6 +9,7 @@ package com.example
 import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.test.core.app.ApplicationProvider
+import com.example.data.model.CustomRestTimer
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.preferences.userDataStore
 import com.example.ui.viewmodel.RestTimerController
@@ -16,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -62,25 +64,38 @@ class RestTimerControllerTest {
         preferences.savedRestTimersFlow.first()
 
         controller.saveCustomTimer("My Rest", 45)
-        val saved = withTimeout(10_000) {
-            preferences.savedRestTimersFlow.first { timers -> timers.any { it.name == "My Rest" } }
-        }
+        val saved = awaitTimers { timers -> timers.any { it.name == "My Rest" } }
         assertEquals(45, saved.first { it.name == "My Rest" }.totalSeconds)
 
         controller.saveCustomTimer("My Rest", 90)
-        val updated = withTimeout(10_000) {
-            preferences.savedRestTimersFlow.first { timers ->
-                timers.count { it.name == "My Rest" } == 1 &&
-                    timers.first { it.name == "My Rest" }.totalSeconds == 90
-            }
+        val updated = awaitTimers { timers ->
+            timers.count { it.name == "My Rest" } == 1 &&
+                timers.first { it.name == "My Rest" }.totalSeconds == 90
         }
         assertEquals(1, updated.count { it.name == "My Rest" })
 
         val id = updated.first { it.name == "My Rest" }.id
         controller.deleteCustomTimer(id)
-        val afterDelete = withTimeout(10_000) {
-            preferences.savedRestTimersFlow.first { timers -> timers.none { it.id == id } }
-        }
+        val afterDelete = awaitTimers { timers -> timers.none { it.id == id } }
         assertTrue(afterDelete.none { it.id == id })
+    }
+
+    /**
+     * Reads the current persisted list until [predicate] is true.
+     *
+     * DataStore can commit a write before this collector has subscribed to updates, so waiting for
+     * a particular emission is racy on a fast CI runner: the value is correct but the emission was
+     * missed. Re-reading the current value is deterministic. The first assertion in this class
+     * still exercises the normal flow path.
+     */
+    private suspend fun awaitTimers(
+        predicate: (List<CustomRestTimer>) -> Boolean
+    ): List<CustomRestTimer> = withTimeout(60_000) {
+        var timers = preferences.savedRestTimersFlow.first()
+        while (!predicate(timers)) {
+            delay(50)
+            timers = preferences.savedRestTimersFlow.first()
+        }
+        timers
     }
 }

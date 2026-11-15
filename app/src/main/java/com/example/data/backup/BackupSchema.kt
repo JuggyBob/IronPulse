@@ -30,7 +30,7 @@ object BackupFormat {
 
     const val CURRENT_FORMAT_VERSION = 1
     const val MIN_SUPPORTED_FORMAT_VERSION = 1
-    const val CURRENT_DATA_SCHEMA_VERSION = 2
+    const val CURRENT_DATA_SCHEMA_VERSION = 6
     const val MIN_SUPPORTED_DATA_SCHEMA_VERSION = 1
 
     const val SECTION_PROFILE = "profile"
@@ -153,6 +153,7 @@ data class PreferencesSectionV1(
     val aiWorkoutDataAccess: Boolean? = null,
     val postWorkoutAiSummaries: Boolean? = null,
     val activeRoutineId: Long? = null,
+    val activeScheduleId: Long? = null,
     val restTimers: List<RestTimerV1>? = null,
     val benchmark: BenchmarkPreferencesV1? = null,
     val ai: AiPreferencesV1? = null,
@@ -224,7 +225,9 @@ data class ExerciseV1(
     val mediaPath: String,
     val sourceId: String,
     val isCustom: Boolean,
-    val isAiGenerated: Boolean
+    val isAiGenerated: Boolean,
+    /** v6: explicit supported field ids. Empty is the legacy/type-fallback state. */
+    val supportedFields: String = ""
 )
 
 @JsonClass(generateAdapter = true)
@@ -243,7 +246,9 @@ data class WorkoutSessionV1(
     val routineId: Long,
     val routineWeekday: Int,
     val plannedDate: Long,
-    val plannedDateKey: Long
+    val plannedDateKey: Long,
+    val scheduleId: Long = 0L,
+    val scheduleGoal: String = ""
 )
 
 @JsonClass(generateAdapter = true)
@@ -264,10 +269,49 @@ data class LoggedSetV1(
     val bodyWeightKg: Double
 )
 
+/**
+ * Workout payload for backup data schema 5.
+ *
+ * The v1 workout DTOs remain frozen for old archives and tests. v4 added warm-up and rest fields.
+ * v5 adds the stable set UID and the optional parent link used by drop sets. A v4 archive parses
+ * into this shape with `setUid = ""`, `parentSetUid = null` and `dropIndex = 0`; the v4 -> v5
+ * migration then assigns deterministic legacy UIDs and leaves every set non-drop.
+ */
+@JsonClass(generateAdapter = true)
+data class WorkoutsSectionV2(
+    val sessions: List<WorkoutSessionV1> = emptyList(),
+    val sets: List<LoggedSetV2> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class LoggedSetV2(
+    val id: Long,
+    val sessionId: Long,
+    val exerciseId: Long,
+    val exerciseName: String,
+    val exerciseType: String,
+    val setNumber: Int,
+    val weight: Double,
+    val addedWeight: Double,
+    val reps: Int,
+    val holdDurationSeconds: Int,
+    val distanceKm: Double,
+    val isCompleted: Boolean,
+    val timestamp: Long,
+    val bodyWeightKg: Double,
+    val isWarmup: Boolean = false,
+    val restSecondsOverride: Int? = null,
+    val setUid: String = "",
+    val parentSetUid: String? = null,
+    val dropIndex: Int = 0
+)
+
 @JsonClass(generateAdapter = true)
 data class RoutinesSectionV1(
     val routines: List<SavedRoutineV1> = emptyList(),
-    val scheduleDays: List<ScheduledWorkoutDayV1> = emptyList()
+    val scheduleDays: List<ScheduledWorkoutDayV1> = emptyList(),
+    val schedules: List<ScheduleV1> = emptyList(),
+    val scheduleSlots: List<ScheduleDaySlotV1> = emptyList()
 )
 
 @JsonClass(generateAdapter = true)
@@ -279,7 +323,8 @@ data class SavedRoutineV1(
     val goal: String,
     val exercisesJson: String,
     val createdAt: Long,
-    val scheduleVersion: Int
+    val scheduleVersion: Int,
+    val modelVersion: Int = 0
 )
 
 @JsonClass(generateAdapter = true)
@@ -291,6 +336,23 @@ data class ScheduledWorkoutDayV1(
     val dayTitle: String,
     val exerciseCount: Int,
     val capturedAt: Long
+)
+
+@JsonClass(generateAdapter = true)
+data class ScheduleV1(
+    val id: Long,
+    val name: String,
+    val description: String,
+    val goal: String,
+    val createdAt: Long,
+    val legacyRoutineId: Long = 0L
+)
+
+@JsonClass(generateAdapter = true)
+data class ScheduleDaySlotV1(
+    val scheduleId: Long,
+    val weekday: Int,
+    val routineId: Long? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -390,9 +452,11 @@ data class UserDataSnapshot(
     val editedLibraryExerciseIds: Set<Long>,
     val exercises: List<ExerciseV1>,
     val sessions: List<WorkoutSessionV1>,
-    val sets: List<LoggedSetV1>,
+    val sets: List<LoggedSetV2>,
     val routines: List<SavedRoutineV1>,
     val scheduleDays: List<ScheduledWorkoutDayV1>,
+    val schedules: List<ScheduleV1> = emptyList(),
+    val scheduleSlots: List<ScheduleDaySlotV1> = emptyList(),
     val bodyWeightLogs: List<BodyWeightLogV1>,
     val chatSessions: List<ChatSessionV1>,
     val chatMessages: List<ChatMessageV1>,
@@ -412,7 +476,7 @@ data class UserDataSnapshot(
             BackupFormat.SECTION_DASHBOARD to dashboard.filledFieldCount(),
             BackupFormat.SECTION_EXERCISES to exercises.size,
             BackupFormat.SECTION_WORKOUTS to (sessions.size + sets.size),
-            BackupFormat.SECTION_ROUTINES to (routines.size + scheduleDays.size),
+            BackupFormat.SECTION_ROUTINES to (routines.size + scheduleDays.size + schedules.size + scheduleSlots.size),
             BackupFormat.SECTION_PROGRESS to bodyWeightLogs.size,
             BackupFormat.SECTION_AI to (
                 chatSessions.size + chatMessages.size + geminiSummaries.size + workoutSummaries.size
@@ -439,6 +503,7 @@ private fun PreferencesSectionV1.filledFieldCount(): Int {
     if (aiWorkoutDataAccess != null) count++
     if (postWorkoutAiSummaries != null) count++
     if (activeRoutineId != null) count++
+    if (activeScheduleId != null) count++
     if (restTimers != null) count++
     if (benchmark != null) count++
     if (ai != null) count++

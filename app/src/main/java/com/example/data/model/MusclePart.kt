@@ -68,13 +68,12 @@ object MusclePartResolver {
         return hits.maxByOrNull { it.second.length }?.first
     }
 
-    /** The fields the athlete logs for this exercise type, shown in the information popup. */
-    fun trackedFields(exerciseType: String): List<String> = when (exerciseType) {
-        ExerciseType.ADDED_WEIGHT -> listOf("Sets", "Reps", "Added weight")
-        ExerciseType.PURE_BODYWEIGHT -> listOf("Sets", "Reps", "Hold (seconds)")
-        // Distance and time, never a load: a 5 km run has no meaningful weight or rep count, and
-        // listing them here is what told the athlete to expect a barbell for their cardio.
-        ExerciseType.CARDIO -> listOf("Sets", "Time (minutes)", "Distance")
-        else -> listOf("Sets", "Reps", "Weight")
-    }
+    /**
+     * The fields the athlete actually logs for [exercise], shown in the information popup.
+     *
+     * This reads the exercise's explicit configuration, never its classification: two exercises
+     * with the same type can support different inputs, and a plank with added weight must list it.
+     */
+    fun trackedFields(exercise: Exercise): List<String> =
+        listOf("Sets") + exercise.exerciseFields.map(ExerciseFieldCatalog::plainLabel)
 }

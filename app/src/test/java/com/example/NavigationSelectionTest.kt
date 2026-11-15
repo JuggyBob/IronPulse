@@ -25,7 +25,7 @@ class NavigationSelectionTest {
         listOf(
             Screen.Home,
             Screen.Progress,
-            Screen.Routine,
+            Screen.Plan,
             Screen.LogWorkout,
             Screen.AiCoach
         ).forEach { screen ->

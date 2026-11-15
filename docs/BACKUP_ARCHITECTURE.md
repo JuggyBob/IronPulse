@@ -13,8 +13,13 @@
 | `BackupValidator.kt` | Semantic, numeric, relationship and settings validation before any write. |
 | `BackupPreferencesStore.kt` | Explicit DataStore allowlist read/write, SharedPreferences library-edit record, rest-alert mirror, widget-photo file handling. |
 | `UserDataBackupManager.kt` | Export orchestration, import preflight, Room replacement, seeding, verification, rollback. |
+| `CloudBackupRunner.kt` | Writes the same archive to a persisted document tree, verifies the read-back, renames and applies retention. |
+| `CloudBackupScheduler.kt` | Debounced workout/import/profile triggers plus the daily WorkManager recovery run. |
 | `MainViewModel` | SAF URI handling, temp files, progress state, confirmation state, post-import UI refresh. |
-| `SettingsScreen` | Data Management card, file pickers, progress/error states and destructive confirmation. |
+| `SettingsScreen` | Data Management card, file pickers, cloud folder controls, progress/error states and destructive confirmation. |
+
+The current archive is **data schema 6**: it carries Schedules and weekday slots, routine model
+versions, warm-up/rest flags, set UIDs and drop-set parent links, and per-exercise field lists.
 
 The Room DAOs gained read-all/insert-all methods and guarded user-exercise deletion. No unrelated
 repository behavior changed.
@@ -77,9 +82,11 @@ the whole export rather than creating a partial archive.
      sessions, Gemini summaries, immutable post-workout summaries and the profile row;
    - deletes all destination custom/AI exercises and destination library rows whose names collide
      with restored custom exercises;
-   - inserts the imported profile (with the destination's `customApiKey`), routines, exercises,
-     sessions, sets, schedule days, weigh-ins, conversations, messages (including proposal
-     kind/payload/status), Gemini summaries and post-workout summaries with their original ids.
+   - inserts the imported profile (with the destination's `customApiKey`), Routines, Schedules,
+     weekday slots, materialized schedule days, exercises with their `supportedFields`, sessions,
+     sets (including `isWarmup`, `restSecondsOverride`, `setUid`, `parentSetUid` and `dropIndex`),
+     weigh-ins, conversations, messages (including proposal kind/payload/status), monthly summaries
+     and post-workout summaries with their original ids.
 6. `DatasetSeeder.seedFresh()` restores the shipped catalog and reverts destination library edits
    that are absent from the backup. Imported edited rows are skipped because their ids are in the
    tracker.
@@ -99,6 +106,10 @@ the whole export rather than creating a partial archive.
     appear immediately.
 13. The UI success message appears. Room/DataStore flows have already emitted; transient state was
     reset and the imported draft is loaded if one exists.
+14. If the archive is an old one that still has `activeRoutineId` but no active Schedule,
+    `PlanController` promotes the migrated Schedule as soon as its rows appear. The promotion waits
+    for the asynchronous conversion, so a schema-2 archive restored at cold start still ends with
+    the correct active plan.
 
 ## Full replacement semantics
 
@@ -153,6 +164,24 @@ workout, pending draft and chat selection, and reloads the imported draft. Room 
 repopulate Home, Progress, workouts, routines, streaks, AI conversations, saved summaries, profile and
 Settings. No manual force-stop or activity recreation is required; the existing theme, Liquid Glass
 and fullscreen flow collectors apply the restored preferences.
+
+## Cloud backup
+
+Cloud Backup reuses the exact `.ironpulse` pipeline rather than introducing a second format:
+
+1. The athlete chooses a folder with `ActivityResultContracts.OpenDocumentTree()`.
+2. `ContentResolver.takePersistableUriPermission(READ | WRITE)` keeps the tree across restarts; the
+   URI and provider authority are device-local and never written into the archive.
+3. `CloudBackupRunner` exports to the app cache, writes a `.partial` document, reads it back, checks
+   the size and SHA-256, then renames it to `IronPulse_Cloud_Backup_<timestamp>.ironpulse`.
+4. A failed attempt is removed and never overwrites an older backup. The five newest cloud backups
+   are retained; manual exports and athlete-created files are never touched.
+5. `CloudBackupScheduler` debounces requests after a completed workout, after a restore and after
+   profile/onboarding changes, and schedules one daily WorkManager recovery run. The worker and the
+   manual Back up now action share a mutex.
+
+The folder permission is not exported, and the cloud archive contains no credentials, profile
+picture or exercise media. See `CLOUD_BACKUP_ARCHITECTURE.md` for the SAF-versus-OAuth rationale.
 
 ## Security notes
 
