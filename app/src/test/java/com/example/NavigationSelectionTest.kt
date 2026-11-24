@@ -21,6 +21,18 @@ class NavigationSelectionTest {
     }
 
     @Test
+    fun `history and workout detail keep progress selected`() {
+        assertEquals(
+            Screen.Progress.route,
+            Screen.selectedTabRoute(Screen.WorkoutHistory.route)
+        )
+        assertEquals(
+            Screen.Progress.route,
+            Screen.selectedTabRoute(Screen.WorkoutDetail.route)
+        )
+    }
+
+    @Test
     fun `ordinary tab routes are unchanged`() {
         listOf(
             Screen.Home,

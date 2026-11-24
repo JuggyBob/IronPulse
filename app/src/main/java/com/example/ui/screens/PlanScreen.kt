@@ -54,6 +54,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -70,6 +71,7 @@ import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -115,7 +117,9 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.text.KeyboardOptions
 import com.example.data.model.Exercise
 import com.example.data.model.PlanGoals
+import com.example.data.model.EffortDisplay
 import com.example.data.model.RoutineExerciseItem
+import com.example.data.model.SupersetRules
 import com.example.data.model.RoutineParser
 import com.example.data.model.sanitizedFor
 import com.example.data.model.SavedRoutine
@@ -139,6 +143,7 @@ import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import com.example.ui.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 private data class PlanEditorTarget(val routine: SavedRoutine?)
@@ -429,6 +434,11 @@ private fun RoutinesPage(
                     onToggle = { expanded[routine.id] = !isExpanded },
                     onEdit = { onEdit(routine) },
                     onCopy = { viewModel.duplicateRoutine(routine) },
+                    onExport = {
+                        viewModel.openExport(
+                            com.example.data.export.ExportTarget.Routine(routine.id)
+                        )
+                    },
                     onDelete = { deleteTarget = routine },
                     onStart = {
                         viewModel.startRoutineWorkout(routine)
@@ -482,6 +492,7 @@ private fun RoutineCard(
     onToggle: () -> Unit,
     onEdit: () -> Unit,
     onCopy: () -> Unit,
+    onExport: () -> Unit,
     onDelete: () -> Unit,
     onStart: () -> Unit
 ) {
@@ -571,21 +582,39 @@ private fun RoutineCard(
                 ) {
                     Button(
                         onClick = onStart,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(46.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = ElectricCyan,
                             contentColor = OnAccent
                         ),
                         shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(vertical = 10.dp)
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
                     ) {
                         Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Start Workout", fontWeight = FontWeight.Bold)
+                        Text(
+                            "Start",
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    IconButton(
+                        onClick = onExport,
+                        modifier = Modifier
+                            .size(46.dp)
+                            .background(DarkSurfaceVariant, RoundedCornerShape(10.dp))
+                            .testTag("plan_export_routine_${routine.id}")
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = "Export Routine", tint = ElectricCyan)
                     }
                     IconButton(
                         onClick = onCopy,
                         modifier = Modifier
+                            .size(46.dp)
                             .background(DarkSurfaceVariant, RoundedCornerShape(10.dp))
                             .testTag("plan_copy_routine_${routine.id}")
                     ) {
@@ -594,6 +623,7 @@ private fun RoutineCard(
                     IconButton(
                         onClick = onEdit,
                         modifier = Modifier
+                            .size(46.dp)
                             .background(DarkSurfaceVariant, RoundedCornerShape(10.dp))
                             .testTag("plan_edit_routine_${routine.id}")
                     ) {
@@ -602,6 +632,7 @@ private fun RoutineCard(
                     IconButton(
                         onClick = onDelete,
                         modifier = Modifier
+                            .size(46.dp)
                             .background(CoralOrange.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
                             .testTag("plan_delete_routine_${routine.id}")
                     ) {
@@ -822,6 +853,11 @@ private fun SchedulesPage(
                     onActivate = { viewModel.setActiveSchedule(schedule.id) },
                     onStartSchedule = { startScheduleForDialog = schedule },
                     onEdit = { editSchedule = schedule },
+                    onExport = {
+                        viewModel.openExport(
+                            com.example.data.export.ExportTarget.Schedule(schedule.id)
+                        )
+                    },
                     onDelete = { deleteSchedule = schedule },
                     onCopy = { viewModel.duplicateSchedule(schedule.id) },
                     onDayClick = { weekday -> assignment = schedule to weekday }
@@ -1059,6 +1095,7 @@ private fun ScheduleCard(
     onActivate: () -> Unit,
     onStartSchedule: () -> Unit,
     onEdit: () -> Unit,
+    onExport: () -> Unit,
     onDelete: () -> Unit,
     onCopy: () -> Unit,
     onDayClick: (Int) -> Unit
@@ -1236,6 +1273,14 @@ private fun ScheduleCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    IconButton(
+                        onClick = onExport,
+                        modifier = Modifier
+                            .background(DarkSurfaceVariant, RoundedCornerShape(10.dp))
+                            .testTag("plan_export_schedule_${schedule.id}")
+                    ) {
+                        Icon(Icons.Default.Share, contentDescription = "Export Schedule", tint = ElectricCyan)
+                    }
                     IconButton(
                         onClick = onCopy,
                         modifier = Modifier
@@ -1755,6 +1800,9 @@ private fun RoutineEditorScreen(
 ) {
     val allExercises by viewModel.allExercises.collectAsStateWithLifecycleCompat()
     val unit by viewModel.weightUnit.collectAsStateWithLifecycleCompat()
+    val effortDisplay by viewModel.appSettings
+        .map { it.effortDisplay }
+        .collectAsState(initial = EffortDisplay.RIR)
     val exerciseDefaultRests by viewModel.exerciseDefaultRests.collectAsStateWithLifecycleCompat()
     val autoplayExerciseDemos by viewModel.autoplayExerciseDemos.collectAsStateWithLifecycleCompat()
     var exerciseShowingDetails by remember { mutableStateOf<Exercise?>(null) }
@@ -1763,6 +1811,7 @@ private fun RoutineEditorScreen(
     var showExerciseSearch by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     var expandedExerciseIndex by remember { mutableStateOf<Int?>(null) }
+    var supersetDialogIndex by remember { mutableStateOf<Int?>(null) }
     val routineItems = remember(routine?.id) {
         mutableStateOf(
             routine?.let { saved ->
@@ -1793,6 +1842,23 @@ private fun RoutineEditorScreen(
         )
     }
     val canSave = name.isNotBlank() && normalizedItems.isNotEmpty() && !saving
+
+    fun requestRoutineSuperset(index: Int) {
+        val items = routineItems.value
+        if (items.size <= 1 || index !in items.indices) return
+        val linked = !items[index].supersetGroupId.isNullOrBlank()
+        // One valid neighbour at either end: link immediately. A linked pair still opens the
+        // dialog so the athlete can unlink it.
+        if (!linked && index == 0) {
+            routineItems.value = SupersetRules.link(items, index, 1)
+            return
+        }
+        if (!linked && index == items.lastIndex) {
+            routineItems.value = SupersetRules.link(items, index, -1)
+            return
+        }
+        supersetDialogIndex = index
+    }
 
     fun saveRoutine() {
         if (!canSave) return
@@ -2041,23 +2107,17 @@ private fun RoutineEditorScreen(
                     canMoveUp = index > 0,
                     canMoveDown = index < routineItems.value.lastIndex,
                     onMoveUp = {
-                        if (index > 0) {
-                            routineItems.value = routineItems.value.toMutableList().also {
-                                val swap = it[index]
-                                it[index] = it[index - 1]
-                                it[index - 1] = swap
-                            }
-                            expandedExerciseIndex = index - 1
+                        val moved = SupersetRules.moveBlock(routineItems.value, index, index - 1)
+                        if (moved != routineItems.value) {
+                            routineItems.value = moved
+                            expandedExerciseIndex = (index - 1).coerceAtLeast(0)
                         }
                     },
                     onMoveDown = {
-                        if (index < routineItems.value.lastIndex) {
-                            routineItems.value = routineItems.value.toMutableList().also {
-                                val swap = it[index]
-                                it[index] = it[index + 1]
-                                it[index + 1] = swap
-                            }
-                            expandedExerciseIndex = index + 1
+                        val moved = SupersetRules.moveBlock(routineItems.value, index, index + 1)
+                        if (moved != routineItems.value) {
+                            routineItems.value = moved
+                            expandedExerciseIndex = (index + 1).coerceAtMost(moved.lastIndex)
                         }
                     },
                     onToggleExpanded = {
@@ -2079,7 +2139,11 @@ private fun RoutineEditorScreen(
                             it.removeAt(index)
                         }
                         expandedExerciseIndex = null
-                    }
+                    },
+                    isSuperset = !item.supersetGroupId.isNullOrBlank(),
+                    showSupersetAction = routineItems.value.size > 1,
+                    onSuperset = { requestRoutineSuperset(index) },
+                    effortDisplay = effortDisplay
                 )
             }
         }
@@ -2103,6 +2167,22 @@ private fun RoutineEditorScreen(
         )
     }
 
+    supersetDialogIndex?.let { index ->
+        SupersetEditorDialog(
+            items = routineItems.value,
+            index = index,
+            onLink = { direction ->
+                routineItems.value = SupersetRules.link(routineItems.value, index, direction)
+                supersetDialogIndex = null
+            },
+            onUnlink = {
+                routineItems.value = SupersetRules.unlink(routineItems.value, index)
+                supersetDialogIndex = null
+            },
+            onDismiss = { supersetDialogIndex = null }
+        )
+    }
+
     // Same read-only sheet as the Create/Edit Routine page: no pen and no live Add Set.
     exerciseShowingDetails?.let { detailExercise ->
         ExerciseDetailDialog(
@@ -2113,6 +2193,119 @@ private fun RoutineEditorScreen(
             autoplayDemos = autoplayExerciseDemos,
             onEdit = null
         )
+    }
+}
+
+@Composable
+private fun SupersetEditorDialog(
+    items: List<RoutineExerciseItem>,
+    index: Int,
+    onLink: (Int) -> Unit,
+    onUnlink: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val linked = !items.getOrNull(index)?.supersetGroupId.isNullOrBlank()
+    val canPrevious = SupersetRules.canLink(items, index, -1)
+    val canNext = SupersetRules.canLink(items, index, 1)
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            color = DarkSurface,
+            shape = RoundedCornerShape(16.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, DarkBorder)
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Superset",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = TextWhite
+                        )
+                        Text(
+                            text = "Link this exercise with an adjacent exercise. Each keeps its own sets.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextMuted
+                        )
+                    }
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close superset dialog",
+                            tint = TextMuted,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(14.dp))
+                if (canPrevious && canNext) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        SupersetEditorAction(
+                            "Link previous",
+                            modifier = Modifier.weight(1f)
+                        ) { onLink(-1) }
+                        SupersetEditorAction(
+                            "Link following",
+                            modifier = Modifier.weight(1f)
+                        ) { onLink(1) }
+                    }
+                } else {
+                    if (canPrevious) {
+                        SupersetEditorAction("Link previous", Modifier.fillMaxWidth()) { onLink(-1) }
+                    }
+                    if (canNext) {
+                        SupersetEditorAction("Link following", Modifier.fillMaxWidth()) { onLink(1) }
+                    }
+                }
+                if (linked) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    SupersetEditorAction(
+                        "Unlink superset",
+                        Modifier.fillMaxWidth(),
+                        CoralOrange,
+                        onUnlink
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SupersetEditorAction(
+    label: String,
+    modifier: Modifier = Modifier,
+    color: Color = ElectricCyan,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = modifier,
+        color = color.copy(alpha = 0.12f),
+        shape = RoundedCornerShape(10.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.55f))
+    ) {
+        Box(
+            modifier = Modifier
+                .clickable(onClick = onClick)
+                .padding(horizontal = 10.dp, vertical = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = color,
+                textAlign = TextAlign.Center
+            )
+        }
     }
 }
 

@@ -2,7 +2,9 @@ package com.example.data.ai
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 
@@ -25,7 +27,9 @@ class AiConversationEngine(
     private val providerResolver: (AiProviderId) -> AiProvider = { AiProviderRegistry.provider(it) },
     private val maxRounds: Int = 4,
     private val maxToolCalls: Int = 12,
-    private val requestTimeoutMillis: Long = 90_000L,
+    private val maxCallsPerTurn: Int = 6,
+    private val requestTimeoutMillis: Long = 45_000L,
+    private val toolTimeoutMillis: Long = 10_000L,
     private val maxRetries: Int = 1,
     private val maxCorrections: Int = 2
 ) {
@@ -54,7 +58,11 @@ class AiConversationEngine(
         var usedCompatibility = compatibility
         var rounds = 0
         var executedCalls = 0
+        var requestedCalls = 0
+        var toolTimeouts = 0
         var corrections = 0
+        var lastFinishReason: AiFinishReason? = null
+        val startedAt = System.currentTimeMillis()
         val cache = mutableMapOf<String, AiToolResult>()
         suspend fun currentAccess(): AiAccessPolicy =
             accessPolicyProvider?.invoke() ?: accessPolicy
@@ -66,6 +74,7 @@ class AiConversationEngine(
         }
 
         while (rounds < maxRounds) {
+            currentCoroutineContext().ensureActive()
             rounds++
             val nativeTools = enableTools && !compatibility
             val requestAccess = currentAccess()
@@ -96,7 +105,8 @@ class AiConversationEngine(
                 throw error
             }
 
-            val calls = when {
+            lastFinishReason = response.finishReason
+            val requested = when {
                 !enableTools -> emptyList()
                 response.toolCalls.isNotEmpty() -> response.toolCalls
                 compatibility -> AiCompatibilityProtocol.parseToolCalls(response.text).orEmpty()
@@ -104,6 +114,10 @@ class AiConversationEngine(
                     AiCompatibilityProtocol.parseToolCalls(response.text).orEmpty()
                 else -> emptyList()
             }
+            requestedCalls += requested.size
+            // Native providers may emit an arbitrary number of parallel calls. Keep the transcript
+            // valid by executing at most one bounded batch and letting the model continue next turn.
+            val calls = requested.take(maxCallsPerTurn)
 
             if (calls.isEmpty()) {
                 val text = response.text.trim()
@@ -140,7 +154,11 @@ class AiConversationEngine(
                     text = text,
                     rounds = rounds,
                     toolCallsExecuted = executedCalls,
-                    usedCompatibilityFallback = usedCompatibility
+                    usedCompatibilityFallback = usedCompatibility,
+                    totalDurationMs = System.currentTimeMillis() - startedAt,
+                    toolCallsRequested = requestedCalls,
+                    toolTimeouts = toolTimeouts,
+                    finishReason = lastFinishReason
                 )
             }
 
@@ -169,7 +187,26 @@ class AiConversationEngine(
                     results.add(cached.copy(callId = call.id))
                     continue
                 }
-                val result = dispatcher.dispatch(call, currentAccess())
+                val result = try {
+                    withTimeout(toolTimeoutMillis) {
+                        dispatcher.dispatch(call, currentAccess())
+                    }
+                } catch (timeout: TimeoutCancellationException) {
+                    toolTimeouts++
+                    AiToolResult(
+                        callId = call.id,
+                        name = call.name,
+                        contentJson = JSONObject().apply {
+                            put("ok", false)
+                            put("error", "tool_timeout")
+                            put(
+                                "message",
+                                "This tool took too long. Continue with the information already gathered."
+                            )
+                        }.toString(),
+                        isError = true
+                    )
+                }
                 cache[key] = result
                 executedCalls++
                 results.add(result)
@@ -199,7 +236,11 @@ class AiConversationEngine(
                     rounds = rounds,
                     toolCallsExecuted = executedCalls,
                     usedCompatibilityFallback = usedCompatibility,
-                    routineProposal = modification
+                    routineProposal = modification,
+                    totalDurationMs = System.currentTimeMillis() - startedAt,
+                    toolCallsRequested = requestedCalls,
+                    toolTimeouts = toolTimeouts,
+                    finishReason = lastFinishReason
                 )
             }
             if (newRoutine != null) {
@@ -210,7 +251,11 @@ class AiConversationEngine(
                     rounds = rounds,
                     toolCallsExecuted = executedCalls,
                     usedCompatibilityFallback = usedCompatibility,
-                    newRoutineProposal = newRoutine
+                    newRoutineProposal = newRoutine,
+                    totalDurationMs = System.currentTimeMillis() - startedAt,
+                    toolCallsRequested = requestedCalls,
+                    toolTimeouts = toolTimeouts,
+                    finishReason = lastFinishReason
                 )
             }
         }
@@ -251,7 +296,11 @@ class AiConversationEngine(
             text = safeText,
             rounds = rounds,
             toolCallsExecuted = executedCalls,
-            usedCompatibilityFallback = usedCompatibility
+            usedCompatibilityFallback = usedCompatibility,
+            totalDurationMs = System.currentTimeMillis() - startedAt,
+            toolCallsRequested = requestedCalls,
+            toolTimeouts = toolTimeouts,
+            finishReason = finalResponse.finishReason
         )
     }
 

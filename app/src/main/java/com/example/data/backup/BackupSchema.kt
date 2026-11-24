@@ -30,7 +30,7 @@ object BackupFormat {
 
     const val CURRENT_FORMAT_VERSION = 1
     const val MIN_SUPPORTED_FORMAT_VERSION = 1
-    const val CURRENT_DATA_SCHEMA_VERSION = 6
+    const val CURRENT_DATA_SCHEMA_VERSION = 7
     const val MIN_SUPPORTED_DATA_SCHEMA_VERSION = 1
 
     const val SECTION_PROFILE = "profile"
@@ -158,7 +158,9 @@ data class PreferencesSectionV1(
     val benchmark: BenchmarkPreferencesV1? = null,
     val ai: AiPreferencesV1? = null,
     /** Three independent native-widget appearances. Null in v1 backups. */
-    val widgetThemes: WidgetThemesV1? = null
+    val widgetThemes: WidgetThemesV1? = null,
+    /** v7 presentation preference: "RIR" or "RPE". Null keeps the default RIR. */
+    val effortDisplay: String? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -303,7 +305,11 @@ data class LoggedSetV2(
     val restSecondsOverride: Int? = null,
     val setUid: String = "",
     val parentSetUid: String? = null,
-    val dropIndex: Int = 0
+    val dropIndex: Int = 0,
+    /** v7: stable two-exercise superset pair. Null for historical/ungrouped sets. */
+    val supersetGroupId: String? = null,
+    /** v7: canonical RPE 6.0-10.0, or null when the athlete did not record effort. */
+    val effortRpe: Double? = null
 )
 
 @JsonClass(generateAdapter = true)
@@ -502,6 +508,7 @@ private fun PreferencesSectionV1.filledFieldCount(): Int {
     if (autoCheckUpdatesOnStart != null) count++
     if (aiWorkoutDataAccess != null) count++
     if (postWorkoutAiSummaries != null) count++
+    if (effortDisplay != null) count++
     if (activeRoutineId != null) count++
     if (activeScheduleId != null) count++
     if (restTimers != null) count++

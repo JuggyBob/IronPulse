@@ -10,9 +10,9 @@ else finds them.
 
 | Version | Supported |
 |---|---|
-| **5.0.x** | **Yes** |
-| 4.4.x | No - upgrade to 5.0.x |
-| 4.3.x and older | No - upgrade to 5.0.x |
+| **5.1.x** | **Yes** |
+| 5.0.x | No - upgrade to 5.1.x |
+| 4.4.x and older | No - upgrade to 5.1.x |
 
 Only the latest released version receives security fixes. If you are on an older build, upgrade —
 there is no patched older branch.
@@ -89,7 +89,14 @@ Worth knowing, because they are deliberate and should stay that way:
   normalized URL the user confirmed. Changing the URL requires a new confirmation.
 - **Custom endpoints are opt-in and constrained.** The URL must be HTTP(S) with no embedded
   credentials or fragment. Plain HTTP is accepted only for loopback and private-network hosts, with
-  an explicit warning. Redirects are not followed, and TLS certificate checks are never disabled.
+  an explicit warning. Redirects are not followed for any provider, and TLS certificate checks are
+  never disabled. Remote cleartext is denied by the network security config; only localhost is
+  exempt for a local model runner.
+- **Provider keys never travel in a URL.** Gemini requests use the `x-goog-api-key` header, and
+  hosted provider requests refuse redirects so an `Authorization` or `x-api-key` header cannot be
+  forwarded to another origin.
+- **A provider key is never compiled into a release.** `BuildConfig.GEMINI_API_KEY` is empty in
+  release builds; the user-entered key is the only production credential path.
 - **AI retrieval tools are read-only.** The registry can search and read completed workouts, the
   active Schedule, saved Routines, the live workout, the exercise catalog and exercise history
   through narrow repository methods. There is no SQL, filesystem, arbitrary network or code
@@ -108,10 +115,21 @@ Worth knowing, because they are deliberate and should stay that way:
   in the database, so "erase all app data" deletes it explicitly rather than leaving a copy behind.
 - **The shipped catalog is not a trust boundary for user data.** Editing a library row writes through
   the same path as any other edit; it cannot read anything the app cannot already read.
-- **Android auto-backup is excluded.** Android backup rules keep app data out of OS cloud backup and
-  device transfer, so a restored image cannot leak another person's history onto a new phone.
-  IronPulse's own `.ironpulse` exports are separate, explicit user actions and are **not encrypted**;
-  the UI says so for both manual and cloud-folder backups.
+- **Android auto-backup is excluded.** `android:allowBackup="false"` keeps the database, prefs and
+  provider keys out of OS cloud backup and device transfer, so a restored image cannot leak another
+  person's history or credentials onto a new phone. IronPulse's own `.ironpulse` exports are
+  separate, explicit user actions and are **not encrypted**; the UI says so for both manual and
+  cloud-folder backups. Provider keys are deliberately omitted from those archives.
+- **Export files are data, not formulas.** CSV cells that begin with a formula marker after
+  whitespace or control characters are prefixed with an apostrophe, and XLSX text strips
+  XML-illegal control characters, so a crafted backup cannot turn an export into an executable
+  spreadsheet or a corrupt workbook.
+- **`MainActivity` is not exported.** It can only be started by the app's own components and
+  launcher aliases; other apps cannot launch it directly.
+- **Update downloads are bounded and named locally.** A release asset larger than 200 MB is
+  rejected, the download is checked against the published release before installation, and the
+  local file name is resolved inside the app's update directory so a remote name cannot place it
+  elsewhere.
 
 ---
 
@@ -122,8 +140,8 @@ Release APKs are attached to the
 checksums.
 
 ```bash
-sha256sum IronPulse-5.0.1.apk
-apksigner verify --print-certs IronPulse-5.0.1.apk
+sha256sum IronPulse-5.1.0.apk
+apksigner verify --print-certs IronPulse-5.1.0.apk
 ```
 
 Compare the file hash against the published `.sha256` before installing an APK you did not build

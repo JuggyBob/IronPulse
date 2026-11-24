@@ -2,7 +2,6 @@ package com.example.data.ai
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -10,9 +9,17 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import org.json.JSONObject
+import java.io.EOFException
 import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.ProtocolException
+import java.net.SocketException
 import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLException
 
 /**
  * The single HTTP entry point for every provider adapter.
@@ -31,10 +38,15 @@ internal object AiHttp {
         .connectTimeout(45, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS)
         .writeTimeout(45, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(true)
+        // Retries are owned by AiConversationEngine so attempt counts stay predictable across
+        // providers. Letting OkHttp retry as well multiplies waits and hides the real failure.
+        .retryOnConnectionFailure(false)
         .build()
 
-    /** Custom endpoints must not silently forward credentials or context to a redirect target. */
+    /**
+     * No provider legitimately redirects a generation request. Refusing every redirect prevents
+     * Authorization/x-api-key headers and prompt bodies from being forwarded to another origin.
+     */
     private val noRedirectClient: OkHttpClient = client.newBuilder()
         .followRedirects(false)
         .followSslRedirects(false)
@@ -72,67 +84,104 @@ internal object AiHttp {
     }
 
     private suspend fun execute(request: Request, provider: AiProviderId): JSONObject {
-        val activeClient = if (provider.isCustomEndpoint) noRedirectClient else client
-        var attempt = 0
-        while (true) {
-            attempt++
-            try {
-                activeClient.newCall(request).execute().use { response ->
-                    val raw = response.body?.string().orEmpty()
-                    if (raw.length > MAX_RESPONSE_BYTES) {
+        val activeClient = noRedirectClient
+        try {
+            activeClient.newCall(request).execute().use { response ->
+                // request() buffers up to the cap and returns false at EOF. Unlike
+                // readByteArray(n), it does not demand exactly n bytes, so a normal short response
+                // cannot throw EOFException. If the cap is reached, refuse the body unread.
+                val source = response.body?.source()
+                val bytes = if (source == null) {
+                    ByteArray(0)
+                } else {
+                    if (source.request((MAX_RESPONSE_BYTES + 1).toLong())) {
                         throw AiException(
                             AiErrorKind.PARSE,
                             "The AI provider returned an oversized response."
                         )
                     }
-                    if (response.isSuccessful) {
-                        if (raw.isBlank()) {
-                            throw AiException(AiErrorKind.PARSE, "The AI provider returned an empty response.")
-                        }
-                        return try {
-                            JSONObject(raw)
-                        } catch (e: Exception) {
-                            throw AiException(
-                                AiErrorKind.PARSE,
-                                "The AI provider returned a response the app could not read.",
-                                cause = e
-                            )
-                        }
+                    source.readByteArray()
+                }
+                val raw = bytes.toString(Charsets.UTF_8)
+                if (response.isSuccessful) {
+                    if (raw.isBlank()) {
+                        throw AiException(AiErrorKind.PARSE, "The AI provider returned an empty response.")
                     }
-
-                    if (response.code in 300..399) {
+                    return try {
+                        JSONObject(raw)
+                    } catch (e: Exception) {
                         throw AiException(
-                            AiErrorKind.CONFIGURATION,
-                            "The endpoint redirected the request. For safety IronPulse does not follow " +
-                                "redirects for a custom endpoint; use the final base URL instead."
+                            AiErrorKind.PARSE,
+                            "The AI provider returned a response the app could not read.",
+                            cause = e
                         )
                     }
-
-                    val retryable = response.code == 429 || response.code >= 500
-                    if (retryable && attempt == 1) {
-                        delay(if (response.code == 429) 1_200L else 600L)
-                        return@use
-                    }
-                    throw mapHttpError(response.code, raw)
                 }
-            } catch (e: AiException) {
-                throw e
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: SocketTimeoutException) {
-                throw AiException(
-                    AiErrorKind.TIMEOUT,
-                    "The AI provider did not answer in time. Check the connection and try again.",
-                    cause = e
-                )
-            } catch (e: IOException) {
-                throw AiException(
-                    AiErrorKind.NETWORK,
-                    "Could not reach the AI provider. Check the network and the endpoint URL.",
-                    cause = e
-                )
+
+                if (response.code in 300..399) {
+                    throw AiException(
+                        AiErrorKind.CONFIGURATION,
+                        "The endpoint redirected the request. For safety IronPulse does not follow " +
+                            "redirects for a custom endpoint; use the final base URL instead."
+                    )
+                }
+                throw mapHttpError(response.code, raw)
             }
+        } catch (e: AiException) {
+            throw e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            throw mapIOException(e)
         }
+    }
+
+    /**
+     * Keeps the user-facing message aligned with the actual transport failure. HTTP status and
+     * authentication failures are handled by [mapHttpError]; this method only classifies
+     * I/O-level failures.
+     */
+    internal fun mapIOException(e: IOException): AiException = when (e) {
+        is UnknownHostException -> AiException(
+            AiErrorKind.NETWORK,
+            "Could not resolve the AI provider's host. Check the endpoint host name and the device's DNS.",
+            cause = e
+        )
+        is ConnectException, is NoRouteToHostException -> AiException(
+            AiErrorKind.NETWORK,
+            "Could not connect to the AI provider. The endpoint refused the connection or is unreachable.",
+            cause = e
+        )
+        is SSLException -> AiException(
+            AiErrorKind.NETWORK,
+            "The secure connection to the AI provider failed. Check the endpoint certificate and the device clock.",
+            cause = e
+        )
+        is SocketTimeoutException, is InterruptedIOException -> AiException(
+            AiErrorKind.TIMEOUT,
+            "The AI provider did not answer in time. Check the connection and try again.",
+            cause = e
+        )
+        is EOFException -> AiException(
+            AiErrorKind.PARSE,
+            "The AI provider closed the response before it was complete.",
+            cause = e
+        )
+        is ProtocolException -> AiException(
+            AiErrorKind.PARSE,
+            "The AI provider sent an invalid HTTP response.",
+            cause = e
+        )
+        is SocketException -> AiException(
+            AiErrorKind.NETWORK,
+            "The connection to the AI provider was interrupted. Try again.",
+            cause = e
+        )
+        else -> AiException(
+            AiErrorKind.NETWORK,
+            "The network request to the AI provider failed. Check the connection and the endpoint URL.",
+            cause = e
+        )
     }
 
     private fun mapHttpError(code: Int, rawBody: String): AiException {

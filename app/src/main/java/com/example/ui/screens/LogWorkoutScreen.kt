@@ -123,6 +123,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.data.model.EffortDisplay
 import com.example.data.model.Exercise
 import com.example.data.model.ExerciseFieldCatalog
 import com.example.data.model.ExerciseType
@@ -204,6 +205,9 @@ fun LogWorkoutScreen(
     val allSessions by viewModel.allSessions.collectAsStateWithLifecycle()
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
     val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
+    val effortDisplay by viewModel.appSettings
+        .map { it.effortDisplay }
+        .collectAsStateWithLifecycle(initialValue = EffortDisplay.RIR)
     val exerciseDefaultRests by viewModel.exerciseDefaultRests.collectAsStateWithLifecycle()
     val customExerciseResult by viewModel.customExerciseResult.collectAsStateWithLifecycle()
     // When the workout in progress was last written to disk, for the "auto saved" indicator.
@@ -1169,6 +1173,9 @@ fun LogWorkoutScreen(
                             onRemoveExercise = { viewModel.removeExerciseFromActiveSession(it) },
                             onRestoreExercise = { viewModel.restoreExerciseToActiveSession(it) },
                             onMoveExercise = { from, to -> viewModel.moveActiveExercise(from, to) },
+                            effortDisplay = effortDisplay,
+                            onLinkSuperset = { id, direction -> viewModel.linkActiveSuperset(id, direction) },
+                            onUnlinkSuperset = { id -> viewModel.unlinkActiveSuperset(id) },
                             onShowDetails = { exerciseShowingDetails = it },
                             modifier = Modifier
                                 .fillMaxWidth()

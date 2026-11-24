@@ -61,7 +61,18 @@ data class RoutineExerciseItem(
     /** Drop sets grouped under their 1-based main set index. Empty means no drop sets. */
     val dropSets: List<RoutineDropSet> = emptyList(),
     /** Optional per-main-set defaults; missing indexes inherit the values above. */
-    val mainSetDefaults: List<RoutineMainSetDefault> = emptyList()
+    val mainSetDefaults: List<RoutineMainSetDefault> = emptyList(),
+    /**
+     * Stable pair identity shared by exactly two adjacent exercises in this routine.
+     *
+     * Null means no superset. The pair is an exercise-level relationship; each exercise keeps its
+     * own sets, targets, rest and completion state.
+     */
+    val supersetGroupId: String? = null,
+    /**
+     * Optional planned effort target, stored canonically as RPE 6.0-10.0. RIR is display-only.
+     */
+    val targetEffortRpe: Double? = null
 ) {
     fun defaultForMainSet(mainSetIndex: Int): RoutineMainSetDefault {
         val explicit = mainSetDefaults.firstOrNull { it.mainSetIndex == mainSetIndex }
@@ -613,6 +624,8 @@ object RoutineParser {
                 put("dayTitle", item.dayTitle)
                 // Backward compatible: routines saved before this field simply have no note
                 if (item.dayNote.isNotBlank()) put("dayNote", item.dayNote)
+                item.supersetGroupId?.takeIf { it.isNotBlank() }?.let { put("supersetGroupId", it) }
+                EffortScale.normalize(item.targetEffortRpe)?.let { put("targetEffortRpe", it) }
                 if (item.mainSetDefaults.isNotEmpty()) {
                     put("mainSets", JSONArray().apply {
                         item.mainSetDefaults.sortedBy { it.mainSetIndex }.forEach { mainSet ->
@@ -821,6 +834,7 @@ object RoutineParser {
         allExercises = allExercises,
         weekStartsOnMonday = true
     ).map { it.copy(weekday = 0, dayTitle = "", dayNote = "") }
+        .let(SupersetRules::normalize)
 
     private fun parseJsonDays(
         trimmed: String,
@@ -1142,6 +1156,12 @@ object RoutineParser {
             else "$sets sets x $reps reps"
         }
         val dayNote = obj.optString("dayNote", obj.optString("note", ""))
+        val supersetGroupId = obj.optString("supersetGroupId").takeIf { it.isNotBlank() }
+        val targetEffortRpe = if (obj.has("targetEffortRpe") && !obj.isNull("targetEffortRpe")) {
+            EffortScale.normalize(obj.optDouble("targetEffortRpe", Double.NaN))
+        } else {
+            null
+        }
 
         // Where this exercise sits in the week.
         //
@@ -1176,7 +1196,9 @@ object RoutineParser {
                 dayTitle = dayTitle,
                 dayNote = dayNote,
                 dropSets = parseDropSets(obj),
-                mainSetDefaults = parseMainSetDefaults(obj)
+                mainSetDefaults = parseMainSetDefaults(obj),
+                supersetGroupId = supersetGroupId,
+                targetEffortRpe = targetEffortRpe
             )
         } else {
             RoutineExerciseItem(
@@ -1201,7 +1223,9 @@ object RoutineParser {
                 dayTitle = dayTitle,
                 dayNote = dayNote,
                 dropSets = parseDropSets(obj),
-                mainSetDefaults = parseMainSetDefaults(obj)
+                mainSetDefaults = parseMainSetDefaults(obj),
+                supersetGroupId = supersetGroupId,
+                targetEffortRpe = targetEffortRpe
             )
         }
         // Old routine JSON stored dumbbell loads under addedWeight. Migrate only when the catalog

@@ -11,6 +11,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.example.data.db.AppDatabase
 import com.example.data.model.LoggedSet
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -94,5 +95,60 @@ class ExerciseHistoryPaginationTest {
         assertEquals(2, thirdDays.size)
         assertTrue(firstDays.intersect(secondDays.toSet()).isEmpty())
         assertTrue(secondDays.intersect(thirdDays.toSet()).isEmpty())
+    }
+
+    @Test
+    fun `exercise history filter returns distinct matching session ids`() = runBlocking {
+        val base = System.currentTimeMillis()
+        db.workoutDao().insertSets(
+            listOf(
+                LoggedSet(
+                    sessionId = 10L,
+                    exerciseId = 1L,
+                    exerciseName = "Push-Up",
+                    exerciseType = com.example.data.model.ExerciseType.PURE_BODYWEIGHT,
+                    setNumber = 1,
+                    reps = 10,
+                    isCompleted = true,
+                    timestamp = base
+                ),
+                LoggedSet(
+                    sessionId = 10L,
+                    exerciseId = 1L,
+                    exerciseName = "Push-Up",
+                    exerciseType = com.example.data.model.ExerciseType.PURE_BODYWEIGHT,
+                    setNumber = 2,
+                    reps = 8,
+                    isCompleted = true,
+                    timestamp = base + 1000L
+                ),
+                LoggedSet(
+                    sessionId = 20L,
+                    exerciseId = 1L,
+                    exerciseName = "Push-Up",
+                    exerciseType = com.example.data.model.ExerciseType.PURE_BODYWEIGHT,
+                    setNumber = 1,
+                    reps = 12,
+                    isCompleted = true,
+                    timestamp = base + 2000L
+                ),
+                LoggedSet(
+                    sessionId = 20L,
+                    exerciseId = 2L,
+                    exerciseName = "Squat",
+                    exerciseType = com.example.data.model.ExerciseType.PURE_BODYWEIGHT,
+                    setNumber = 1,
+                    reps = 10,
+                    isCompleted = true,
+                    timestamp = base + 3000L
+                )
+            )
+        )
+
+        assertEquals(
+            setOf(10L, 20L),
+            db.workoutDao().getSessionIdsForExercise("Push-Up").first().toSet()
+        )
+        assertTrue(db.workoutDao().getSessionIdsForExercise("Missing").first().isEmpty())
     }
 }

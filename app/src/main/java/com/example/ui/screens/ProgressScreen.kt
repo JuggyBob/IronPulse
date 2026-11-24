@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.TrendingUp
@@ -115,6 +116,7 @@ import com.example.data.model.GeminiSummary
 import com.example.data.model.LoggedSet
 import com.example.data.model.LoggedSetNumbering
 import com.example.data.model.MonthlyExerciseAnalyzer
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import com.example.data.model.MusclePart
 import com.example.data.model.MusclePartResolver
@@ -125,7 +127,6 @@ import com.example.ui.components.AiUnavailableDialog
 import com.example.ui.components.MarkdownView
 import com.example.ui.components.MuscleBodyMap
 import com.example.ui.components.WarmupBadge
-import com.example.ui.components.WorkoutHistoryDialog
 import com.example.ui.components.ProgressionLineChart
 import com.example.ui.theme.CoralOrange
 import com.example.ui.theme.DarkBg
@@ -141,6 +142,8 @@ import com.example.ui.theme.TextWhite
 import com.example.ui.theme.VioletPurple
 import com.example.ui.theme.ThemeRuntime
 import com.example.ui.theme.OnAccent
+import com.example.data.model.EffortDisplay
+import com.example.data.model.EffortScale
 import com.example.ui.viewmodel.MainViewModel
 import com.example.ui.viewmodel.ProgressMetric
 import java.text.SimpleDateFormat
@@ -171,7 +174,8 @@ private fun formatWeightDisplay(weight: Double): String {
 @Composable
 fun ProgressScreen(
     viewModel: MainViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onOpenWorkoutHistory: () -> Unit = {}
 ) {
     val distinctExercises by viewModel.distinctLoggedExercises.collectAsStateWithLifecycle()
     val selectedExercise by viewModel.selectedExerciseForProgress.collectAsStateWithLifecycle()
@@ -190,6 +194,9 @@ fun ProgressScreen(
 
     // Weights are stored in kilograms; this is the unit the athlete reads
     val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
+    val effortDisplay by viewModel.appSettings
+        .map { it.effortDisplay }
+        .collectAsStateWithLifecycle(initialValue = EffortDisplay.RIR)
     val unit = weightUnit.suffix
     // Converted once, so the chart, the peak and the latest value all speak the athlete's unit
     val chartPoints = remember(chartPointsKg, weightUnit) {
@@ -197,7 +204,6 @@ fun ProgressScreen(
     }
 
     var isExerciseSelectorExpanded by remember { mutableStateOf(false) }
-    var showHistoryDialog by remember { mutableStateOf(false) }
     var exerciseSearchQuery by remember { mutableStateOf("") }
     var showExerciseProgression by remember { mutableStateOf(false) }
     var historyExpanded by remember { mutableStateOf(false) }
@@ -336,7 +342,11 @@ fun ProgressScreen(
                             } else {
                                 "Analytics & Progress"
                             },
-                            style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
+                            style = if (showExerciseProgression) {
+                                MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                            } else {
+                                MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold)
+                            },
                             color = TextWhite,
                             maxLines = 1,
                             softWrap = false,
@@ -355,8 +365,29 @@ fun ProgressScreen(
                         )
                     }
                     Spacer(modifier = Modifier.width(8.dp))
+                    if (showExerciseProgression && selectedExercise.isNotBlank()) {
+                        IconButton(
+                            onClick = {
+                                viewModel.openExport(
+                                    com.example.data.export.ExportTarget.ExerciseHistory(
+                                        selectedExercise
+                                    )
+                                )
+                            },
+                            modifier = Modifier
+                                .size(40.dp)
+                                .testTag("export_exercise_history")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "Export exercise history",
+                                tint = ElectricCyan
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
                     IconButton(
-                        onClick = { showHistoryDialog = true },
+                        onClick = onOpenWorkoutHistory,
                         modifier = Modifier
                             .size(40.dp)
                             .testTag("workout_history_button")
@@ -663,18 +694,6 @@ fun ProgressScreen(
                             pendingParts = secondaryMuscles,
                             onSelect = null,
                             maxFigureHeight = 250.dp
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = buildString {
-                                append(primaryMuscle?.label ?: "Muscle group not classified")
-                                if (secondaryMuscles.isNotEmpty()) {
-                                    append(" • Secondary: ")
-                                    append(secondaryMuscles.joinToString { it.label })
-                                }
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = TextMuted
                         )
                     }
                 }
@@ -1132,6 +1151,12 @@ fun ProgressScreen(
                                     setPositionById = setPositionById,
                                     userProfile = userProfile,
                                     weightUnit = weightUnit,
+                                    effortDisplay = effortDisplay,
+                                    onExportSession = { sessionId ->
+                                        viewModel.openExport(
+                                            com.example.data.export.ExportTarget.Workout(sessionId)
+                                        )
+                                    },
                                     onDeleteSets = { sets ->
                                         viewModel.deleteSets(sets)
                                         historyLoaded = false
@@ -1221,14 +1246,6 @@ fun ProgressScreen(
         )
 
         MainViewModel.MonthlySummaryState.Idle -> Unit
-    }
-
-    // The full log of every completed session
-    if (showHistoryDialog) {
-        WorkoutHistoryDialog(
-            viewModel = viewModel,
-            onDismiss = { showHistoryDialog = false }
-        )
     }
 
     // Saved summaries popup (list -> detail)
@@ -1681,6 +1698,8 @@ private fun SessionHistoryDayCard(
     setPositionById: Map<Long, Int>,
     userProfile: com.example.data.model.UserProfile,
     weightUnit: WeightUnit,
+    effortDisplay: EffortDisplay = EffortDisplay.RIR,
+    onExportSession: (Long) -> Unit = {},
     onDeleteSets: (List<LoggedSet>) -> Unit,
     onDeleteSet: (LoggedSet) -> Unit
 ) {
@@ -1734,6 +1753,21 @@ private fun SessionHistoryDayCard(
                         onDismissRequest = { showDateMenu = false },
                         modifier = Modifier.background(DarkSurfaceVariant)
                     ) {
+                        setsOnDate.map { it.sessionId }.distinct().forEach { sessionId ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        "Export workout",
+                                        color = ElectricCyan,
+                                        fontSize = 13.sp
+                                    )
+                                },
+                                onClick = {
+                                    showDateMenu = false
+                                    onExportSession(sessionId)
+                                }
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text("Delete All ${setsOnDate.size} Sets for This Date", color = FireRed, fontSize = 13.sp) },
                             onClick = {
@@ -1773,6 +1807,7 @@ private fun SessionHistoryDayCard(
                         isDrop = ordered.isDrop,
                         userProfile = userProfile,
                         weightUnit = weightUnit,
+                        effortDisplay = effortDisplay,
                         onDeleteSet = onDeleteSet
                     )
                 }
@@ -1807,6 +1842,7 @@ private fun ProgressRecordedSetRow(
     isDrop: Boolean,
     userProfile: com.example.data.model.UserProfile,
     weightUnit: WeightUnit,
+    effortDisplay: EffortDisplay = EffortDisplay.RIR,
     onDeleteSet: (LoggedSet) -> Unit
 ) {
     Row(
@@ -1820,6 +1856,14 @@ private fun ProgressRecordedSetRow(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.weight(1f)
         ) {
+            if (!isDrop && !set.supersetGroupId.isNullOrBlank()) {
+                Text(
+                    text = "A1·A2",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = ElectricCyan,
+                    modifier = Modifier.padding(end = 4.dp)
+                )
+            }
             Text(
                 text = label,
                 style = MaterialTheme.typography.bodySmall.copy(
@@ -1836,7 +1880,10 @@ private fun ProgressRecordedSetRow(
 
             val bodyweightAtSet =
                 BodyWeightTimeline.bodyWeightForSet(set, userProfile.currentWeightKg)
-            val descriptor = WorkoutMetrics.historyLine(set, bodyweightAtSet, weightUnit)
+            val effortSuffix = set.effortRpe?.let { rpe ->
+                " · " + EffortScale.display(rpe, effortDisplay, set.reps > 0)
+            }.orEmpty()
+            val descriptor = WorkoutMetrics.historyLine(set, bodyweightAtSet, weightUnit) + effortSuffix
             Text(
                 text = descriptor,
                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),

@@ -1,28 +1,63 @@
-# IronPulse 5.0.1
+# IronPulse 5.1.0
 
 [![License](https://img.shields.io/badge/license-source--available-lightgrey.svg)](LICENSE)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.2-7F52FF.svg)](https://kotlinlang.org)
 [![Android](https://img.shields.io/badge/Android-7.1%2B-3DDC84.svg)](https://developer.android.com)
-[![Release](https://img.shields.io/badge/release-v5.0.1-blue.svg)](https://github.com/JuggyBob/IronPulse/releases/tag/v5.0.1)
-[![Tests](https://img.shields.io/badge/tests-908%20passing-brightgreen.svg)](https://github.com/JuggyBob/IronPulse)
+[![Release](https://img.shields.io/badge/release-v5.1.0-blue.svg)](https://github.com/JuggyBob/IronPulse/releases/tag/v5.1.0)
+[![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)](https://github.com/JuggyBob/IronPulse)
 
 **IronPulse is a local-first strength and calisthenics trainer for Android.** It keeps the plan, the
 workout and the numbers in one place: a 1,334-movement exercise library, reusable Routines arranged
-into a weekly Schedule, a focused workout interface with warm-up sets and drop sets, progress
-analytics, body-weight tracking and an optional AI coach that works with the provider you already
-use. No account, no tracking, and no server-side copy of your training data.
+into a weekly Schedule, a focused workout interface with warm-up sets, drop sets and supersets,
+RIR/RPE effort tracking, PDF/CSV/Excel export, progress analytics, body-weight tracking and an
+optional AI coach that works with the provider you already use. No account, no tracking, and no
+server-side copy of your training data.
 
-IronPulse 5.0.1 is a bug-fix update to 5.0.0. It fixes onboarding and backup recovery: `.ironpulse`
-files are selectable from any folder again, connecting a cloud folder offers the newest existing
-backup before writing anything, restoring during onboarding finishes setup instead of asking for
-metrics, and cloud backups wait for a saved profile. The full 4.4.0 → 5.0.1 record is in
-[CHANGELOG.md](CHANGELOG.md).
+IronPulse 5.1.0 adds **supersets**, **RIR/RPE effort tracking** and **training-data export**, and
+hardens the AI Coach tool loop and its networking. Room is **20** and the `.ironpulse` schema is
+**7**; both upgrades are additive, so existing workouts, schedules, widgets and backups keep
+working. The full record is in [CHANGELOG.md](CHANGELOG.md).
 
-IronPulse 5.0.0 itself was the first public release since 4.4.0 and the largest update in the
-project's history. It replaced the multi-day routine model with **Routines + Schedules**, rebuilt the
-active workout around an exercise selector, added **drop sets**, **warm-up sets** and per-set rest
-overrides, gave every exercise an explicit field configuration, and added **cloud-folder backups** and
-**eight selectable launcher icons**.
+## What is new in 5.1
+
+- **Supersets.** Link two adjacent exercises with the paperclip in the Routine editor or an active
+  workout. Paired chips carry a dark/cyan border, history shows compact A1/A2 paperclip badges, and
+  a superset can be combined with drop sets on either member. Each member keeps its own sets,
+  warm-ups, rest and completion state, and the pair moves together when reordered.
+- **Effort tracking.** Record an optional RPE 6–10 per set; RIR is the same value shown as
+  `10 − RPE`. A per-set Effort field, a Routine Target effort stepper and the RIR/RPE toggle in
+  Training Preferences all work on that one stored value, so switching display never rewrites
+  history.
+- **Training-data export.** A new sheet saves a Routine, Schedule, completed Workout or exercise
+  History as PDF, CSV or Excel. Formats are full-width rows, PDF exercise cards are two-column with
+  indented drop sets and superset labels, and files are saved through Android's document picker with
+  no storage permission.
+- **Workout History.** Full-screen routes inside Progress, a date filter (All / On / After / Before),
+  an exercise filter, two-line set rows, D1 branches, warm-up badges and A1/A2 paperclips.
+- **Home.** Last Workout now shows Set N, D1/D2, A1/A2 and WARM. The widget drag outline animates in
+  the accent colour, and a one-shot accent wave appears only after a reorder is actually committed.
+- **AI Coach.** Provider failures now distinguish DNS, refused connections, TLS, timeout, truncated
+  replies and HTTP 401/403/400/404/429/5xx. Tool calls are bounded, proposals understand effort and
+  supersets, and a proposal is consumed atomically so it cannot be applied twice.
+- **Security hardening.** Provider keys travel in headers rather than URLs, hosted providers refuse
+  redirects, release builds require a user-supplied key, OS backup is off, MainActivity is not
+  exported, CSV/XLSX escaping is safer and update downloads are capped.
+- Home and history data loading is also more efficient, including on large histories.
+
+### Screenshots
+
+From the **5.1.0 (15)** build — the Last Workout superset/drop rows, the Routine superset editor,
+the export format sheet and the PDF preview:
+
+<p align="center">
+  <img src="docs/screenshots/5.1.0/02-home-last-workout.png" width="22%" alt="Last Workout with A1/A2 paperclip badges and D1 drop rows" />
+  <img src="docs/screenshots/5.1.0/04-routine-superset-editor.png" width="22%" alt="Routine editor with the paperclip superset link" />
+  <img src="docs/screenshots/5.1.0/07-export-format-sheet.png" width="22%" alt="Export sheet with PDF, CSV and Excel" />
+  <img src="docs/screenshots/5.1.0/08-export-pdf.png" width="22%" alt="PDF preview with two-column exercise cards" />
+</p>
+
+The [5.1.0 screenshot portfolio](docs/screenshots/5.1.0/README.md) lists all ten images and their
+capture settings; the [screenshot index](docs/screenshots/README.md) also covers the 5.0.0 set.
 
 <p align="center">
   <img src="docs/screenshots/5.0.0/01-home-dashboard.png" width="30%" alt="Home: today's workout and the week" />
@@ -56,8 +91,9 @@ overrides, gave every exercise an explicit field configuration, and added **clou
 | Plan a week | Build one Routine per workout, then assign them to the seven weekday slots of a Schedule |
 | Start today's session | Home reads the active Schedule and offers the planned workout, or says it is a rest day |
 | Log a workout fast | Quick Workout, with the same set rows, rest timer and automatic set numbering |
-| Train with intensity | Warm-up sets, drop sets, per-set rest overrides and an inherited default |
+| Train with intensity | Warm-up sets, drop sets, supersets, per-set rest overrides and RIR/RPE effort |
 | Follow a movement | An animation for nearly every exercise, step-by-step instructions, fields and a muscle map |
+| Share the record | Export a Routine, Schedule, completed workout or exercise history as PDF, CSV or Excel |
 | See progress | Volume, estimated 1RM, max reps, training days, a 12-month heat map and body-weight trends |
 | Check one exercise | Exercise Progression with an isolated-weight tag and an optional AI monthly summary |
 | Ask a coach | Optional chat with permission-gated workout tools and controlled routine proposals |
@@ -153,8 +189,8 @@ Starting a Routine opens the exercise-selector interface:
   the prescribed target.
 - **Set rows** show the first two configured fields inline. Any additional fields live in the set's
   expandable details. Field names appear once in an aligned header.
-- **Set options** open from the set-number circle: a per-set rest override and a warm-up toggle.
-  Completing a set starts the floating rest timer with the resolved duration.
+- **Set options** open from the set-number circle: a per-set rest override, a warm-up toggle and an
+  optional Effort value. Completing a set starts the floating rest timer with the resolved duration.
 - **Add Set**, **Add drop set** and **Remove exercise** are part of the same exercise surface.
 - **The body-part map** colours every trained region by completed/total sets and lists the counts per
   body part.
@@ -267,7 +303,8 @@ athlete has before training:
 - **This week** reduces the week to workouts, time and volume.
 - **Body weight** shows the latest weigh-in, the change since the previous one and Log Weight.
 - **Last workout** expands in place with exercise names, one line per logged set and a full-history
-  link.
+  link. Set numbers include `Set N`, `D1`/`D2` drop branches, `A1`/`A2` superset badges and `WARM`
+  markers, so branch and pair information stays visible outside Progress.
 - **Home widgets** can be reordered, hidden, restored, given a weekly goal or given a motivation
   photo. The layout and photo survive restarts and updates.
 
@@ -308,8 +345,11 @@ Progress combines four views:
   volume, an isolated-weight tag, all-time best, latest, sets logged, the graph and the optional AI
   Monthly Summary.
 
-Session History starts collapsed and pages five logged days at a time. Warm-ups carry a `WARM` badge;
-drop sets stay under their parent branch.
+Session History starts collapsed and pages five logged days at a time. Individual workouts open on
+their own full-screen route inside Progress. A date filter covers All dates, On, After and Before a
+chosen day, and an exercise filter narrows to movements that appear in logged history. Set rows use a
+two-line work/load layout; warm-ups carry a `WARM` badge, drop sets stay under their `D1`/`D2` branch
+and supersets show compact `A1`/`A2` paperclip badges.
 
 <p align="center">
   <img src="docs/screenshots/5.0.0/16-progress.png" width="45%" alt="The activity heat map and body-weight timeline" />
@@ -412,7 +452,7 @@ as such and never as the athlete's own.
 - API keys, the profile picture and exercise media are never included; the destination keeps its own
   keys and picture.
 
-Data schema **6** is current. Archives from v1 through v5 migrate forward deterministically.
+Data schema **7** is current. Archives from v1 through v6 migrate forward deterministically.
 
 <p align="center">
   <img src="docs/screenshots/5.0.0/26-backup.png" width="45%" alt="Portable backup export and import" />
@@ -519,23 +559,24 @@ Android still asks for install permission. No token or credential is built into 
 | | |
 |---|---|
 | Package | `com.aistudio.fitness.ironpulse` |
-| Version | **5.0.1 (14)** |
+| Version | **5.1.0 (15)** |
 | Minimum Android | 7.1 (API 24) |
 | Target / compile SDK | 36 |
-| Database | Room 19 |
-| Backup data schema | 6 |
+| Database | Room 20 |
+| Backup data schema | 7 |
 | Signing | The same production key as every public release |
 
 - **Public 4.4.0 installs upgrade in place.** The package and signing certificate are unchanged, so
-  Android keeps the database. Room migrates 15 → 19, each legacy multi-day routine becomes a
+  Android keeps the database. Room migrates 15 → 20, each legacy multi-day routine becomes a
   Schedule plus standalone Routines, and completed sessions and sets are preserved.
-- **Public 5.0.0 installs upgrade in place to 5.0.1.** No schema or backup-format change; the update
-  only replaces the onboarding/backup code.
-- **Backups from 4.4.0 and earlier** import through the v1-v6 migration chain. A schema-2 4.4.0
-  archive was restored into a fresh 5.0.1 install during release validation, including its logged
-  sets and active Schedule.
+- **Public 5.0.0 and 5.0.1 installs upgrade in place to 5.1.0.** Room migrates 19 → 20 and the
+  `.ironpulse` data schema moves 6 → 7, adding nullable effort and superset fields; existing rows
+  stay ungrouped and effort-free. No other database or backup migration is involved.
+- **Backups from 4.4.0 and earlier** import through the v1-v7 migration chain. A schema-2 4.4.0
+  archive was restored into a fresh install during release validation, including its logged sets
+  and active Schedule.
 - **Internal debug builds 13-25** were never public and were debug-signed. A device carrying one must
-  uninstall it before installing the release-signed 5.0.1. Public 4.4.0 and 5.0.0 are unaffected.
+  uninstall it before installing a release-signed build. Public installs are unaffected.
 - **Not carried in backups:** API keys, the profile picture, exercise media, per-exercise rest
   defaults and the launcher-icon choice.
 
@@ -583,7 +624,7 @@ Never commit the keystore, a password file, `.env`, `local.properties` or a sign
 ### Tests and lint
 
 ```bash
-./gradlew testDebugUnitTest     # 908 JVM/Robolectric tests across 120 suites
+./gradlew testDebugUnitTest     # 964 JVM/Robolectric tests, 0 failures, 1 skipped
 ./gradlew lintDebug             # lint gates the build
 ```
 
@@ -592,12 +633,13 @@ Never commit the keystore, a password file, `.env`, `local.properties` or a sign
 ## Download
 
 Prebuilt APKs are attached to the
-[releases page](https://github.com/JuggyBob/IronPulse/releases). The 5.0.1 release also carries its
+[releases page](https://github.com/JuggyBob/IronPulse/releases). The 5.1.0 release also carries its
 SHA-256 file and source/documentation archives.
 
 | Version | File |
 |---|---|
-| **v5.0.1** | [`IronPulse-5.0.1.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v5.0.1/IronPulse-5.0.1.apk) |
+| **v5.1.0** | [`IronPulse-5.1.0.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v5.1.0/IronPulse-5.1.0.apk) |
+| v5.0.1 | [`IronPulse-5.0.1.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v5.0.1/IronPulse-5.0.1.apk) |
 | v5.0.0 | [`IronPulse-5.0.0.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v5.0.0/IronPulse-5.0.0.apk) |
 | v4.4.0 | [`IronPulse-4.4.0.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.4.0/IronPulse-4.4.0.apk) |
 | v4.3.0 | [`IronPulse4.3.0-release.apk`](https://github.com/JuggyBob/IronPulse/releases/download/v4.3.0/IronPulse4.3.0-release.apk) |
@@ -619,7 +661,7 @@ APK you did not build.
 | **Language** | Kotlin 2.2 (100%) |
 | **UI** | Jetpack Compose + Material 3, portrait-only |
 | **Architecture** | MVVM: Compose screens → `MainViewModel` facade → nine feature controllers / repositories → Room DAOs |
-| **Database** | Room (SQLite), schema 19, versioned migrations |
+| **Database** | Room (SQLite), schema 20, versioned migrations |
 | **Preferences** | DataStore |
 | **Backup format** | `.ironpulse` ZIP with manifest, format/data-schema versions, SHA-256 checksums and forward migrations |
 | **Async** | Coroutines + Flow |
@@ -654,9 +696,9 @@ IronPulse/
 │   │   │   ├── util/                   # Coil loaders, media, timers, launcher icons
 │   │   │   └── widget/                 # Android launcher widgets
 │   │   └── res/                        # Icons, strings, themes, backup rules
-│   └── src/test/                       # 906 JVM tests (JUnit + Robolectric)
+│   └── src/test/                       # 964 JVM tests (JUnit + Robolectric)
 ├── docs/
-│   ├── screenshots/5.0.0/              # Final 5.0 screenshots used below and in the README
+│   ├── screenshots/5.1.0,5.0.0/        # Final 5.1 and 5.0 screenshots used in the READMEs
 │   ├── ARCHITECTURE.md
 │   ├── DATABASE.md
 │   ├── BACKUP_FORMAT.md

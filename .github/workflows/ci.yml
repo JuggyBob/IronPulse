@@ -58,6 +58,9 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Run unit tests
         # Runs Roborazzi in compare mode, which is why the reference screenshots in
         # app/src/test/screenshots are committed rather than gitignored: without them a clean
@@ -86,6 +89,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Run Android Lint
         run: ./gradlew lintDebug --stacktrace

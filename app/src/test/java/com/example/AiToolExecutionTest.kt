@@ -490,15 +490,20 @@ class AiToolExecutionTest {
         provider: AiProvider,
         maxRounds: Int = 4,
         maxToolCalls: Int = 12,
+        maxCallsPerTurn: Int = 6,
         requestTimeoutMillis: Long = 5_000,
-        maxRetries: Int = 1
+        toolTimeoutMillis: Long = 10_000,
+        maxRetries: Int = 1,
+        dispatcher: AiToolDispatcher = rawDispatcher()
     ) = ExplicitlyAllowedEngine(
         AiConversationEngine(
-            dispatcher = rawDispatcher(),
+            dispatcher = dispatcher,
             providerResolver = { provider },
             maxRounds = maxRounds,
             maxToolCalls = maxToolCalls,
+            maxCallsPerTurn = maxCallsPerTurn,
             requestTimeoutMillis = requestTimeoutMillis,
+            toolTimeoutMillis = toolTimeoutMillis,
             maxRetries = maxRetries
         )
     )
@@ -534,6 +539,77 @@ class AiToolExecutionTest {
         assertEquals(AiRole.TOOL, followUp.last().role)
         assertEquals("call_1", followUp.last().toolResults.single().callId)
         assertTrue(followUp.last().toolResults.single().contentJson.contains("Barbell Bench Press"))
+    }
+
+    @Test
+    fun `native parallel calls are capped per turn before the transcript grows`() = runBlocking {
+        val provider = ScriptedProvider { _, callNumber ->
+            if (callNumber == 1) {
+                Result.success(
+                    AiResponse(
+                        text = "",
+                        toolCalls = (1..10).map { index ->
+                            call(
+                                AiToolCatalog.LIST_ROUTINES,
+                                """{"limit":$index}""",
+                                id = "call_$index"
+                            )
+                        }
+                    )
+                )
+            } else {
+                Result.success(AiResponse(text = "Done."))
+            }
+        }
+
+        val result = engine(provider).run(
+            configuration = configuration(),
+            systemInstruction = "coach",
+            messages = listOf(AiMessage(AiRole.USER, "List routines"))
+        )
+
+        assertEquals(10, result.toolCallsRequested)
+        assertEquals(6, result.toolCallsExecuted)
+        assertEquals(6, provider.requests[1].messages[1].toolCalls.size)
+        assertEquals("Done.", result.text)
+    }
+
+    @Test
+    fun `a slow tool is cancelled by its own deadline and reported as tool_timeout`() = runBlocking {
+        val slowData = object : AiDataAccess by FakeDataAccess(
+            exercises,
+            listOf(pushRoutine, pullRoutine)
+        ) {
+            override suspend fun listRoutines(): List<SavedRoutine> {
+                delay(250)
+                return emptyList()
+            }
+        }
+        val provider = ScriptedProvider { _, callNumber ->
+            if (callNumber == 1) {
+                Result.success(nativeCall(AiToolCatalog.LIST_ROUTINES, """{"limit":5}"""))
+            } else {
+                Result.success(AiResponse(text = "I could not read the routines in time."))
+            }
+        }
+
+        val result = engine(
+            provider = provider,
+            toolTimeoutMillis = 25,
+            dispatcher = rawDispatcher(slowData)
+        ).run(
+            configuration = configuration(),
+            systemInstruction = "coach",
+            messages = listOf(AiMessage(AiRole.USER, "List routines"))
+        )
+
+        assertEquals(1, result.toolTimeouts)
+        assertEquals(1, result.toolCallsExecuted)
+        assertTrue(
+            provider.requests[1].messages.last().toolResults.single().contentJson
+                .contains("tool_timeout")
+        )
+        assertEquals("I could not read the routines in time.", result.text)
     }
 
     @Test
@@ -746,6 +822,56 @@ class AiToolExecutionTest {
         assertEquals(5.0, drop.getDouble("addedWeightKg"), 0.001)
         assertEquals(60, drop.getInt("holdSeconds"))
         assertEquals(0.0, drop.getDouble("distanceKm"), 0.001)
+    }
+
+    @Test
+    fun `new routine proposals carry effort and only valid adjacent supersets`() = runBlocking {
+        val result = dispatcher().dispatch(
+            call(
+                AiToolCatalog.PROPOSE_NEW_ROUTINE,
+                """
+                {
+                  "routineName": "Superset Day",
+                  "goal": "Hypertrophy",
+                  "days": [
+                    {
+                      "weekday": 1,
+                      "focus": "Push",
+                      "exercises": [
+                        {"name": "Pull-up", "sets": 3, "reps": 8,
+                         "targetEffortRpe": 8, "supersetGroupId": "ss-a"},
+                        {"name": "Barbell Bench Press", "sets": 3, "reps": 8,
+                         "supersetGroupId": "ss-a"},
+                        {"name": "Plank", "sets": 3, "reps": 8,
+                         "supersetGroupId": "ss-cross-day"}
+                      ]
+                    },
+                    {
+                      "weekday": 3,
+                      "focus": "Push",
+                      "exercises": [
+                        {"name": "Dumbbell Bench Press", "sets": 3, "reps": 10,
+                         "supersetGroupId": "ss-cross-day"}
+                      ]
+                    }
+                  ]
+                }
+                """.trimIndent()
+            )
+        )
+
+        assertFalse(result.isError)
+        val days = body(result).getJSONObject("proposal").getJSONArray("days")
+        val dayOne = days.getJSONObject(0).getJSONArray("exercises")
+        assertEquals(8.0, dayOne.getJSONObject(0).getDouble("targetEffortRpe"), 0.001)
+        assertEquals("ss-a", dayOne.getJSONObject(0).getString("supersetGroupId"))
+        assertEquals("ss-a", dayOne.getJSONObject(1).getString("supersetGroupId"))
+        // A group that spans two weekdays is not a superset and must not be shown as one.
+        assertFalse(dayOne.getJSONObject(2).has("supersetGroupId"))
+        assertFalse(
+            days.getJSONObject(1).getJSONArray("exercises").getJSONObject(0)
+                .has("supersetGroupId")
+        )
     }
 
     @Test

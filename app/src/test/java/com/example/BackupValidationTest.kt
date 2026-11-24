@@ -97,6 +97,51 @@ class BackupValidationTest {
     }
 
     @Test
+    fun `an out-of-range effort value is rejected`() {
+        val snapshot = BackupTestFixtures.sampleSnapshot()
+        val broken = snapshot.copy(
+            sets = snapshot.sets.mapIndexed { index, set ->
+                if (index == 0) set.copy(effortRpe = 11.0) else set
+            }
+        )
+        expect(BackupErrorCode.INVALID_DATA) { BackupValidator.validate(broken) }
+    }
+
+    @Test
+    fun `a group with three exercises is rejected`() {
+        val snapshot = BackupTestFixtures.sampleSnapshot()
+        val grouped = snapshot.copy(
+            sets = listOf(
+                snapshot.sets[0].copy(sessionId = 10L, exerciseId = 9001L, supersetGroupId = "ss-a"),
+                snapshot.sets[1].copy(sessionId = 10L, exerciseId = 1001L, supersetGroupId = "ss-a"),
+                snapshot.sets[2].copy(sessionId = 10L, exerciseId = 1002L, supersetGroupId = "ss-a")
+            )
+        )
+        expect(BackupErrorCode.INVALID_DATA) { BackupValidator.validate(grouped) }
+    }
+
+    @Test
+    fun `a malformed superset id is rejected`() {
+        val snapshot = BackupTestFixtures.sampleSnapshot()
+        val broken = snapshot.copy(
+            sets = listOf(
+                snapshot.sets[0].copy(supersetGroupId = "not a group id!"),
+                snapshot.sets[1].copy(supersetGroupId = "not a group id!")
+            )
+        )
+        expect(BackupErrorCode.INVALID_DATA) { BackupValidator.validate(broken) }
+    }
+
+    @Test
+    fun `an unknown effort display is rejected`() {
+        val snapshot = BackupTestFixtures.sampleSnapshot()
+        val broken = snapshot.copy(
+            preferences = snapshot.preferences.copy(effortDisplay = "BOGUS")
+        )
+        expect(BackupErrorCode.INVALID_DATA) { BackupValidator.validate(broken) }
+    }
+
+    @Test
     fun `an AI endpoint with embedded credentials is rejected`() {
         val snapshot = BackupTestFixtures.sampleSnapshot()
         val ai = snapshot.preferences.ai!!.copy(

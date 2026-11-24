@@ -394,6 +394,19 @@ interface WorkoutDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSession(session: WorkoutSession): Long
 
+    /**
+     * Saves a finished workout and its sets atomically. Superset and drop-set relationships span
+     * rows, so a crash between the two inserts must not leave a session without its sets.
+     */
+    @androidx.room.Transaction
+    suspend fun insertSessionWithSets(session: WorkoutSession, sets: List<LoggedSet>): Long {
+        val sessionId = insertSession(session)
+        if (sets.isNotEmpty()) {
+            insertSets(sets.map { it.copy(sessionId = sessionId) })
+        }
+        return sessionId
+    }
+
     @Delete
     suspend fun deleteSession(session: WorkoutSession)
 
@@ -439,6 +452,10 @@ interface WorkoutDao {
 
     @Query("SELECT * FROM logged_sets WHERE exerciseName = :exerciseName ORDER BY timestamp ASC")
     fun getSetsForExercise(exerciseName: String): Flow<List<LoggedSet>>
+
+    /** Session membership for the History exercise filter; no set payload is needed there. */
+    @Query("SELECT DISTINCT sessionId FROM logged_sets WHERE exerciseName = :exerciseName")
+    fun getSessionIdsForExercise(exerciseName: String): Flow<List<Long>>
 
     @Query("SELECT * FROM logged_sets WHERE exerciseName = :exerciseName ORDER BY timestamp ASC, id ASC")
     suspend fun getSetsForExerciseList(exerciseName: String): List<LoggedSet>
@@ -784,6 +801,15 @@ interface ChatDao {
     /** Changes only the approval state of one proposal message. */
     @Query("UPDATE chat_messages SET status = :status WHERE id = :id")
     suspend fun updateMessageStatus(id: String, status: String)
+
+    /**
+     * Atomically consumes a proposal card.
+     *
+     * Returns 1 only for the caller that moved it out of [expectedStatus]; a second approval tap
+     * sees 0 and must not apply anything.
+     */
+    @Query("UPDATE chat_messages SET status = :status WHERE id = :id AND status = :expectedStatus")
+    suspend fun updateMessageStatusIf(id: String, status: String, expectedStatus: String): Int
 
     /** Permission revocation invalidates every still-pending proposal. */
     @Query(

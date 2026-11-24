@@ -73,6 +73,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -132,6 +133,8 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.data.model.CustomRestTimer
 import com.example.data.model.DistanceFormat
 import com.example.data.model.DropSetRules
+import com.example.data.model.EffortDisplay
+import com.example.data.model.EffortScale
 import com.example.data.model.Exercise
 import com.example.data.model.ExerciseMedia
 import com.example.data.model.ExerciseField
@@ -141,6 +144,7 @@ import com.example.data.model.LoggedSet
 import com.example.data.model.MusclePart
 import com.example.data.model.MusclePartResolver
 import com.example.data.model.RoutineExerciseItem
+import com.example.data.model.SupersetRules
 import com.example.data.model.RemovedActiveExercise
 import com.example.data.model.RoutineParser
 import com.example.data.model.WeightConversion
@@ -263,12 +267,35 @@ fun ActiveWorkoutInterface(
      * not reset the exercise; the Routine screen lets the component own it.
      */
     selectedExerciseId: Long? = null,
-    onSelectedExerciseChange: (Long) -> Unit = {}
+    onSelectedExerciseChange: (Long) -> Unit = {},
+    effortDisplay: EffortDisplay = EffortDisplay.RIR,
+    /** Returns true when the pair was accepted; hosts persist routine-origin pairs. */
+    onLinkSuperset: (Long, Int) -> Boolean = { _, _ -> false },
+    onUnlinkSuperset: (Long) -> Boolean = { false }
 ) {
+    var supersetDialogExerciseId by rememberSaveable(workoutKey) { mutableStateOf(0L) }
     var internalSelectedExerciseId by rememberSaveable(workoutKey) {
         mutableStateOf(exercises.firstOrNull()?.id ?: 0L)
     }
     var expandedSetKey by rememberSaveable(workoutKey) { mutableStateOf<String?>(null) }
+
+    fun requestSuperset(exercise: Exercise) {
+        if (exercises.size <= 1) return
+        val index = exercises.indexOfFirst { it.id == exercise.id }
+        if (index < 0) return
+        val linked = SupersetRules.groupIdForExercise(sets, exercise.id) != null
+        // At the ends there is only one valid direction: act immediately instead of opening a
+        // one-option dialog. A linked exercise still opens the dialog so it can be unlinked.
+        if (!linked && index == 0) {
+            onLinkSuperset(exercise.id, 1)
+            return
+        }
+        if (!linked && index == exercises.lastIndex) {
+            onLinkSuperset(exercise.id, -1)
+            return
+        }
+        supersetDialogExerciseId = exercise.id
+    }
     var showBodyDialog by rememberSaveable(workoutKey) { mutableStateOf(false) }
     var showExercisePicker by rememberSaveable(workoutKey) { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -403,6 +430,12 @@ fun ActiveWorkoutInterface(
                 exercises = exercises,
                 selectedExerciseId = selectedExercise.id,
                 completedExerciseIds = completedExerciseIds,
+                linkedExerciseIds = exercises.filter {
+                    SupersetRules.groupIdForExercise(sets, it.id) != null
+                }.map { it.id }.toSet(),
+                supersetGroupByExercise = exercises.mapNotNull { exercise ->
+                    SupersetRules.groupIdForExercise(sets, exercise.id)?.let { exercise.id to it }
+                }.toMap(),
                 compact = compact,
                 modifier = Modifier.weight(1f),
                 onSelect = ::selectExercise,
@@ -438,7 +471,10 @@ fun ActiveWorkoutInterface(
                     exercise = exercise,
                     routineItem = exerciseRoutineItem,
                     onShowDetails = { onShowDetails(exercise) },
-                    compact = compact
+                    compact = compact,
+                    isSuperset = SupersetRules.groupIdForExercise(sets, exercise.id) != null,
+                    showSupersetAction = exercises.size > 1,
+                    onSupersetClick = { requestSuperset(exercise) }
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Column(
@@ -451,6 +487,7 @@ fun ActiveWorkoutInterface(
                         sets = exerciseSets,
                         routineItem = exerciseRoutineItem,
                         unit = unit,
+                        effortDisplay = effortDisplay,
                         expandedSetKey = expandedSetKey,
                         onToggleExpanded = { key ->
                             expandedSetKey = if (expandedSetKey == key) null else key
@@ -472,7 +509,10 @@ fun ActiveWorkoutInterface(
                     exercise = exercise,
                     routineItem = exerciseRoutineItem,
                     onShowDetails = { onShowDetails(exercise) },
-                    compact = compact
+                    compact = compact,
+                    isSuperset = SupersetRules.groupIdForExercise(sets, exercise.id) != null,
+                    showSupersetAction = exercises.size > 1,
+                    onSupersetClick = { requestSuperset(exercise) }
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 ExerciseSetRows(
@@ -491,7 +531,8 @@ fun ActiveWorkoutInterface(
                     onToggleComplete = onToggleSetComplete,
                     onDeleteExercise = { requestExerciseRemoval(exercise) },
                     bottomPadding = bottomPadding,
-                    reducedMotion = reducedMotion
+                    reducedMotion = reducedMotion,
+                    effortDisplay = effortDisplay
                 )
             }
         }
@@ -568,6 +609,155 @@ fun ActiveWorkoutInterface(
             onDismiss = { showBodyDialog = false }
         )
     }
+
+    if (supersetDialogExerciseId != 0L) {
+        SupersetDialog(
+            exerciseId = supersetDialogExerciseId,
+            exercises = exercises,
+            sets = sets,
+            routineItems = routineItems,
+            onLink = { id, direction ->
+                if (onLinkSuperset(id, direction)) supersetDialogExerciseId = 0L
+            },
+            onUnlink = { id ->
+                if (onUnlinkSuperset(id)) supersetDialogExerciseId = 0L
+            },
+            onDismiss = { supersetDialogExerciseId = 0L }
+        )
+    }
+}
+
+@Composable
+private fun SupersetDialog(
+    exerciseId: Long,
+    exercises: List<Exercise>,
+    sets: List<LoggedSet>,
+    routineItems: List<RoutineExerciseItem>,
+    onLink: (Long, Int) -> Unit,
+    onUnlink: (Long) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val index = exercises.indexOfFirst { it.id == exerciseId }
+    if (index < 0) return
+    val linked = SupersetRules.groupIdForExercise(sets, exerciseId) != null
+    val parallelItems = routineItems.size == exercises.size
+    val canLinkPrevious = if (index <= 0) false else if (parallelItems) {
+        SupersetRules.canLink(routineItems, index, -1)
+    } else {
+        SupersetRules.canLinkSets(sets, exerciseId, exercises[index - 1].id)
+    }
+    val canLinkNext = if (index >= exercises.lastIndex) false else if (parallelItems) {
+        SupersetRules.canLink(routineItems, index, 1)
+    } else {
+        SupersetRules.canLinkSets(sets, exerciseId, exercises[index + 1].id)
+    }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            color = DarkSurface,
+            shape = RoundedCornerShape(16.dp),
+            border = BorderStroke(1.dp, DarkBorder)
+        ) {
+            Column(modifier = Modifier.padding(20.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Superset",
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            color = TextWhite
+                        )
+                        Text(
+                            text = "Link this exercise with an adjacent exercise. Each keeps its own sets.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = TextMuted
+                        )
+                    }
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close superset dialog",
+                            tint = TextMuted,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(14.dp))
+                if (canLinkPrevious && canLinkNext) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        SupersetAction(
+                            "Link previous",
+                            modifier = Modifier.weight(1f)
+                        ) { onLink(exerciseId, -1) }
+                        SupersetAction(
+                            "Link following",
+                            modifier = Modifier.weight(1f)
+                        ) { onLink(exerciseId, 1) }
+                    }
+                } else {
+                    if (canLinkPrevious) {
+                        SupersetAction(
+                            "Link previous",
+                            modifier = Modifier.fillMaxWidth()
+                        ) { onLink(exerciseId, -1) }
+                    }
+                    if (canLinkNext) {
+                        SupersetAction(
+                            "Link following",
+                            modifier = Modifier.fillMaxWidth()
+                        ) { onLink(exerciseId, 1) }
+                    }
+                }
+                if (linked) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    SupersetAction(
+                        "Unlink superset",
+                        modifier = Modifier.fillMaxWidth(),
+                        accent = CoralOrange
+                    ) {
+                        onUnlink(exerciseId)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SupersetAction(
+    label: String,
+    modifier: Modifier = Modifier,
+    accent: Color = ElectricCyan,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = modifier,
+        color = accent.copy(alpha = 0.12f),
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.55f))
+    ) {
+        Box(
+            modifier = Modifier
+                .clickable(onClick = onClick)
+                .padding(horizontal = 10.dp, vertical = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = accent,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
 }
 
 /** Stable Compose key. A drop set shares its parent's set number, so the UID is the identity. */
@@ -588,6 +778,8 @@ private fun WorkoutExerciseSelector(
     exercises: List<Exercise>,
     selectedExerciseId: Long,
     completedExerciseIds: Set<Long>,
+    linkedExerciseIds: Set<Long> = emptySet(),
+    supersetGroupByExercise: Map<Long, String> = emptyMap(),
     compact: Boolean,
     modifier: Modifier = Modifier,
     onSelect: (Long) -> Unit,
@@ -598,6 +790,7 @@ private fun WorkoutExerciseSelector(
     val scrollState = rememberScrollState()
     var dragFrom by remember { mutableStateOf(-1) }
     var dragTarget by remember { mutableStateOf(-1) }
+    var dragBlockSize by remember { mutableStateOf(1) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
     var draggingId by remember { mutableStateOf<Long?>(null) }
     val ids = exercises.map { it.id }
@@ -605,6 +798,7 @@ private fun WorkoutExerciseSelector(
     fun resetDrag() {
         dragFrom = -1
         dragTarget = -1
+        dragBlockSize = 1
         dragOffset = 0f
         draggingId = null
     }
@@ -624,23 +818,37 @@ private fun WorkoutExerciseSelector(
     Row(
         modifier = modifier
             .horizontalScroll(scrollState)
-            .pointerInput(ids) {
+            .pointerInput(ids, supersetGroupByExercise) {
                 detectDragGesturesAfterLongPress(
                     onDragStart = { offset ->
                         if (exercises.isNotEmpty()) {
                             val index = (offset.x / stepPx).roundToInt()
                                 .coerceIn(0, exercises.lastIndex)
-                            dragFrom = index
-                            dragTarget = index
+                            val groupId = supersetGroupByExercise[exercises[index].id]
+                            val partner = groupId?.let { group ->
+                                exercises.indexOfFirst {
+                                    it.id != exercises[index].id &&
+                                        supersetGroupByExercise[it.id] == group
+                                }
+                            }?.takeIf { it >= 0 }
+                            val start = if (partner == null) index else minOf(index, partner)
+                            val size = if (partner == null) 1 else 2
+                            dragFrom = start
+                            dragTarget = start
+                            dragBlockSize = size
                             dragOffset = 0f
                             draggingId = exercises[index].id
                         }
                     },
                     onDragEnd = {
                         val from = dragFrom
-                        val to = dragTarget
+                        val size = dragBlockSize
+                        val targetStart = dragTarget
                         resetDrag()
-                        if (from in exercises.indices && to in exercises.indices && from != to) {
+                        if (from >= 0 && targetStart >= 0 && from != targetStart) {
+                            // The controllers insert a moved block before `to`; when moving later,
+                            // pass the last slot the block will occupy.
+                            val to = if (targetStart > from) targetStart + size - 1 else targetStart
                             onMove(from, to)
                         }
                     },
@@ -650,7 +858,7 @@ private fun WorkoutExerciseSelector(
                         dragOffset += amount.x
                         if (dragFrom >= 0) {
                             dragTarget = (dragFrom + (dragOffset / stepPx).roundToInt())
-                                .coerceIn(0, exercises.lastIndex)
+                                .coerceIn(0, (exercises.lastIndex - dragBlockSize + 1).coerceAtLeast(0))
                         }
                     }
                 )
@@ -659,12 +867,14 @@ private fun WorkoutExerciseSelector(
         verticalAlignment = Alignment.CenterVertically
     ) {
         exercises.forEachIndexed { index, exercise ->
-            val isDragged = exercise.id == draggingId
+            val isDragged = dragFrom >= 0 && index in dragFrom until (dragFrom + dragBlockSize)
             val shift = when {
                 dragFrom < 0 || dragTarget < 0 -> 0f
                 isDragged -> 0f
-                dragFrom < dragTarget && index in (dragFrom + 1)..dragTarget -> -stepPx
-                dragFrom > dragTarget && index in dragTarget until dragFrom -> stepPx
+                dragTarget > dragFrom && index in (dragFrom + dragBlockSize)..(dragTarget + dragBlockSize - 1) ->
+                    -dragBlockSize * stepPx
+                dragTarget < dragFrom && index in dragTarget until dragFrom ->
+                    dragBlockSize * stepPx
                 else -> 0f
             }
             val animatedShift by animateFloatAsState(
@@ -676,8 +886,8 @@ private fun WorkoutExerciseSelector(
                 Box(
                     modifier = Modifier
                         .zIndex(if (isDragged) 3f else 0f)
-                        // The dragged circle becomes a smaller dot under the finger; the others
-                        // slide into the gap rather than snapping.
+                        // Every member of the superset block follows the finger as one unit; the
+                        // other chips open a block-sized gap.
                         .graphicsLayer {
                             translationX = if (isDragged) dragOffset else animatedShift
                             if (isDragged) {
@@ -691,6 +901,7 @@ private fun WorkoutExerciseSelector(
                         number = index + 1,
                         selected = exercise.id == selectedExerciseId,
                         completed = exercise.id in completedExerciseIds,
+                        linked = exercise.id in linkedExerciseIds,
                         compact = compact,
                         onClick = { onSelect(exercise.id) }
                     )
@@ -700,6 +911,38 @@ private fun WorkoutExerciseSelector(
     }
 }
 
+
+@Composable
+private fun SupersetIconButton(
+    linked: Boolean,
+    onClick: () -> Unit,
+    testTag: String
+) {
+    Box(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .background(if (linked) ElectricCyan.copy(alpha = 0.16f) else DarkSurfaceVariant)
+            .border(
+                1.dp,
+                if (linked) ElectricCyan.copy(alpha = 0.65f) else DarkBorder,
+                CircleShape
+            )
+            .clickable(onClick = onClick)
+            .semantics {
+                contentDescription = if (linked) "Manage superset" else "Link superset"
+            }
+            .testTag(testTag),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Default.AttachFile,
+            contentDescription = null,
+            tint = if (linked) ElectricCyan else TextMuted,
+            modifier = Modifier.size(16.dp)
+        )
+    }
+}
 
 @Composable
 private fun AddExerciseCircleButton(
@@ -731,6 +974,7 @@ private fun ExerciseNumberChip(
     number: Int,
     selected: Boolean,
     completed: Boolean = false,
+    linked: Boolean = false,
     compact: Boolean = false,
     onClick: () -> Unit
 ) {
@@ -749,6 +993,7 @@ private fun ExerciseNumberChip(
         targetValue = when {
             completed -> MintGreen
             selected -> ElectricCyan
+            linked -> ElectricCyan
             else -> DarkBorder
         },
         animationSpec = tween(420),
@@ -785,10 +1030,10 @@ private fun ExerciseNumberChip(
             }
             .clip(CircleShape)
             .background(background)
-            .border(1.dp, borderColor, CircleShape)
+            .border(if (linked) 2.5.dp else 1.dp, borderColor, CircleShape)
             .clickable(onClick = onClick)
             .semantics {
-                contentDescription = "Exercise $number"
+                contentDescription = if (linked) "Superset exercise $number" else "Exercise $number"
                 stateDescription = when {
                     completed -> "Completed"
                     selected -> "Selected"
@@ -843,7 +1088,10 @@ private fun ExerciseOverview(
     exercise: Exercise,
     routineItem: RoutineExerciseItem?,
     onShowDetails: () -> Unit,
-    compact: Boolean = false
+    compact: Boolean = false,
+    isSuperset: Boolean = false,
+    showSupersetAction: Boolean = true,
+    onSupersetClick: () -> Unit = {}
 ) {
     val hasMedia = ExerciseMedia.resolve(
         exercise.customMediaUri,
@@ -904,10 +1152,20 @@ private fun ExerciseOverview(
                             .testTag("active_exercise_name_${exercise.id}")
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    ExerciseTypeTag(
-                        exerciseType = exercise.exerciseType,
-                        modifier = Modifier.widthIn(max = if (compact) 118.dp else 142.dp)
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (showSupersetAction) {
+                            SupersetIconButton(
+                                linked = isSuperset,
+                                onClick = onSupersetClick,
+                                testTag = "active_superset_${exercise.id}"
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                        }
+                        ExerciseTypeTag(
+                            exerciseType = exercise.exerciseType,
+                            modifier = Modifier.widthIn(max = if (compact) 100.dp else 124.dp)
+                        )
+                    }
                 }
                 if (metadata.isNotBlank()) {
                     Spacer(modifier = Modifier.height(2.dp))
@@ -1056,6 +1314,8 @@ private fun ActiveWorkoutSetRow(
     exercise: Exercise,
     unit: WeightUnit,
     inheritedRest: Int,
+    effortDisplay: EffortDisplay,
+    effortRepBased: Boolean,
     expanded: Boolean,
     isDrop: Boolean = false,
     onToggleExpanded: () -> Unit,
@@ -1345,6 +1605,11 @@ private fun ActiveWorkoutSetRow(
                         },
                         onWarmupToggle = {
                             publish(working.copy(isWarmup = !working.isWarmup))
+                        },
+                        effortDisplay = effortDisplay,
+                        effortRepBased = effortRepBased,
+                        onEffortChange = { rpe ->
+                            publish(working.copy(effortRpe = rpe))
                         }
                     )
                 }
@@ -1469,7 +1734,10 @@ private fun SetOptionsPanel(
     onRestTextChange: (String) -> Unit,
     onRestStep: (Int) -> Unit,
     onResetRest: () -> Unit,
-    onWarmupToggle: () -> Unit
+    onWarmupToggle: () -> Unit,
+    effortDisplay: EffortDisplay,
+    effortRepBased: Boolean,
+    onEffortChange: (Double?) -> Unit
 ) {
     BoxWithConstraints(
         modifier = Modifier
@@ -1496,20 +1764,101 @@ private fun SetOptionsPanel(
                 modifier = modifier
             )
         }
-        if (stack) {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (stack) {
                 restControl(Modifier.fillMaxWidth())
                 warmup(Modifier.fillMaxWidth())
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    restControl(Modifier.weight(1f))
+                    warmup(Modifier.weight(1f))
+                }
             }
-        } else {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.Top
-            ) {
-                restControl(Modifier.weight(1f))
-                warmup(Modifier.weight(1f))
-            }
+            EffortForSetControl(
+                rpe = set.effortRpe,
+                display = effortDisplay,
+                repetitionBased = effortRepBased,
+                onChange = onEffortChange,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
+private fun EffortForSetControl(
+    rpe: Double?,
+    display: EffortDisplay,
+    repetitionBased: Boolean,
+    onChange: (Double?) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.testTag("active_set_effort_control")) {
+        Text(
+            text = "Effort for this set",
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+            color = TextWhite,
+            maxLines = 1,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(42.dp)
+                .background(DarkBg, RoundedCornerShape(9.dp))
+                .border(1.dp, DarkBorder, RoundedCornerShape(9.dp))
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "−",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                color = ElectricCyan,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable {
+                        onChange(EffortScale.step(rpe, display, repetitionBased, -1))
+                    }
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            )
+            Text(
+                text = EffortScale.display(rpe, display, repetitionBased),
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = if (rpe == null) TextMuted else TextWhite,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = "+",
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                color = ElectricCyan,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable {
+                        onChange(EffortScale.step(rpe, display, repetitionBased, 1))
+                    }
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            )
+        }
+        if (rpe != null) {
+            Text(
+                text = "Clear effort",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(6.dp))
+                    .clickable { onChange(null) }
+                    .padding(vertical = 4.dp)
+            )
         }
     }
 }
@@ -1907,6 +2256,7 @@ private fun ExerciseSetRows(
     sets: List<LoggedSet>,
     routineItem: RoutineExerciseItem?,
     unit: WeightUnit,
+    effortDisplay: EffortDisplay,
     expandedSetKey: String?,
     onToggleExpanded: (String) -> Unit,
     onUpdateSet: (LoggedSet, LoggedSet) -> Unit,
@@ -2004,6 +2354,8 @@ private fun ExerciseSetRows(
                                 exercise = exercise,
                                 unit = unit,
                                 inheritedRest = inheritedRest,
+                                effortDisplay = effortDisplay,
+                                effortRepBased = EffortScale.supportsRir(exercise),
                                 expanded = expandedSetKey == stableKey,
                                 isDrop = false,
                                 onToggleExpanded = { onToggleExpanded(stableKey) },
@@ -2080,6 +2432,8 @@ private fun ExerciseSetRows(
                                                                 exercise = exercise,
                                                                 unit = unit,
                                                                 inheritedRest = inheritedRest,
+                                                                effortDisplay = effortDisplay,
+                                                                effortRepBased = EffortScale.supportsRir(exercise),
                                                                 expanded = expandedSetKey == childKey,
                                                                 isDrop = true,
                                                                 onToggleExpanded = {

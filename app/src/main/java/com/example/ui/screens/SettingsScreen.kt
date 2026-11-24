@@ -150,6 +150,7 @@ import com.example.data.ai.AiEndpointValidator
 import com.example.data.ai.AiModelDescriptor
 import com.example.data.ai.AiProviderId
 import com.example.data.ai.AiToolMode
+import com.example.data.model.EffortDisplay
 import com.example.data.model.UserProfile
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.ui.components.AccentColorPickerDialog
@@ -3411,6 +3412,58 @@ private fun UserPreferencesSettingsCard(
                     ) {
                         Text(
                             text = label,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            ),
+                            color = if (isSelected) OnAccent else TextMuted
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
+            HorizontalDivider(color = DarkBorder)
+            Spacer(modifier = Modifier.height(2.dp))
+
+            Text(
+                text = "Effort display",
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = TextWhite
+            )
+            Text(
+                text = "RIR counts reps left in reserve; RPE is a 6–10 perceived effort. " +
+                    "Changing this only changes the label — recorded values stay the same.",
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DarkBg, RoundedCornerShape(10.dp))
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                listOf(EffortDisplay.RIR to "RIR", EffortDisplay.RPE to "RPE").forEach { (option, label) ->
+                    val isSelected = appSettings.effortDisplay == option
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .background(
+                                if (isSelected) ElectricCyan else Color.Transparent,
+                                RoundedCornerShape(8.dp)
+                            )
+                            .clickable { viewModel.setEffortDisplay(option) }
+                            .padding(vertical = 10.dp)
+                            .testTag("settings_effort_display_${label.lowercase(Locale.US)}"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (option == EffortDisplay.RIR) {
+                                "Reps in reserve (RIR)"
+                            } else {
+                                "Perceived exertion (RPE)"
+                            },
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                             ),

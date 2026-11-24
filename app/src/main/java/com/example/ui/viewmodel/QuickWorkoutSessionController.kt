@@ -7,11 +7,13 @@
 package com.example.ui.viewmodel
 
 import com.example.data.model.DropSetRules
+import com.example.data.model.EffortScale
 import com.example.data.model.Exercise
 import com.example.data.model.ExerciseField
 import com.example.data.model.ExerciseType
 import com.example.data.model.LoggedSet
 import com.example.data.model.RemovedActiveExercise
+import com.example.data.model.SupersetRules
 import com.example.data.model.WorkoutSession
 import com.example.data.repository.FitnessRepository
 import kotlinx.coroutines.CoroutineScope
@@ -99,7 +101,9 @@ class QuickWorkoutSessionController(
             isCompleted = false,
             timestamp = System.currentTimeMillis(),
             bodyWeightKg = currentBodyWeightKg(),
-            setUid = LoggedSet.newUid()
+            setUid = LoggedSet.newUid(),
+            supersetGroupId = lastSet?.supersetGroupId,
+            effortRpe = lastSet?.effortRpe
         )
         currentList.add(newSet)
         _activeSets.value = DropSetRules.renumberExerciseSets(currentList, exercise.id)
@@ -128,7 +132,9 @@ class QuickWorkoutSessionController(
             restSecondsOverride = source.restSecondsOverride,
             setUid = LoggedSet.newUid(),
             parentSetUid = parentSet.setUid,
-            dropIndex = (siblings.maxOfOrNull { it.dropIndex } ?: 0) + 1
+            dropIndex = (siblings.maxOfOrNull { it.dropIndex } ?: 0) + 1,
+            supersetGroupId = parentSet.supersetGroupId,
+            effortRpe = source.effortRpe
         )
         _activeSets.value = current + child
     }
@@ -140,7 +146,8 @@ class QuickWorkoutSessionController(
             currentList[index] = updated.copy(
                 setUid = existing.setUid,
                 parentSetUid = existing.parentSetUid,
-                dropIndex = existing.dropIndex
+                dropIndex = existing.dropIndex,
+                supersetGroupId = existing.supersetGroupId
             )
             _activeSets.value = currentList
         }
@@ -163,10 +170,12 @@ class QuickWorkoutSessionController(
         if (index in currentList.indices) {
             val removed = currentList[index]
             val remaining = DropSetRules.removeSet(currentList, removed.setUid)
-            _activeSets.value = remaining
             if (remaining.none { it.exerciseId == removed.exerciseId }) {
+                _activeSets.value = SupersetRules.unlinkSets(remaining, removed.exerciseId)
                 _activeSessionExercises.value =
                     _activeSessionExercises.value.filter { it.id != removed.exerciseId }
+            } else {
+                _activeSets.value = remaining
             }
         }
     }
@@ -174,26 +183,35 @@ class QuickWorkoutSessionController(
     fun deleteSet(setToDel: LoggedSet) {
         val current = DropSetRules.normalize(_activeSets.value)
         val existing = current.firstOrNull { sameSet(it, setToDel) } ?: return
-        _activeSets.value = DropSetRules.removeSet(current, existing.setUid)
-        if (_activeSets.value.none { it.exerciseId == existing.exerciseId }) {
+        val remaining = DropSetRules.removeSet(current, existing.setUid)
+        if (remaining.none { it.exerciseId == existing.exerciseId }) {
+            _activeSets.value = SupersetRules.unlinkSets(remaining, existing.exerciseId)
             _activeSessionExercises.value =
                 _activeSessionExercises.value.filter { it.id != existing.exerciseId }
+        } else {
+            _activeSets.value = remaining
         }
     }
 
     fun removeExercise(exerciseId: Long): RemovedActiveExercise? {
         val index = _activeSessionExercises.value.indexOfFirst { it.id == exerciseId }
         if (index < 0) return null
-        val sets = _activeSets.value.filter { it.exerciseId == exerciseId }
+        val linked = SupersetRules.groupIdForExercise(_activeSets.value, exerciseId) != null
+        val nextSets = if (linked) {
+            SupersetRules.unlinkSets(_activeSets.value, exerciseId)
+        } else {
+            _activeSets.value
+        }
         val snapshot = RemovedActiveExercise(
             exercise = _activeSessionExercises.value[index],
             routineItem = null,
-            sets = sets,
+            sets = nextSets.filter { it.exerciseId == exerciseId }
+                .map { it.copy(supersetGroupId = null) },
             index = index,
             wasSessionOnly = true
         )
         _activeSessionExercises.value = _activeSessionExercises.value.filterIndexed { i, _ -> i != index }
-        _activeSets.value = _activeSets.value.filterNot { it.exerciseId == exerciseId }
+        _activeSets.value = nextSets.filterNot { it.exerciseId == exerciseId }
         return snapshot
     }
 
@@ -204,19 +222,66 @@ class QuickWorkoutSessionController(
             add(index, snapshot.exercise)
         }
         val existingUids = _activeSets.value.mapNotNull { it.setUid.takeIf(String::isNotBlank) }.toHashSet()
-        val restored = DropSetRules.normalize(snapshot.sets).filterNot { it.setUid in existingUids }
+        val restored = DropSetRules.normalize(snapshot.sets)
+            .filterNot { it.setUid in existingUids }
+            .map { it.copy(supersetGroupId = null) }
         _activeSets.value = DropSetRules.renumberExerciseSets(
             _activeSets.value + restored,
             snapshot.exercise.id
         )
     }
 
+    /** Links two exercises in a quick workout. Returns false when the pair is not valid. */
+    fun linkSuperset(exerciseId: Long, direction: Int): Boolean {
+        val exercises = _activeSessionExercises.value
+        val index = exercises.indexOfFirst { it.id == exerciseId }
+        if (index < 0) return false
+        val partnerIndex = index + direction
+        if (partnerIndex !in exercises.indices) return false
+        val partnerId = exercises[partnerIndex].id
+        if (!SupersetRules.canLinkSets(_activeSets.value, exerciseId, partnerId)) return false
+        _activeSets.value = SupersetRules.linkSets(_activeSets.value, exerciseId, partnerId)
+        return true
+    }
+
+    fun unlinkSuperset(exerciseId: Long): Boolean {
+        if (SupersetRules.groupIdForExercise(_activeSets.value, exerciseId) == null) return false
+        _activeSets.value = SupersetRules.unlinkSets(_activeSets.value, exerciseId)
+        return true
+    }
+
     fun moveExercise(fromIndex: Int, toIndex: Int) {
         if (fromIndex !in _activeSessionExercises.value.indices) return
         if (toIndex !in _activeSessionExercises.value.indices || fromIndex == toIndex) return
+        val exercises = _activeSessionExercises.value
+        val groupId = SupersetRules.groupIdForExercise(_activeSets.value, exercises[fromIndex].id)
+        val partner = if (groupId == null) {
+            null
+        } else {
+            exercises.indexOfFirst { candidate ->
+                candidate.id != exercises[fromIndex].id &&
+                    _activeSets.value.any {
+                        it.exerciseId == candidate.id && it.supersetGroupId == groupId
+                    }
+            }.takeIf { it >= 0 }
+        }
+        val start = if (partner == null) fromIndex else minOf(fromIndex, partner)
+        val size = if (partner == null) 1 else 2
+        val end = start + size
+        if (toIndex in start until end) return
+        if (size == 2) {
+            val movingGroup = _activeSets.value.firstOrNull { it.exerciseId == exercises[fromIndex].id }
+                ?.supersetGroupId
+            val targetGroup = _activeSets.value.firstOrNull { it.exerciseId == exercises[toIndex].id }
+                ?.supersetGroupId
+            if (targetGroup != null && targetGroup != movingGroup) return
+        }
         val list = _activeSessionExercises.value.toMutableList()
-        val exercise = list.removeAt(fromIndex)
-        list.add(toIndex, exercise)
+        val block = list.subList(start, end).toList()
+        repeat(size) { list.removeAt(start) }
+        val insertAt = (if (toIndex > start) toIndex - size + 1 else toIndex)
+            .coerceIn(0, list.size)
+        list.addAll(insertAt, block)
         _activeSessionExercises.value = list
     }
 
@@ -227,7 +292,7 @@ class QuickWorkoutSessionController(
         scope.launch(Dispatchers.IO) {
             val savedAt = System.currentTimeMillis()
             val finalBodyWeightKg = resolveBodyWeightKg()
-            val repaired = repairCompletedChildren(currentSets)
+            val repaired = SupersetRules.normalizeSets(repairCompletedChildren(currentSets))
             val setsToSave = repaired
                 .filter { it.isCompleted }
                 .mapIndexed { index, set ->
@@ -243,8 +308,7 @@ class QuickWorkoutSessionController(
                     endTime = System.currentTimeMillis(),
                     notes = notes
                 )
-                val sessionId = repository.insertSession(finalSession)
-                repository.insertSets(setsToSave.map { it.copy(sessionId = sessionId) })
+                val sessionId = repository.insertSessionWithSets(finalSession, setsToSave)
                 savedSessionId = sessionId
                 refreshBenchmarks()
             }
@@ -272,7 +336,7 @@ class QuickWorkoutSessionController(
     fun restore(session: WorkoutSession, exercises: List<Exercise>, sets: List<LoggedSet>) {
         _activeSession.value = session
         _activeSessionExercises.value = exercises
-        _activeSets.value = DropSetRules.normalize(sets)
+        _activeSets.value = SupersetRules.normalizeSets(DropSetRules.normalize(sets))
     }
 
     fun rename(title: String) {

@@ -21,6 +21,7 @@ import com.example.data.model.SessionWithSets
 import com.example.data.model.UserProfile
 import com.example.data.model.WorkoutSession
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 class FitnessRepository(
     private val exerciseDao: ExerciseDao,
@@ -184,6 +185,10 @@ class FitnessRepository(
     suspend fun getSessionWithSetsOnce(id: Long): SessionWithSets? =
         workoutDao.getSessionWithSetsOnce(id)
     suspend fun insertSession(session: WorkoutSession): Long = workoutDao.insertSession(session)
+
+    /** Saves a workout and all of its sets in one Room transaction. */
+    suspend fun insertSessionWithSets(session: WorkoutSession, sets: List<LoggedSet>): Long =
+        workoutDao.insertSessionWithSets(session, sets)
     suspend fun deleteSession(session: WorkoutSession) {
         workoutDao.deleteSessionWithSets(session)
         workoutAiSummaryDao?.deleteForWorkout(session.id)
@@ -193,6 +198,8 @@ class FitnessRepository(
     // Logged Sets
     fun getSetsForSession(sessionId: Long): Flow<List<LoggedSet>> = workoutDao.getSetsForSession(sessionId)
     fun getSetsForExercise(exerciseName: String): Flow<List<LoggedSet>> = workoutDao.getSetsForExercise(exerciseName)
+    fun getSessionIdsForExercise(exerciseName: String): Flow<Set<Long>> =
+        workoutDao.getSessionIdsForExercise(exerciseName).map { it.toSet() }
     suspend fun getSetsForExerciseList(exerciseName: String): List<LoggedSet> = workoutDao.getSetsForExerciseList(exerciseName)
 
     suspend fun getSetsForExerciseHistoryPage(

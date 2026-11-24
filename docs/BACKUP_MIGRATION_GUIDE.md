@@ -8,7 +8,7 @@
 The Room schema version and the app `versionName` are deliberately **not** used to parse an archive.
 Changing Room tables does not invalidate old backups.
 
-The current values are `formatVersion = 1` and **`dataSchemaVersion = 6`**, defined in
+The current values are `formatVersion = 1` and **`dataSchemaVersion = 7`**, defined in
 `BackupFormat`.
 
 ## Data schema history
@@ -21,8 +21,9 @@ The current values are `formatVersion = 1` and **`dataSchemaVersion = 6`**, defi
 | 4 | `MigrateV3ToV4` | `isWarmup`, `restSecondsOverride` | `false`, `null` (normal, inherited set) |
 | 5 | `MigrateV4ToV5` | `setUid`, `parentSetUid`, `dropIndex` | Deterministic `legacy-<id>` UID, `null` parent, `0` index; no row is guessed into a drop set |
 | 6 | `MigrateV5ToV6` | `exercises.supportedFields` | Empty string, which keeps the legacy type fallback |
+| 7 | `MigrateV6ToV7` | Nullable per-set `effortRpe` and `supersetGroupId`, and the `effortDisplay` preference | `null` for both set fields (historical sets stay effort-free and ungrouped); `effortDisplay` defaults to `RIR` |
 
-The registry only accepts contiguous steps: v1→v2→v3→v4→v5→v6, never a jump. A missing step is a
+The registry only accepts contiguous steps: v1→v2→v3→v4→v5→v6→v7, never a jump. A missing step is a
 programming error and produces `UNSUPPORTED_SCHEMA` before destination data is touched.
 
 ## What a 4.4.0 archive looks like
@@ -36,13 +37,20 @@ A 4.4.0 export is data schema 2. It has:
 - `routines` with multi-day JSON and materialized schedule days;
 - `progress` and `ai`.
 
-On import, the archive is migrated to schema 6 in memory. The legacy multi-day routines are then
+On import, the archive is migrated to schema 7 in memory. The legacy multi-day routines are then
 converted by the same Room migration used for an in-place upgrade: one Schedule plus one standalone
 Routine per distinct workout day. If the archive carried `activeRoutineId`, the migrated Schedule is
 promoted to active once it exists.
 
 The 4.4.0 → 5.0.0/5.0.1 release validation restored a real schema-2 archive into a fresh install;
 the two logged sets survived and the active Schedule appeared automatically.
+
+Schema 6 → 7 is additive. `workouts.sets` gains nullable `effortRpe` and `supersetGroupId`,
+`routines.exercisesJson` may carry `targetEffortRpe` and `supersetGroupId`, and `preferences`
+gains `effortDisplay` (default `RIR`; RIR is a display of the canonical RPE 6–10 value). A schema-6
+archive imports with those fields absent; the app treats them as null and keeps every historical set
+ungrouped and effort-free. Import validation rejects a present but invalid RPE, a malformed group id,
+or a group that does not contain exactly two exercises in one session.
 
 ## Why the DTOs are frozen
 
@@ -61,9 +69,9 @@ is not a substitute for a migration: a field that carries user data must be mapp
 3. **Add a migration.** Implement `BackupSchemaMigration`:
 
    ```kotlin
-   object MigrateV6ToV7 : BackupSchemaMigration {
-       override val fromVersion = 6
-       override val toVersion = 7
+   object MigrateV7ToV8 : BackupSchemaMigration {
+       override val fromVersion = 7
+       override val toVersion = 8
        override fun migrate(sections: MutableMap<String, JsonNode.Obj>) {
            val profile = sections.getValue(BackupFormat.SECTION_PROFILE)
            // Rename, add with a documented default, or transform. Never silently drop user data.
@@ -73,7 +81,7 @@ is not a substitute for a migration: a field that carries user data must be mapp
    ```
 
 4. **Register it.** Append it to `BackupSchemaMigrations.all`.
-5. **Bump the version.** Set `BackupFormat.CURRENT_DATA_SCHEMA_VERSION = 7` and keep
+5. **Bump the version.** Set `BackupFormat.CURRENT_DATA_SCHEMA_VERSION = 8` and keep
    `MIN_SUPPORTED_DATA_SCHEMA_VERSION` at the oldest schema you still support.
 6. **Change the current parser.** `BackupMapper.fromPayload` should parse the new DTOs after
    migration. `inspectFile` already parses older payloads as `JsonNode`, migrates to the current

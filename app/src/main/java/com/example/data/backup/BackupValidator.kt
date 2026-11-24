@@ -11,6 +11,7 @@ import com.example.data.ai.AiToolMode
 import com.example.data.model.ChatMessageKind
 import com.example.data.model.ChatMessageStatus
 import com.example.data.model.ExerciseFieldCatalog
+import com.example.data.model.EffortDisplay
 import com.example.data.model.ExerciseType
 import com.example.data.model.Weekday
 import com.example.ui.theme.ThemeMode
@@ -66,6 +67,11 @@ object BackupValidator {
         if (prefs.unit != null && prefs.unit !in setOf("kg", "lb")) invalid("The weight unit is invalid.")
         if (prefs.themeMode != null && ThemeMode.values().none { it.storageKey == prefs.themeMode }) {
             invalid("The backup contains an unknown theme.")
+        }
+        if (prefs.effortDisplay != null &&
+            EffortDisplay.entries.none { it.name == prefs.effortDisplay }
+        ) {
+            invalid("The backup contains an unknown effort display preference.")
         }
         if (prefs.autoSaveIntervalSeconds != null && prefs.autoSaveIntervalSeconds !in 5..300) {
             invalid("The autosave interval is outside the supported range.")
@@ -274,6 +280,26 @@ object BackupValidator {
             finiteNonNegative("set body weight", set.bodyWeightKg)
             if (set.reps < 0 || set.holdDurationSeconds < 0) invalid("A logged set has a negative measurement.")
             if (set.timestamp < 0L) invalid("A logged set has an invalid timestamp.")
+            if (set.effortRpe != null &&
+                (!set.effortRpe.isFinite() || set.effortRpe !in 6.0..10.0)
+            ) {
+                invalid("A logged set has an invalid effort rating.")
+            }
+            if (!set.supersetGroupId.isNullOrBlank() &&
+                !supersetIdPattern.matches(set.supersetGroupId)
+            ) {
+                invalid("A logged set has an invalid superset identifier.")
+            }
+        }
+        val groups = snapshot.sets
+            .filter { !it.supersetGroupId.isNullOrBlank() }
+            .groupBy { it.supersetGroupId!! }
+        for ((_, rows) in groups) {
+            if (rows.map { it.sessionId }.distinct().size != 1 ||
+                rows.map { it.exerciseId }.distinct().size != 2
+            ) {
+                invalid("A superset must contain exactly two exercises in one workout.")
+            }
         }
     }
 
@@ -452,6 +478,8 @@ object BackupValidator {
             lower.contains("token=") ||
             lower.contains("key=")
     }
+
+    private val supersetIdPattern = Regex("[A-Za-z0-9_-]{1,80}")
 
     private fun finiteNonNegative(label: String, value: Double?) {
         if (value == null) return

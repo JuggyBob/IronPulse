@@ -7,10 +7,11 @@ proposals. The tools are defined by the application, not by a provider: Google, 
 OpenRouter, xAI and a custom OpenAI-compatible endpoint all see the same tool catalog, the same
 validation and the same limits.
 
-The data model is the 5.0 one: a **Routine** is one workout, a **Schedule** is the week, and every
-exercise carries its own ordered `supportedFields`. Tool results therefore include explicit fields,
-distance, warm-up flags, per-set rest and drop-set parent links rather than inferring them from an
-exercise type.
+The data model is the 5.0 one, extended in 5.1 with **effort** and **supersets**: a **Routine** is one
+workout, a **Schedule** is the week, and every exercise carries its own ordered `supportedFields`.
+Tool results therefore include explicit fields, distance, warm-up flags, per-set rest, drop-set
+parent links, nullable `effortRpe`/`targetEffortRpe` and two-member `supersetGroupId` links rather
+than inferring them from an exercise type. Historical rows carry null effort and no group id.
 
 Personal-data tools are available only after **Settings -> AI Data Access -> Allow AI Coach to
 access workout data** is explicitly enabled. The dispatcher enforces that permission on every
@@ -57,15 +58,24 @@ tools, sends the results back, and repeats until the model answers or a limit is
 | Limit | Value |
 |---|---|
 | Provider rounds per conversation turn | 4 |
+| Executed tool calls per provider response | 6 |
 | Executed tool calls per turn | 12 |
-| Per-request timeout | 90 seconds |
+| Per-request timeout | 45 seconds (OkHttp connect/write 45 s, read 90 s) |
+| Per-tool dispatch timeout | 10 seconds; a timed-out tool returns `tool_timeout` to the model |
 | Retries for a retryable provider failure | 1 |
+| Chat deadline (AI Coach screen) | 2 minutes for the whole request |
+| Chat history | Bounded to the 20 most recent messages, or the latest user message when workout-data access is off |
 | Duplicate calls | Answered once per conversation from a cache keyed by tool name and canonicalized arguments |
 | Ordering | Sequential; calls in one response run one after another |
 | Exhausted budget | One final request with tools removed, so the athlete still gets an answer from the data already gathered |
 | Permission changes | The dispatcher re-reads the access policy before each tool call, so revoking access stops a pending retrieval inside an active loop |
 | Proposal stop | A successful routine proposal (modification or complete new routine) ends the tool loop so the app can render the approval card; the model resumes only after the athlete decides |
 | Malformed text-protocol request | Up to two correction turns, then a clear user-facing parse error |
+
+Provider failures are classified instead of being collapsed into a generic "no internet" message:
+DNS/host resolution, refused or unreachable connections, TLS, timeout, truncated response, malformed
+HTTP, HTTP 401/403/400/404/429/5xx and cancellation each produce a short, sanitized error. OkHttp's
+own retry is disabled so the engine remains the single owner of attempt counts.
 
 ### Tool modes
 
@@ -291,6 +301,8 @@ No saved routines at all returns `no_routines`. A selector that matches nothing 
             "distanceKm": 0.0,
             "restSeconds": 150,
             "prescription": "4 sets x 8 reps",
+            "targetEffortRpe": null,
+            "supersetGroupId": null,
             "dropSets": []
           }
         ]
@@ -303,7 +315,9 @@ No saved routines at all returns `no_routines`. A selector that matches nothing 
 `daysPerWeek` remains for archive compatibility, but a current Routine is always one workout.
 `restSeconds` is the routine-entry default (0 means the rest timer stays manual). It is read from the
 routine JSON, not from the shared exercise definition, so the same movement can rest differently in
-two Routines. `supportedFields` and `dropSets` are the same data the workout and Routine editor use.
+two Routines. `supportedFields` and `dropSets` are the same data the workout and Routine editor use. Optional
+`targetEffortRpe` (RPE 6–10) and `supersetGroupId` (shared by exactly two adjacent same-day entries)
+are null on historical rows.
 
 ---
 
@@ -354,7 +368,8 @@ session questions.
 Returns session id/title/date/start/end/duration, routine/schedule link, completed set count, and up
 to 120 completed sets per session with set number, exercise identity/type, explicit supported fields,
 weight, added weight, reps, hold seconds, cardio minutes, distance, body-weight snapshot, warm-up
-flag, per-set rest override, set UID, parent UID and drop index. `hasMore` identifies another page.
+flag, per-set rest override, set UID, parent UID and drop index, plus nullable `effortRpe` and
+`supersetGroupId`. `hasMore` identifies another page.
 
 ---
 
@@ -370,8 +385,9 @@ rest days, assigned Routine ids and exercise order.
 The result contains `scheduleId`, `scheduleName`, compatibility aliases `routineId`/`routineName`,
 and all seven days with weekday, day name, title, assigned Routine id, rest-day flag, note and each
 exercise's id, name, type, category, equipment, sets, reps, weight, added weight, hold seconds,
-distance, rest seconds, prescription, `supportedFields`, `dropSets` and a bounded instruction
-excerpt. With no active Schedule the tool returns `no_active_routine` instead of guessing.
+distance, rest seconds, prescription, `supportedFields`, `dropSets`, optional `targetEffortRpe` and
+`supersetGroupId`, and a bounded instruction excerpt. With no active Schedule the tool returns
+`no_active_routine` instead of guessing.
 
 ---
 
@@ -385,8 +401,9 @@ excerpt. With no active Schedule the tool returns `no_active_routine` instead of
 
 The result contains the draft kind, title, start time, exercise ids, routine items, completed/total
 set counts, and each set with its exercise identity, set number, weight, added weight, reps, hold,
-distance, completion state, warm-up flag, rest override, set UID, parent UID and drop index. With no
-live session it returns `"found": false` and makes no guess.
+distance, completion state, warm-up flag, rest override, set UID, parent UID and drop index, plus
+nullable `effortRpe` and `supersetGroupId`. With no live session it returns `"found": false` and makes
+no guess.
 
 ---
 
@@ -424,8 +441,9 @@ empty result has `"found": false`, reveals whether the exercise exists in the ca
 The response contains a structured proposal and the note that nothing has changed. The app renders
 it inside the conversation. **Grant permission** triggers a fresh permission check, active-Schedule
 check, routine-signature stale check and one transaction that either replaces the slot or inserts
-the generated exercise and replaces the slot together. **Reject** changes nothing. A proposal is
-one-time and cannot authorize a second edit.
+the generated exercise and replaces the slot together. The replacement inherits the removed slot's
+`targetEffortRpe` and `supersetGroupId`, so editing one member never silently breaks the pair.
+**Reject** changes nothing. A proposal is consumed atomically and cannot authorize a second edit.
 
 ---
 
@@ -442,7 +460,15 @@ Routine Generator, which keeps its original prompt, catalog search and missing-e
 | `summary` | string | no | One short plan description, up to 400 characters. |
 | `days` | array | yes | 1–7 entries; each entry needs `weekday` 1–7 and at least one exercise. |
 | `days[].exercises` | array | yes | 1–12 exercises per day. Each needs `name` and `sets`/`reps`; `exerciseId` is used when known. |
+| `days[].exercises[].targetEffortRpe` | number | no | Optional target effort, RPE 6–10. Omit when the athlete did not specify effort; never invent it. |
+| `days[].exercises[].supersetGroupId` | string | no | Optional id shared by exactly two adjacent exercises in the same day. Only when the athlete asked for a superset; each member keeps its own sets and drops. |
 | `newExercise` | object | conditional | Complete validated record for a movement the catalog genuinely lacks. Created only after approval. |
+
+The parser also accepts `rir` and `rpe` spellings and converts RIR to the canonical RPE value; it
+never invents an effort value the athlete did not specify. The proposal card only shows a superset
+group that passes `SupersetRules.normalize`: exactly two adjacent exercises on the same weekday.
+Malformed or cross-day groups are cleared before the card is rendered, and the approval service
+normalizes them again inside the transaction.
 
 Every catalog name is resolved and filled with its stable id before the proposal is returned.
 Duplicate weekdays are merged. On approval, `RoutineModificationService.applyNewRoutine` revalidates

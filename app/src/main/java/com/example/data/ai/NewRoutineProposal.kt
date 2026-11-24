@@ -31,6 +31,10 @@ data class ProposedRoutineExercise(
     val targetDistanceKm: Double = 0.0,
     val restSeconds: Int = 90,
     val prescription: String = "",
+    /** Optional target effort, canonical RPE 6.0-10.0. */
+    val targetEffortRpe: Double? = null,
+    /** Optional two-member superset group shared with one adjacent proposed exercise. */
+    val supersetGroupId: String? = null,
     /** Optional children, grouped under their 1-based main set index. */
     val dropSets: List<RoutineDropSet> = emptyList()
 ) {
@@ -52,7 +56,9 @@ data class ProposedRoutineExercise(
             weekday = weekday,
             dayTitle = dayTitle,
             dayNote = dayNote,
-            dropSets = dropSets
+            dropSets = dropSets,
+            supersetGroupId = supersetGroupId,
+            targetEffortRpe = com.example.data.model.EffortScale.normalize(targetEffortRpe)
         )
 
     fun toJson(): JSONObject = JSONObject().apply {
@@ -69,6 +75,8 @@ data class ProposedRoutineExercise(
         put("holdSeconds", targetHoldSeconds)
         put("distanceKm", targetDistanceKm)
         put("restSeconds", restSeconds)
+        targetEffortRpe?.let { put("targetEffortRpe", it) }
+        supersetGroupId?.takeIf { it.isNotBlank() }?.let { put("supersetGroupId", it) }
         put("prescription", prescription)
         if (dropSets.isNotEmpty()) {
             put("dropSets", JSONArray().apply {
@@ -168,6 +176,10 @@ data class ProposedRoutineExercise(
                 targetDistanceKm = obj.optDouble("distanceKm", 0.0).coerceAtLeast(0.0),
                 restSeconds = obj.optInt("restSeconds", 90).coerceIn(0, 600),
                 prescription = prescription,
+                targetEffortRpe = com.example.data.model.EffortScale.normalize(
+                    obj.optDouble("targetEffortRpe", Double.NaN)
+                ),
+                supersetGroupId = obj.optString("supersetGroupId").takeIf { it.isNotBlank() },
                 dropSets = parseDropSets(obj, sets)
             )
         }

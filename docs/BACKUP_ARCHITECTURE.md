@@ -18,8 +18,10 @@
 | `MainViewModel` | SAF URI handling, temp files, progress state, confirmation state, post-import UI refresh. |
 | `SettingsScreen` | Data Management card, file pickers, cloud folder controls, progress/error states and destructive confirmation. |
 
-The current archive is **data schema 6**: it carries Schedules and weekday slots, routine model
-versions, warm-up/rest flags, set UIDs and drop-set parent links, and per-exercise field lists.
+The current archive is **data schema 7**: it carries Schedules and weekday slots, routine model
+versions, warm-up/rest flags, set UIDs and drop-set parent links, per-exercise field lists, the
+canonical per-set `effortRpe`, per-exercise `targetEffortRpe`, two-member `supersetGroupId` links,
+and the RIR/RPE display preference. Historical rows keep null effort and no group id.
 
 The Room DAOs gained read-all/insert-all methods and guarded user-exercise deletion. No unrelated
 repository behavior changed.
@@ -182,6 +184,23 @@ Cloud Backup reuses the exact `.ironpulse` pipeline rather than introducing a se
 
 The folder permission is not exported, and the cloud archive contains no credentials, profile
 picture or exercise media. See `CLOUD_BACKUP_ARCHITECTURE.md` for the SAF-versus-OAuth rationale.
+
+## Training-data export (separate from backups)
+
+The `.ironpulse` pipeline above exists to preserve app data for restore. The 5.1 **training-data
+export** is a different, read-only path for sharing what was trained:
+
+- `ExportController.kt` builds one immutable export document; `ExportSheet.kt` renders its preview
+  and format choices; `CsvWriter.kt`, `XlsxWriter.kt` and `PdfWriter.kt` serialize it locally.
+- The four targets are a saved Routine, a weekly Schedule, a completed workout and one exercise's
+  history. PDF, CSV and Excel are written through `ActivityResultContracts.CreateDocument`, so no
+  storage permission is requested and the preview uses the document that is saved.
+- CSV follows RFC 4180 and prefixes formula-like cells with an apostrophe; XLSX writes real OOXML and
+  strips XML-illegal control characters. PDF exercise cards are two-column with indented drop sets
+  and superset labels, and the preview is page-limited.
+
+None of these files is an `.ironpulse` archive: they contain no preferences, keys or profile data,
+and they are not importable as backups.
 
 ## Security notes
 

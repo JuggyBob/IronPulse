@@ -123,17 +123,20 @@ class DataTransferController(
 
     fun inspectUserDataImport(uri: Uri) {
         if (_dataTransferState.value is DataTransferState.Running ||
-            _dataTransferState.value is DataTransferState.ReadyToImport
+            _dataTransferState.value is DataTransferState.ReadyToImport ||
+            dataTransferJob?.isActive == true
         ) {
             return
         }
+        // Claim the operation before launching, so two entry points in the same frame cannot
+        // start competing inspections.
+        _dataTransferState.value = DataTransferState.Running(
+            BackupOperation.IMPORT,
+            BackupProgress(BackupPhase.VALIDATING, 0, 5)
+        )
         dataTransferJob = scope.launch(Dispatchers.IO) {
             var temp: File? = null
             try {
-                _dataTransferState.value = DataTransferState.Running(
-                    BackupOperation.IMPORT,
-                    BackupProgress(BackupPhase.VALIDATING, 0, 5)
-                )
                 temp = File.createTempFile(
                     "ironpulse-import-",
                     ".${BackupFormat.EXTENSION}",
@@ -178,15 +181,17 @@ class DataTransferController(
         val prepared = preparedImport ?: return
         if (_dataTransferState.value is DataTransferState.Running) return
         preparedImport = null
+        // Set the state synchronously, not inside the coroutine: the apply must own the UI and
+        // the prepared archive from the moment the athlete confirms it.
+        _dataTransferState.value = DataTransferState.Running(
+            BackupOperation.IMPORT,
+            BackupProgress(BackupPhase.STAGING, 0, 9)
+        )
         dataTransferJob = scope.launch(Dispatchers.IO) {
             try {
                 withContext(Dispatchers.Main.immediate) {
                     onBeforeImportApply()
                 }
-                _dataTransferState.value = DataTransferState.Running(
-                    BackupOperation.IMPORT,
-                    BackupProgress(BackupPhase.STAGING, 0, 9)
-                )
                 val summary = backupManager.applyImport(prepared) { progress ->
                     _dataTransferState.value = DataTransferState.Running(BackupOperation.IMPORT, progress)
                 }

@@ -782,6 +782,18 @@ object AiToolCatalog {
                                 "holdSeconds": {"type": "integer", "minimum": 0, "maximum": 600},
                                 "distanceKm": {"type": "number", "minimum": 0},
                                 "restSeconds": {"type": "integer", "minimum": 0, "maximum": 600},
+                                "targetEffortRpe": {
+                                  "type": "number",
+                                  "minimum": 6,
+                                  "maximum": 10,
+                                  "description": "Optional target effort as RPE 6-10. Never invent effort; omit when the athlete did not specify it."
+                                },
+                                "supersetGroupId": {
+                                  "type": "string",
+                                  "maxLength": 80,
+                                  "pattern": "^[A-Za-z0-9_-]+$",
+                                  "description": "Optional shared id for exactly two adjacent exercises in this day. Use only when the athlete asked for a superset; every member keeps its own sets and drops."
+                                },
                                 "prescription": {"type": "string", "description": "Optional, e.g. 4 sets x 8 reps."},
                                 "dropSets": {
                                   "type": "array",
@@ -1052,6 +1064,8 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
                                     put("holdSeconds", item.targetHoldSeconds)
                                     put("distanceKm", item.targetDistanceKm)
                                     put("restSeconds", item.restSeconds)
+put("targetEffortRpe", item.targetEffortRpe ?: JSONObject.NULL)
+put("supersetGroupId", item.supersetGroupId ?: JSONObject.NULL)
                                     put("prescription", item.prescription)
                                     val catalogExercise = byId[item.exerciseId]
                                         ?: byName[item.exerciseName.trim().lowercase()]
@@ -1149,6 +1163,8 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
                         put("isWarmup", set.isWarmup)
                         put("isCompleted", set.isCompleted)
                         put("restSecondsOverride", set.restSecondsOverride ?: JSONObject.NULL)
+                        put("effortRpe", set.effortRpe ?: JSONObject.NULL)
+                        put("supersetGroupId", set.supersetGroupId ?: JSONObject.NULL)
                     })
                 }
             })
@@ -1320,6 +1336,12 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
                     targetDistanceKm = distanceKm,
                     restSeconds = exObj.optInt("restSeconds", 90).coerceIn(0, 600),
                     prescription = parsedPrescription,
+                    targetEffortRpe = com.example.data.model.EffortScale.normalize(
+                        exObj.optDouble("targetEffortRpe", Double.NaN)
+                    ),
+                    supersetGroupId = exObj.optString("supersetGroupId")
+                        .trim()
+                        .takeIf { it.isNotBlank() && it.length <= 80 },
                     dropSets = parseToolDropSets(exObj, sets, fields)
                 )
                 parsedExercises.add(
@@ -1353,9 +1375,29 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
         if (proposal.trainingDays == 0 || proposal.exerciseCount == 0) {
             throw AiToolArgumentException("The routine must contain at least one exercise.")
         }
+        // Show the athlete only superset groups that the approval service can actually keep:
+        // exactly two adjacent exercises on the same day.
+        val normalizedProposal = proposal.copy(
+            days = proposal.days.map { day ->
+                val kept = com.example.data.model.SupersetRules.normalize(
+                    day.exercises.map { it.toRoutineItem(day.weekday, day.focus, day.note) }
+                ).mapNotNull { it.supersetGroupId }.toSet()
+                day.copy(
+                    exercises = day.exercises.map { exercise ->
+                        if (exercise.supersetGroupId != null &&
+                            exercise.supersetGroupId !in kept
+                        ) {
+                            exercise.copy(supersetGroupId = null)
+                        } else {
+                            exercise
+                        }
+                    }
+                )
+            }
+        )
         return JSONObject().apply {
             put("ok", true)
-            put("proposal", proposal.toJson())
+            put("proposal", normalizedProposal.toJson())
             put(
                 "message",
                 "The app will show this plan for approval. Nothing has been created or saved yet."
@@ -1369,17 +1411,24 @@ class AiToolRegistry(private val dataAccess: AiDataAccess) {
         val requestedRoutineId = AiToolArgs.optionalLong(args, "routineId")
         val activeSchedule = dataAccess.currentRoutineSchedule()
             ?: return toolError("no_active_routine", "There is no active weekly routine to change.")
-        if (requestedRoutineId != null && requestedRoutineId != activeSchedule.routineId) {
-            return toolError(
-                "not_active_routine",
-                "Only the athlete's current active weekly routine can be changed."
-            )
-        }
-        val routine = dataAccess.getRoutineById(activeSchedule.routineId)
-            ?: return toolError("not_found", "The routine no longer exists.")
         val days = activeSchedule.days.filter { !it.isRestDay }
         val day = days.firstOrNull { it.weekday == weekday }
             ?: return toolError("invalid_day", "The routine has no day for weekday $weekday.")
+        // A Schedule is a week of separate standalone Routines. Resolve the Routine that owns the
+        // requested weekday; using the Schedule id here would edit the wrong row in a multi-day plan.
+        // Legacy single-Routine weeks have no per-day id, so their active id is the fallback.
+        val dayRoutineId = day.routineId.takeIf { it > 0L } ?: activeSchedule.routineId
+        if (requestedRoutineId != null &&
+            requestedRoutineId != activeSchedule.routineId &&
+            requestedRoutineId != dayRoutineId
+        ) {
+            return toolError(
+                "not_active_routine",
+                "Only the Routine in the athlete's active Schedule can be changed."
+            )
+        }
+        val routine = dataAccess.getRoutineById(dayRoutineId)
+            ?: return toolError("not_found", "The routine no longer exists.")
         val removed = day.exercises.firstOrNull {
             it.exerciseName.trim().equals(removeName, ignoreCase = true)
         } ?: return toolError(
@@ -1651,6 +1700,8 @@ private fun SavedRoutine.toRoutineJson(
                                                 put("holdSeconds", item.targetHoldSeconds)
                                                 put("distanceKm", item.targetDistanceKm)
                                                 put("restSeconds", item.restSeconds)
+                                                put("targetEffortRpe", item.targetEffortRpe ?: JSONObject.NULL)
+                                                put("supersetGroupId", item.supersetGroupId ?: JSONObject.NULL)
                                                 put("prescription", item.prescription)
                                                 put("dropSets", item.dropSets.toToolDropSetArray())
                                             }
@@ -1727,6 +1778,8 @@ private fun SessionWithSets.toWorkoutJson(): JSONObject = JSONObject().apply {
                         put("bodyWeightKg", set.bodyWeightKg)
                         put("isWarmup", set.isWarmup)
                         put("restSecondsOverride", set.restSecondsOverride ?: JSONObject.NULL)
+                        put("effortRpe", set.effortRpe ?: JSONObject.NULL)
+                        put("supersetGroupId", set.supersetGroupId ?: JSONObject.NULL)
                     }
                 )
             }

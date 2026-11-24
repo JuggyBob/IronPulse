@@ -1,5 +1,16 @@
 # IronPulse screenshots
 
+## 5.1.0 — public release portfolio
+
+The final 5.1.0 screenshots live in [`5.1.0/`](5.1.0/). They were captured from the 5.1.0 (15)
+build on AVD `dh36` with **AMOLED Dark**, the **IronPulse Blue** accent, **Liquid Glass ON** and
+**Material Expressive 3 ON**. The portfolio index lists every image and the feature it demonstrates:
+
+- [`5.1.0/README.md`](5.1.0/README.md)
+
+The repository [README](../../README.md) uses these files for the 5.1 gallery. Do not replace or
+clean this directory during release packaging.
+
 ## 5.0.0 — public release portfolio
 
 The final 5.0.0 screenshots live in [`5.0.0/`](5.0.0/). They were captured from the release-signed

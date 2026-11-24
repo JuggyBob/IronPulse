@@ -509,12 +509,19 @@ class AiProtocolConversionTest {
     @Test
     fun `Gemini builds the model URL and falls back to the default model`() {
         assertTrue(
-            GeminiProtocol.generateContentUrl("models/gemini-2.5-flash", "KEY")
-                .endsWith("gemini-2.5-flash:generateContent?key=KEY")
+            GeminiProtocol.generateContentUrl("models/gemini-2.5-flash")
+                .endsWith("gemini-2.5-flash:generateContent")
         )
         assertTrue(
-            GeminiProtocol.generateContentUrl("  ", "KEY")
+            GeminiProtocol.generateContentUrl("  ")
                 .contains("${GeminiProtocol.DEFAULT_MODEL}:generateContent")
+        )
+        assertFalse(
+            GeminiProtocol.generateContentUrl("gemini-2.5-flash").contains("KEY")
+        )
+        assertEquals(
+            "secret",
+            GeminiProtocol.authHeaders(" secret ").getValue("x-goog-api-key")
         )
     }
 

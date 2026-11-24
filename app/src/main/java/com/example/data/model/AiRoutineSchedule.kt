@@ -287,6 +287,17 @@ object AiRoutineSchedule {
             }
         }
 
+        val effortRpe = when {
+            obj.has("targetEffortRpe") && !obj.isNull("targetEffortRpe") ->
+                EffortScale.normalize(obj.optDouble("targetEffortRpe", Double.NaN))
+            obj.has("rpe") && !obj.isNull("rpe") ->
+                EffortScale.normalize(obj.optDouble("rpe", Double.NaN))
+            obj.has("rir") && !obj.isNull("rir") ->
+                EffortScale.rirToRpe(obj.optInt("rir", 0))
+            else -> null
+        }
+        val supersetGroupId = obj.optString("supersetGroupId").takeIf { it.isNotBlank() }
+
         val item = RoutineExerciseItem(
             exerciseId = matched?.id ?: obj.optLong("id", 0L),
             exerciseName = matched?.name ?: name,
@@ -304,7 +315,9 @@ object AiRoutineSchedule {
             weekday = weekday,
             dayTitle = focus,
             dayNote = note,
-            dropSets = readDropSets(obj, sets, fields)
+            dropSets = readDropSets(obj, sets, fields),
+            supersetGroupId = supersetGroupId,
+            targetEffortRpe = effortRpe
         )
         // shortPrescription intentionally drops a trailing hold/distance. Rebuild only in that case
         // so a rep range or a hand-written prescription otherwise survives untouched.

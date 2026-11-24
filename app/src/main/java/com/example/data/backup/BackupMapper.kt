@@ -236,7 +236,9 @@ object BackupMapper {
         restSecondsOverride = set.restSecondsOverride,
         setUid = set.setUid,
         parentSetUid = set.parentSetUid,
-        dropIndex = set.dropIndex
+        dropIndex = set.dropIndex,
+        supersetGroupId = set.supersetGroupId,
+        effortRpe = set.effortRpe
     )
 
     fun setFromDto(dto: LoggedSetV2): LoggedSet = LoggedSet(
@@ -262,7 +264,9 @@ object BackupMapper {
             if (dto.id > 0L) "legacy-${dto.id}" else ""
         },
         parentSetUid = dto.parentSetUid?.takeIf { it.isNotBlank() },
-        dropIndex = dto.dropIndex.coerceAtLeast(0)
+        dropIndex = dto.dropIndex.coerceAtLeast(0),
+        supersetGroupId = dto.supersetGroupId?.takeIf { it.isNotBlank() },
+        effortRpe = com.example.data.model.EffortScale.normalize(dto.effortRpe)
     )
 
     fun routineToDto(routine: SavedRoutine): SavedRoutineV1 = SavedRoutineV1(

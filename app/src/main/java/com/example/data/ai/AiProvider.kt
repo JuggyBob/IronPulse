@@ -272,7 +272,7 @@ object GoogleProvider : AiProvider {
     override suspend fun listModels(config: AiProviderConfiguration): Result<List<AiModelDescriptor>> =
         providerCall {
             val key = requireKey(config)
-            val json = AiHttp.getJson(GeminiProtocol.modelsUrl(key), emptyMap(), id)
+            val json = AiHttp.getJson(GeminiProtocol.modelsUrl(), GeminiProtocol.authHeaders(key), id)
             GeminiProtocol.parseModelList(json)
         }
 
@@ -302,8 +302,8 @@ object GoogleProvider : AiProvider {
         val includeTools = request.toolMode != AiToolMode.COMPATIBILITY && request.tools.isNotEmpty()
         val body = GeminiProtocol.buildGenerateContentRequest(request.copy(model = model), includeTools)
         val json = AiHttp.postJson(
-            url = GeminiProtocol.generateContentUrl(model, key),
-            headers = emptyMap(),
+            url = GeminiProtocol.generateContentUrl(model),
+            headers = GeminiProtocol.authHeaders(key),
             body = body,
             provider = id
         )

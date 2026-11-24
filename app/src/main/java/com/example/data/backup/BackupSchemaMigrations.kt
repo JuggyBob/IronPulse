@@ -148,12 +148,36 @@ object BackupSchemaMigrations {
         }
     }
 
+    /**
+     * v7 adds superset group IDs and canonical effort. Both are additive and null for every
+     * historical row: no relationship or effort is inferred from old data.
+     */
+    object MigrateV6ToV7 : BackupSchemaMigration {
+        override val fromVersion: Int = 6
+        override val toVersion: Int = 7
+
+        override fun migrate(sections: MutableMap<String, JsonNode.Obj>) {
+            val workouts = sections[BackupFormat.SECTION_WORKOUTS] ?: return
+            val sets = workouts["sets"] as? JsonNode.Arr ?: return
+            sets.values.forEach { node ->
+                val set = node as? JsonNode.Obj ?: return@forEach
+                if (set["supersetGroupId"] == null) set["supersetGroupId"] = JsonNode.Null
+                if (set["effortRpe"] == null) set["effortRpe"] = JsonNode.Null
+            }
+            val preferences = sections[BackupFormat.SECTION_PREFERENCES]
+            if (preferences != null && preferences["effortDisplay"] == null) {
+                preferences["effortDisplay"] = JsonNode.Str("RIR")
+            }
+        }
+    }
+
     val all: List<BackupSchemaMigration> = listOf(
         MigrateV1ToV2,
         MigrateV2ToV3,
         MigrateV3ToV4,
         MigrateV4ToV5,
-        MigrateV5ToV6
+        MigrateV5ToV6,
+        MigrateV6ToV7
     )
 
     fun migrate(

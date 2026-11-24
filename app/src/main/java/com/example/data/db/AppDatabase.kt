@@ -32,6 +32,7 @@ import com.example.data.model.WorkoutAiSummary
 import com.example.data.model.WorkoutSession
 import com.example.data.preferences.UserPreferencesRepository
 import com.example.data.seed.DatasetSeeder
+import com.example.util.PerfTrace
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -54,7 +55,7 @@ import kotlinx.coroutines.sync.withLock
         SchedulePlan::class,
         ScheduleDaySlot::class
     ],
-    version = 19,
+    version = 20,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -558,6 +559,30 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            private fun hasColumn(db: SupportSQLiteDatabase, table: String, column: String): Boolean {
+                db.query("PRAGMA table_info(`$table`)").use { cursor ->
+                    val nameIndex = cursor.getColumnIndex("name")
+                    while (cursor.moveToNext()) {
+                        if (nameIndex >= 0 && cursor.getString(nameIndex) == column) return true
+                    }
+                }
+                return false
+            }
+
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // New nullable columns are the whole migration. Existing sets stay ungrouped and
+                // have no effort value: neither relationship nor effort can be inferred from old
+                // load, reps or adjacency.
+                if (!hasColumn(db, "logged_sets", "supersetGroupId")) {
+                    db.execSQL("ALTER TABLE `logged_sets` ADD COLUMN `supersetGroupId` TEXT")
+                }
+                if (!hasColumn(db, "logged_sets", "effortRpe")) {
+                    db.execSQL("ALTER TABLE `logged_sets` ADD COLUMN `effortRpe` REAL")
+                }
+            }
+        }
+
         val MIGRATION_18_19 = object : Migration(18, 19) {
             private fun hasColumn(db: SupportSQLiteDatabase, table: String, column: String): Boolean {
                 db.query("PRAGMA table_info(`$table`)").use { cursor ->
@@ -674,7 +699,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_15_16,
                         MIGRATION_16_17,
                         MIGRATION_17_18,
-                        MIGRATION_18_19
+                        MIGRATION_18_19,
+                        MIGRATION_19_20
                     )
                     .fallbackToDestructiveMigrationOnDowngrade()
                     .addCallback(DatabasePrepopulationCallback(context))
@@ -731,9 +757,13 @@ abstract class AppDatabase : RoomDatabase() {
                 dbInitMutex.withLock {
                     val database = getInstance(context)
                     val exerciseDao = database.exerciseDao()
-                    
+                    val openStart = PerfTrace.start()
+                    var phaseStart = openStart
+
                     // 1. Remove duplicate exercises if any exist in the local SQLite table
                     exerciseDao.deduplicateByName()
+                    PerfTrace.mark("db.dedupe1", phaseStart)
+                    phaseStart = PerfTrace.start()
 
                     // If database was just created in onCreate in this process, exercises are already fully populated
                     if (!freshlyCreated) {
@@ -742,9 +772,13 @@ abstract class AppDatabase : RoomDatabase() {
                         //    are never touched.
                         DatasetSeeder.seed(context, exerciseDao)
                     }
+                    PerfTrace.mark("db.datasetSeed", phaseStart)
+                    phaseStart = PerfTrace.start()
 
                     // 3. Always ensure deduplicated again
                     exerciseDao.deduplicateByName()
+                    PerfTrace.mark("db.dedupe2", phaseStart)
+                    phaseStart = PerfTrace.start()
 
                     // 4. Correct custom exercises the editor saved with its old default.
                     //
@@ -756,6 +790,8 @@ abstract class AppDatabase : RoomDatabase() {
                     //    has no external load are retagged. A custom row that has ever carried weight
                     //    is left exactly as it is.
                     exerciseDao.retagCustomBodyweightExercises()
+                    PerfTrace.mark("db.retagBodyweight", phaseStart)
+                    phaseStart = PerfTrace.start()
 
                     // 5. Logged sets keep the type they were recorded under. The catalog can be
                     //    reclassified (and its supported fields edited) without rewriting what the
@@ -777,6 +813,8 @@ abstract class AppDatabase : RoomDatabase() {
                             ?.currentWeightKg
                             ?.takeIf { it > 0.0 }
                     database.workoutDao().repairMissingBodyWeights(profileWeightKg)
+                    PerfTrace.mark("db.repairBodyWeights", phaseStart)
+                    phaseStart = PerfTrace.start()
 
                     // 7. Bind the routines that were saved before the seven day model existed to
                     //    real weekdays.
@@ -785,11 +823,15 @@ abstract class AppDatabase : RoomDatabase() {
                     //    done in SQL. It runs here, once, and every routine it has already done
                     //    carries a flag that keeps it from being looked at again.
                     migrateRoutineSchedules(database)
+                    PerfTrace.mark("db.routineSchedules", phaseStart)
+                    phaseStart = PerfTrace.start()
 
                     // 8. Split the 4.4 multi-day routines into standalone Routines and Schedules.
                     //    Legacy rows stay behind with modelVersion = 1 so old workout links remain
                     //    readable, while the new UI only sees modelVersion >= 2.
                     RoutineModelMigration.migrate(database)
+                    PerfTrace.mark("db.routineModel", phaseStart)
+                    PerfTrace.mark("db.open.total", openStart)
                 }
             }
         }

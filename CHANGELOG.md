@@ -7,6 +7,92 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [5.1.0] - 2026-11-24
+
+IronPulse 5.1.0 adds **supersets**, **RIR/RPE effort tracking**, **training-data export** and a
+rebuilt **Workout History**, and hardens the AI Coach. The public version code is **15**. Room moves
+19 → 20 and the `.ironpulse` data schema moves 6 → 7; both migrations are additive and no other
+database or backup migration is required.
+
+### Added
+
+- **Supersets.** Link two adjacent exercises in a Routine or an active workout with the paperclip.
+  Paired chips carry a dark/cyan border and history uses compact A1/A2 paperclip badges, while each
+  member keeps its own sets, drop sets, warm-ups, rest and completion state. The pair moves together
+  when reordered, can be unlinked from either side, and a superset can be combined with drop sets on
+  either member.
+- **RIR/RPE effort.** Record an optional RPE 6–10 on each set and an optional target on each Routine
+  exercise. RIR is a display of the same stored value (`10 − RPE`, with 4+ at RPE 6); cardio, timed
+  and distance work always uses RPE. The RIR/RPE switch lives in Training Preferences, and the
+  Routine editor gains a Target effort stepper. Switching display never rewrites history.
+- **PDF, CSV and Excel export.** A new sheet exports a saved Routine, a weekly Schedule, a completed
+  workout or one exercise's history. PDF exercise cards are two-column with indented drop sets and
+  superset labels; CSV is RFC 4180 with formula-injection protection; XLSX is a real OOXML workbook.
+  The preview is generated from the same immutable document that is saved. Files are written through
+  the Android document picker, so no storage permission is requested.
+- **Workout History.** Full-screen routes inside Progress, including a per-workout route with
+  back-stack handling. A date filter covers All dates, On, After and Before a chosen day, and a
+  separate exercise filter searches exercises that appear in logged history. Set rows use a two-line
+  work/load layout and keep D1 branches, warm-up badges, effort and A1/A2 paperclips visible.
+- **Home.** Last Workout shows `Set N`, `D1`/`D2`, `A1`/`A2` and `WARM`. A widget drag outline
+  animates in the accent colour and a one-shot accent wave appears only after a reorder actually
+  commits; no-op and cancelled drags show no wave and reduced-motion devices skip it.
+
+### Changed
+
+- **Effort and supersets in AI.** Tools read target/actual effort and superset links, and proposals
+  can carry `targetEffortRpe` and `supersetGroupId`. Only a pair of exactly two adjacent same-day
+  exercises survives into an approval card; prompt instructions forbid inventing effort values or
+  relationships. Withdrawing AI workout-data access stops old turns from being replayed to the
+  provider, and a pending proposal is consumed atomically so a double tap or a stale screen cannot
+  create the same routine twice.
+- **Provider errors.** Short responses are no longer misread as connection failures. DNS and host
+  resolution, refused or unreachable connections, TLS, timeouts, truncated replies, malformed HTTP,
+  HTTP 401/403/400/404/429/5xx and cancellation are reported separately instead of collapsing into
+  a false "no internet" message.
+- **Home and history data loading is more efficient**, including on large histories.
+
+### Fixed
+
+- **AI Coach tool loop.** Bounded provider rounds, tool calls per response and per turn, per-tool and
+  per-request timeouts, one retry layer and bounded chat history keep long-running requests
+  predictable; cancellation no longer produces a visible error dialog. The chat sidebar hides the
+  keyboard before it opens.
+- **Superset controls.** The paperclip replaces textual Pair/Linked actions in the Routine editor
+  and active workout, and the dialog links immediately in the only valid direction. Dragging either
+  member moves the whole pair during the gesture; final ordering is validated before it is stored.
+- **Presentation polish.** The Target effort stepper uses the neutral filled pair so it reads
+  correctly in every theme; history uses the compact A1/A2 paperclip badge in the exercise header;
+  the active-workout paperclip aligns with the exercise-type tag; and Exercise Progression drops its
+  duplicate muscle name.
+- **Transactional workout saves.** A completed session and all of its sets are inserted in one Room
+  transaction, so a crash cannot leave a session without its history.
+
+### Security
+
+- Release builds no longer embed a provider key; a development key exists only in debug builds.
+  Gemini requests send the key in the `x-goog-api-key` header rather than the URL, and hosted
+  providers refuse redirects so a credential or prompt body cannot be forwarded to another origin.
+- Android auto-backup and device transfer are disabled (`allowBackup="false"`) and both backup rule
+  files exclude every app data domain. Provider keys remain omitted from `.ironpulse` archives.
+- `MainActivity` is not exported. The network security config denies remote cleartext explicitly;
+  only localhost is exempt for a local model runner.
+- CSV export neutralises formulas hidden behind whitespace or control characters; XLSX export strips
+  XML-illegal characters instead of writing a corrupt workbook. PDF preview is page-limited and the
+  document is always closed.
+- Release-asset downloads are capped at 200 MB and the local file name is sanitised before the file
+  is placed in the app's update directory.
+
+### Compatibility
+
+- Existing public 4.4.0, 5.0.0 and 5.0.1 installs upgrade in place. Historical sessions remain
+  ungrouped and have no effort value; old `.ironpulse` archives import with null effort and no
+  supersets, while new archives preserve both.
+
+### Verification
+
+- 964 JVM/Robolectric tests: 0 failures, 0 errors, 1 skipped.
+
 ## [5.0.1] - 2026-11-15
 
 IronPulse 5.0.1 is a bug-fix release for onboarding and backup restoration. It does not change the

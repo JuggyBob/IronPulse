@@ -135,7 +135,7 @@ class ExerciseFieldBackupTest {
 
     @Test
     fun `the current data schema is six`() {
-        assertEquals(6, BackupFormat.CURRENT_DATA_SCHEMA_VERSION)
+        assertEquals(7, BackupFormat.CURRENT_DATA_SCHEMA_VERSION)
         assertTrue(
             BackupSchemaMigrations.all.any { it.fromVersion == 5 && it.toVersion == 6 }
         )

@@ -34,7 +34,11 @@ class AiService(
                 "continuation of one main set, not a separate exercise: when a plan calls for " +
                 "them, write the reduction after that set (for example 'Bench Press 3x8 @ 40kg, " +
                 "drop 30kg x 8, drop 20kg x 6') and never list drops as top-level exercises. " +
-                "Drop sets count toward volume and repetitions but never as 1RM or working-set PRs."
+                "Drop sets count toward volume and repetitions but never as 1RM or working-set PRs. " +
+                "Effort is stored canonically as RPE 6-10; RIR is only a display of that same value " +
+                "(10 - RPE, with 4+ at RPE 6). Never infer effort when it was not recorded. " +
+                "A superset links exactly two adjacent exercises; each exercise keeps its own sets, " +
+                "drops, rest and completion state. Never invent a superset relationship."
     }
 
     val activeProviderFlow: Flow<AiProviderId> = configurationRepository.activeProviderFlow

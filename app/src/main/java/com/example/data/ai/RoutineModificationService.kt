@@ -8,9 +8,11 @@ package com.example.data.ai
 
 import androidx.room.withTransaction
 import com.example.data.db.AppDatabase
+import com.example.data.model.ChatMessageStatus
 import com.example.data.model.Exercise
 import com.example.data.model.RoutineExerciseItem
 import com.example.data.model.RoutineParser
+import com.example.data.model.SupersetRules
 import com.example.data.model.SavedRoutine
 import com.example.data.repository.PlanRepository
 
@@ -51,7 +53,8 @@ class RoutineModificationService(private val db: AppDatabase) {
      */
     suspend fun applyNewRoutine(
         proposal: NewRoutineProposal,
-        accessEnabled: Boolean
+        accessEnabled: Boolean,
+        approvedMessageId: String? = null
     ): Result<RoutineCreationResult> {
         if (!accessEnabled) {
             return Result.failure(IllegalStateException("AI workout-data access is disabled."))
@@ -118,24 +121,27 @@ class RoutineModificationService(private val db: AppDatabase) {
                                 prescription = proposed.prescription,
                                 weekday = day.weekday,
                                 dayTitle = day.focus,
-                                dayNote = day.note
+                                dayNote = day.note,
+                                supersetGroupId = proposed.supersetGroupId,
+                                targetEffortRpe = proposed.targetEffortRpe
                             )
                         )
                     }
                 }
                 if (items.isEmpty()) error("The proposed routine has no exercises.")
+                val normalizedItems = SupersetRules.normalize(items)
 
-                val trainingDays = items.map { it.weekday }.distinct().size
+                val trainingDays = normalizedItems.map { it.weekday }.distinct().size
                 val created = PlanRepository(db).createPlanFromItems(
                     name = proposal.routineName,
                     description = "AI Coach plan • ${items.size} exercises • " +
                         "$trainingDays training day${if (trainingDays == 1) "" else "s"}",
                     goal = proposal.goal.take(160),
-                    items = items
+                    items = normalizedItems
                 )
                 val routineId = created.routineIds.firstOrNull()
                     ?: error("The proposed routine has no exercises.")
-                RoutineCreationResult(
+                val result = RoutineCreationResult(
                     routineId = routineId,
                     routineName = proposal.routineName,
                     trainingDays = trainingDays,
@@ -143,13 +149,20 @@ class RoutineModificationService(private val db: AppDatabase) {
                     createdExercises = createdNames,
                     scheduleId = created.scheduleId
                 )
+                // Approve the card in the same transaction that writes the routine, so a crash can
+                // never leave a PENDING card whose routine was already created.
+                approvedMessageId?.let {
+                    db.chatDao().updateMessageStatus(it, ChatMessageStatus.APPROVED)
+                }
+                result
             }
         }
     }
 
     suspend fun apply(
         proposal: RoutineModificationProposal,
-        accessEnabled: Boolean
+        accessEnabled: Boolean,
+        approvedMessageId: String? = null
     ): Result<RoutineChangeResult> {
         if (!accessEnabled) {
             return Result.failure(
@@ -211,6 +224,9 @@ class RoutineModificationService(private val db: AppDatabase) {
                             scheduleVersion = 1
                         )
                     )
+                    approvedMessageId?.let {
+                        db.chatDao().updateMessageStatus(it, ChatMessageStatus.APPROVED)
+                    }
                     return@withTransaction RoutineChangeResult(
                         routineId = routine.id,
                         routineName = routine.name,
@@ -262,7 +278,9 @@ class RoutineModificationService(private val db: AppDatabase) {
                     prescription = removed.prescription,
                     weekday = proposal.weekday,
                     dayTitle = removed.dayTitle,
-                    dayNote = removed.dayNote
+                    dayNote = removed.dayNote,
+                    supersetGroupId = removed.supersetGroupId,
+                    targetEffortRpe = removed.targetEffortRpe
                 )
 
                 val updatedItems = days.flatMap { routineDay ->
@@ -289,6 +307,9 @@ class RoutineModificationService(private val db: AppDatabase) {
                     ?: error("The routine could not be read after the change.")
                 if (verified.exercisesJson != updatedJson) {
                     error("The routine change did not persist correctly.")
+                }
+                approvedMessageId?.let {
+                    db.chatDao().updateMessageStatus(it, ChatMessageStatus.APPROVED)
                 }
                 RoutineChangeResult(
                     routineId = routine.id,

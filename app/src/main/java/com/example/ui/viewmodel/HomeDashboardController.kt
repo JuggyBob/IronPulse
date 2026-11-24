@@ -36,14 +36,22 @@ class HomeDashboardController(
     private val userProfile: StateFlow<UserProfile>,
     private val weekStartFlow: StateFlow<Boolean>
 ) {
+    /**
+     * The single full-history flow shared by every Home projection.
+     *
+     * Each [FitnessRepository.getAllSessionsWithSets] collection is a session query plus a
+     * `@Relation` load of every set. Reading it once here avoids opening a second copy for the
+     * activity heat map, which previously doubled both the SQLite work and the list mapping on
+     * every database change.
+     */
+    val workoutHistory: StateFlow<List<SessionWithSets>> = repository.getAllSessionsWithSets()
+        .stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     val activityDays: StateFlow<List<ActivityDay>> = combine(
-        repository.getAllSessionsWithSets(),
+        workoutHistory,
         userProfile
     ) { sessions, profile -> buildActivityDays(sessions, profile.currentWeightKg) }
         .flowOn(Dispatchers.Default)
-        .stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
-
-    val workoutHistory: StateFlow<List<SessionWithSets>> = repository.getAllSessionsWithSets()
         .stateIn(scope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val homeHeatmap: StateFlow<List<HomeDashboard.DayCell>> = combine(

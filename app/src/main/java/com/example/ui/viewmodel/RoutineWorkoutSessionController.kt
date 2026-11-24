@@ -8,6 +8,7 @@ package com.example.ui.viewmodel
 
 import com.example.data.model.ActiveRoutineWorkoutState
 import com.example.data.model.DropSetRules
+import com.example.data.model.EffortScale
 import com.example.data.model.Exercise
 import com.example.data.model.ExerciseField
 import com.example.data.model.ExerciseType
@@ -15,6 +16,7 @@ import com.example.data.model.LocalDateKey
 import com.example.data.model.LoggedSet
 import com.example.data.model.RemovedActiveExercise
 import com.example.data.model.RoutineExerciseItem
+import com.example.data.model.SupersetRules
 import com.example.data.model.RoutineParser
 import com.example.data.model.sanitizedFor
 import com.example.data.model.SavedRoutine
@@ -156,7 +158,9 @@ class RoutineWorkoutSessionController(
                         bodyWeightKg = currentBodyWeightKg(),
                         restSecondsOverride = main?.restSeconds?.takeIf { it > 0 }
                             ?: defaultRestForExercise(ex.id).takeIf { it > 0 },
-                        setUid = mainUid
+                        setUid = mainUid,
+                        supersetGroupId = item?.supersetGroupId,
+                        effortRpe = EffortScale.normalize(item?.targetEffortRpe)
                     )
                 )
                 dropsForExercise
@@ -195,7 +199,9 @@ class RoutineWorkoutSessionController(
                                 setUid = LoggedSet.newUid(),
                                 parentSetUid = mainUid,
                                 dropIndex = drop.dropIndex.coerceAtLeast(1),
-                                restSecondsOverride = drop.restSeconds.takeIf { it > 0 }
+                                restSecondsOverride = drop.restSeconds.takeIf { it > 0 },
+                                supersetGroupId = item?.supersetGroupId,
+                                effortRpe = EffortScale.normalize(item?.targetEffortRpe)
                             )
                         )
                     }
@@ -266,7 +272,9 @@ class RoutineWorkoutSessionController(
             restSecondsOverride = lastSet?.restSecondsOverride
                 ?: routineRest
                 ?: defaultRestForExercise(exercise.id).takeIf { it > 0 },
-            setUid = LoggedSet.newUid()
+            setUid = LoggedSet.newUid(),
+            supersetGroupId = lastSet?.supersetGroupId,
+            effortRpe = lastSet?.effortRpe
         )
         _activeRoutineWorkout.value = current.copy(
             sets = DropSetRules.renumberExerciseSets(normalized + newSet, exercise.id)
@@ -300,7 +308,9 @@ class RoutineWorkoutSessionController(
             restSecondsOverride = source.restSecondsOverride,
             setUid = LoggedSet.newUid(),
             parentSetUid = parentSet.setUid,
-            dropIndex = (siblings.maxOfOrNull { it.dropIndex } ?: 0) + 1
+            dropIndex = (siblings.maxOfOrNull { it.dropIndex } ?: 0) + 1,
+            supersetGroupId = parentSet.supersetGroupId,
+            effortRpe = source.effortRpe
         )
         _activeRoutineWorkout.value = current.copy(sets = normalized + newChild)
     }
@@ -313,7 +323,8 @@ class RoutineWorkoutSessionController(
         mutableList[index] = updated.copy(
             setUid = existing.setUid,
             parentSetUid = existing.parentSetUid,
-            dropIndex = existing.dropIndex
+            dropIndex = existing.dropIndex,
+            supersetGroupId = existing.supersetGroupId
         )
         _activeRoutineWorkout.value = current.copy(sets = mutableList)
     }
@@ -390,19 +401,31 @@ class RoutineWorkoutSessionController(
         val index = current.exercises.indexOfFirst { it.id == exerciseId }
         if (index < 0) return null
         val removedSets = current.sets.filter { it.exerciseId == exerciseId }
+        val linkedItem = current.routineItems.getOrNull(index)
+        val nextItems = if (!linkedItem?.supersetGroupId.isNullOrBlank()) {
+            SupersetRules.unlink(current.routineItems, index)
+        } else {
+            current.routineItems
+        }
+        val nextSets = if (!linkedItem?.supersetGroupId.isNullOrBlank()) {
+            SupersetRules.unlinkSets(current.sets, exerciseId)
+        } else {
+            current.sets
+        }
         val snapshot = RemovedActiveExercise(
             exercise = current.exercises[index],
-            routineItem = current.routineItems.getOrNull(index),
-            sets = removedSets,
+            routineItem = linkedItem?.copy(supersetGroupId = null),
+            sets = nextSets.filter { it.exerciseId == exerciseId },
             index = index,
             wasSessionOnly = exerciseId in current.sessionOnlyExerciseIds
         )
         _activeRoutineWorkout.value = current.copy(
             exercises = current.exercises.filterIndexed { i, _ -> i != index },
-            routineItems = current.routineItems.filterIndexed { i, _ -> i != index },
-            sets = current.sets.filterNot { it.exerciseId == exerciseId },
+            routineItems = nextItems.filterIndexed { i, _ -> i != index },
+            sets = nextSets.filterNot { it.exerciseId == exerciseId },
             sessionOnlyExerciseIds = current.sessionOnlyExerciseIds - exerciseId
         )
+        if (!linkedItem?.supersetGroupId.isNullOrBlank()) persistRoutineOrder()
         return snapshot
     }
 
@@ -413,12 +436,14 @@ class RoutineWorkoutSessionController(
         val exercises = current.exercises.toMutableList().apply { add(index, snapshot.exercise) }
         val items = current.routineItems.toMutableList().apply {
             val item = snapshot.routineItem
+                ?.copy(supersetGroupId = null)
                 ?: defaultRoutineItem(snapshot.exercise, current.weekday ?: 0, current.dayTitle.orEmpty())
             add(index.coerceAtMost(size), item)
         }
         val existingUids = current.sets.mapNotNull { it.setUid.takeIf(String::isNotBlank) }.toHashSet()
         val restoredSets = DropSetRules.normalize(snapshot.sets)
             .filterNot { it.setUid in existingUids }
+            .map { it.copy(supersetGroupId = null) }
         _activeRoutineWorkout.value = current.copy(
             exercises = exercises,
             routineItems = items,
@@ -435,6 +460,46 @@ class RoutineWorkoutSessionController(
      * Reorders the live exercise sequence. For a routine workout this also rewrites the routine's
      * order without changing its id, so every Schedule slot that references it sees the new order.
      */
+    /** Links this exercise to its adjacent partner. Returns false when the pair is not valid. */
+    fun linkSuperset(exerciseId: Long, direction: Int): Boolean {
+        val current = _activeRoutineWorkout.value ?: return false
+        val index = current.exercises.indexOfFirst { it.id == exerciseId }
+        if (index < 0) return false
+        val items = current.exercises.mapIndexed { i, ex ->
+            current.routineItems.getOrNull(i)
+                ?: defaultRoutineItem(ex, current.weekday ?: 0, current.dayTitle.orEmpty())
+        }
+        if (!SupersetRules.canLink(items, index, direction)) return false
+        val partnerIndex = index + direction
+        val partnerId = current.exercises[partnerIndex].id
+        if (!SupersetRules.canLinkSets(current.sets, exerciseId, partnerId)) return false
+        val linkedItems = SupersetRules.link(items, index, direction)
+        _activeRoutineWorkout.value = current.copy(
+            routineItems = linkedItems,
+            sets = SupersetRules.linkSets(current.sets, exerciseId, partnerId)
+        )
+        persistRoutineOrder()
+        return true
+    }
+
+    /** Removes the pair containing this exercise from both the live session and the saved routine. */
+    fun unlinkSuperset(exerciseId: Long): Boolean {
+        val current = _activeRoutineWorkout.value ?: return false
+        val index = current.exercises.indexOfFirst { it.id == exerciseId }
+        if (index < 0) return false
+        val items = current.exercises.mapIndexed { i, ex ->
+            current.routineItems.getOrNull(i)
+                ?: defaultRoutineItem(ex, current.weekday ?: 0, current.dayTitle.orEmpty())
+        }
+        if (items.getOrNull(index)?.supersetGroupId.isNullOrBlank()) return false
+        _activeRoutineWorkout.value = current.copy(
+            routineItems = SupersetRules.unlink(items, index),
+            sets = SupersetRules.unlinkSets(current.sets, exerciseId)
+        )
+        persistRoutineOrder()
+        return true
+    }
+
     fun moveExercise(fromIndex: Int, toIndex: Int) {
         val current = _activeRoutineWorkout.value ?: return
         if (fromIndex !in current.exercises.indices) return
@@ -444,11 +509,44 @@ class RoutineWorkoutSessionController(
             current.routineItems.getOrNull(index)
                 ?: defaultRoutineItem(ex, current.weekday ?: 0, current.dayTitle.orEmpty())
         }.toMutableList()
-        val exercise = exercises.removeAt(fromIndex)
-        val item = items.removeAt(fromIndex)
-        exercises.add(toIndex, exercise)
-        items.add(toIndex, item)
-        _activeRoutineWorkout.value = current.copy(exercises = exercises, routineItems = items)
+        // The live sets are the source of truth for an existing pair. If a stale draft lost the
+        // routine item's group id, repair it before moving so a drag can never split the pair.
+        val liveGroupId = SupersetRules.groupIdForExercise(current.sets, exercises[fromIndex].id)
+        val partner = if (liveGroupId != null) {
+            items.indices.firstOrNull { candidate ->
+                candidate != fromIndex &&
+                    SupersetRules.groupIdForExercise(current.sets, exercises[candidate].id) == liveGroupId
+            }
+        } else {
+            SupersetRules.partnerIndex(items, fromIndex)
+        }
+        if (liveGroupId != null && partner != null) {
+            items[fromIndex] = items[fromIndex].copy(supersetGroupId = liveGroupId)
+            items[partner] = items[partner].copy(supersetGroupId = liveGroupId)
+        }
+        val start = if (partner == null) fromIndex else minOf(fromIndex, partner)
+        val size = if (partner == null) 1 else 2
+        val end = start + size
+        if (toIndex in start until end) return
+        // Never land inside another pair; that would silently merge or split groups.
+        if (size == 2 &&
+            items.getOrNull(toIndex)?.supersetGroupId
+                ?.let { it != items[fromIndex].supersetGroupId } == true
+        ) {
+            return
+        }
+        fun <T> moveBlock(list: MutableList<T>): MutableList<T> {
+            val block = list.subList(start, end).toList()
+            repeat(size) { list.removeAt(start) }
+            val insertAt = (if (toIndex > start) toIndex - size + 1 else toIndex)
+                .coerceIn(0, list.size)
+            list.addAll(insertAt, block)
+            return list
+        }
+        _activeRoutineWorkout.value = current.copy(
+            exercises = moveBlock(exercises),
+            routineItems = moveBlock(items)
+        )
         persistRoutineOrder()
     }
 
@@ -465,7 +563,7 @@ class RoutineWorkoutSessionController(
         scope.launch(Dispatchers.IO) {
             val savedAt = System.currentTimeMillis()
             val finalBodyWeightKg = resolveBodyWeightKg()
-            val repaired = repairCompletedChildren(current.sets)
+            val repaired = SupersetRules.normalizeSets(repairCompletedChildren(current.sets))
             val setsToSave = repaired
                 .filter { it.isCompleted }
                 .mapIndexed { index, set ->
@@ -497,8 +595,7 @@ class RoutineWorkoutSessionController(
                     scheduleId = current.scheduleId,
                     scheduleGoal = current.scheduleGoal
                 )
-                val sessionId = repository.insertSession(session)
-                repository.insertSets(setsToSave.map { it.copy(sessionId = sessionId) })
+                val sessionId = repository.insertSessionWithSets(session, setsToSave)
                 savedSessionId = sessionId
             }
 
@@ -524,8 +621,8 @@ class RoutineWorkoutSessionController(
             items.add(defaultRoutineItem(ex, state.weekday ?: 0, state.dayTitle.orEmpty()))
         }
         _activeRoutineWorkout.value = state.copy(
-            routineItems = items,
-            sets = DropSetRules.normalize(state.sets)
+            routineItems = SupersetRules.normalize(items),
+            sets = SupersetRules.normalizeSets(DropSetRules.normalize(state.sets))
         )
     }
 
@@ -601,7 +698,11 @@ class RoutineWorkoutSessionController(
                     item.exerciseId <= 0L || seen.add(item.exerciseId)
                 }
                 repository.updateSavedRoutine(
-                    routine.copy(exercisesJson = RoutineParser.serializeExercises(deduped))
+                    routine.copy(
+                        exercisesJson = RoutineParser.serializeExercises(
+                            SupersetRules.normalize(deduped)
+                        )
+                    )
                 )
             }
         }

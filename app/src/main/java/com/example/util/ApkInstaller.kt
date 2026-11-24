@@ -189,7 +189,18 @@ object ApkInstaller {
      */
     fun updateFile(context: Context, assetName: String): File {
         val directory = File(context.filesDir, "updates").apply { mkdirs() }
-        return File(directory, assetName)
+        // The name comes from release metadata, so treat it as untrusted: keep a plain file name
+        // and verify the result really lives inside the updates directory.
+        val safeName = assetName
+            .substringAfterLast('/')
+            .substringAfterLast('\\')
+            .replace(Regex("[^A-Za-z0-9._-]"), "_")
+            .trimStart('.')
+            .take(120)
+            .ifBlank { "update.apk" }
+        val candidate = File(directory, safeName)
+        val root = directory.canonicalFile
+        return if (candidate.canonicalFile.parentFile == root) candidate else File(directory, "update.apk")
     }
 
     /**

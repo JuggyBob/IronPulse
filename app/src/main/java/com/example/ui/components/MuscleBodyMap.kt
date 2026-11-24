@@ -709,11 +709,44 @@ private fun DrawScope.drawBodyDetails(isFront: Boolean, scaleX: Float, scaleY: F
             cap = StrokeCap.Round
         )
     }
+
+    /** A mirrored pair of quiet landmark lines (knee, ankle, clavicle). */
+    fun detailMirrored(x1: Float, y1: Float, x2: Float, y2: Float) {
+        detail(x1, y1, x2, y2)
+        detail(BODY_WIDTH - x1, y1, BODY_WIDTH - x2, y2)
+    }
+
+    /** A mirrored curve, used where a straight landmark would look mechanical. */
+    fun detailCurve(build: BodyPath.() -> Unit) {
+        val left = BodyPath().apply(build).toPath(scaleX, scaleY)
+        val right = BodyPath().apply(build).toPath(scaleX, scaleY, mirror = true)
+        val stroke = Stroke(width = detailWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        drawPath(left, color, style = stroke)
+        drawPath(right, color, style = stroke)
+    }
+
     if (isFront) {
+        // Sternum and linea alba.
         detail(50f, 32.6f, 50f, 45.8f)
         detail(50f, 50.8f, 50f, 71.8f)
+        // Clavicles and the quiet knee/ankle landmarks add anatomy without new regions.
+        detailCurve {
+            move(50f, 32.8f)
+            cubic(45.8f, 32.2f, 41.2f, 33.4f, 37.4f, 35.8f)
+        }
+        detailMirrored(37.6f, 123.8f, 46.4f, 123.8f)
+        detailMirrored(38.0f, 158.6f, 43.8f, 158.6f)
     } else {
+        // Spine.
         detail(50f, 44.8f, 50f, 78.0f)
+        // Scapular angle and the gluteal cleft.
+        detailCurve {
+            move(50f, 36.2f)
+            cubic(45.8f, 36.8f, 40.6f, 38.8f, 37.2f, 42.0f)
+        }
+        detail(50f, 76.0f, 50f, 92.2f)
+        detailMirrored(37.8f, 124.2f, 46.4f, 124.2f)
+        detailMirrored(37.8f, 158.4f, 43.8f, 158.4f)
     }
 }
 

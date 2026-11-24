@@ -236,9 +236,15 @@ class AiConfigurationController(
         return geminiApiKeyProvider().trim()
             .ifBlank { legacyProfileProvider().customApiKey.trim() }
             .ifBlank {
-                BuildConfig.GEMINI_API_KEY.takeIf {
-                    it.isNotBlank() && it != "MY_GEMINI_API_KEY"
-                }.orEmpty()
+                // A build-time key is a development convenience only. Shipping it in a release
+                // would embed a recoverable credential, so release builds require a user key.
+                if (!BuildConfig.DEBUG) {
+                    ""
+                } else {
+                    BuildConfig.GEMINI_API_KEY.takeIf {
+                        it.isNotBlank() && it != "MY_GEMINI_API_KEY"
+                    }.orEmpty()
+                }
             }
     }
 }

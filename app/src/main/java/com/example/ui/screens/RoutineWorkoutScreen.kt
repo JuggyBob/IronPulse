@@ -72,6 +72,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.ActiveRoutineWorkoutState
+import com.example.data.model.EffortDisplay
 import com.example.data.model.Exercise
 import com.example.data.model.DistanceFormat
 import com.example.data.model.ExerciseType
@@ -122,6 +123,9 @@ fun RoutineWorkoutScreen(
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
     // Weights live in kilograms; this is the unit the athlete reads and types in
     val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
+    val effortDisplay by viewModel.appSettings
+        .map { it.effortDisplay }
+        .collectAsStateWithLifecycle(initialValue = EffortDisplay.RIR)
     val allExercises by viewModel.allExercises.collectAsStateWithLifecycle()
     val exerciseDefaultRests by viewModel.exerciseDefaultRests.collectAsStateWithLifecycle()
     val unit = weightUnit.suffix
@@ -355,6 +359,9 @@ fun RoutineWorkoutScreen(
                     onRemoveExercise = { viewModel.removeExerciseFromRoutineWorkout(it) },
                     onRestoreExercise = { viewModel.restoreExerciseToRoutineWorkout(it) },
                     onMoveExercise = { from, to -> viewModel.moveRoutineExercise(from, to) },
+                    effortDisplay = effortDisplay,
+                    onLinkSuperset = { id, direction -> viewModel.linkRoutineSuperset(id, direction) },
+                    onUnlinkSuperset = { id -> viewModel.unlinkRoutineSuperset(id) },
                     onShowDetails = { exerciseShowingDetails = it },
                     modifier = Modifier.weight(1f)
                 )

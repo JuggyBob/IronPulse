@@ -194,6 +194,16 @@ object WorkoutDraftCodec {
         // workout whose sets lost their body weight would be measured against whatever the
         // athlete weighs today, which is not what they lifted.
         put("bodyWeightKg", set.bodyWeightKg)
+        if (set.supersetGroupId == null) {
+            put("supersetGroupId", JSONObject.NULL)
+        } else {
+            put("supersetGroupId", set.supersetGroupId)
+        }
+        if (set.effortRpe == null) {
+            put("effortRpe", JSONObject.NULL)
+        } else {
+            put("effortRpe", set.effortRpe)
+        }
     }
 
     private fun decodeSet(obj: JSONObject): LoggedSet = LoggedSet(
@@ -227,6 +237,13 @@ object WorkoutDraftCodec {
         },
         // A draft written before the snapshot existed has no body weight: 0 means "not recorded",
         // which is the same thing a set logged back then meant.
-        bodyWeightKg = obj.optDouble("bodyWeightKg", 0.0)
+        bodyWeightKg = obj.optDouble("bodyWeightKg", 0.0),
+        supersetGroupId = (obj.opt("supersetGroupId") as? String)
+            ?.takeIf { it.isNotBlank() && it != "null" },
+        effortRpe = if (obj.has("effortRpe") && !obj.isNull("effortRpe")) {
+            EffortScale.normalize(obj.optDouble("effortRpe", Double.NaN))
+        } else {
+            null
+        }
     )
 }

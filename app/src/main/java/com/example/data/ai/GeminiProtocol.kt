@@ -15,13 +15,18 @@ object GeminiProtocol {
     const val BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/"
     const val DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
-    fun generateContentUrl(model: String, apiKey: String): String {
+    fun generateContentUrl(model: String): String {
         val cleanModel = model.trim().removePrefix("models/").ifBlank { DEFAULT_MODEL }
-        return "$BASE_URL$cleanModel:generateContent?key=$apiKey"
+        val encodedModel = android.net.Uri.encode(cleanModel)
+        return "$BASE_URL$encodedModel:generateContent"
     }
 
-    fun modelsUrl(apiKey: String): String =
-        "https://generativelanguage.googleapis.com/v1beta/models?key=$apiKey&pageSize=100"
+    fun modelsUrl(): String =
+        "https://generativelanguage.googleapis.com/v1beta/models?pageSize=100"
+
+    /** Google accepts the key as a header; never put a long-lived credential in the URL. */
+    fun authHeaders(apiKey: String): Map<String, String> =
+        mapOf("x-goog-api-key" to apiKey.trim())
 
     fun buildGenerateContentRequest(request: AiRequest, includeTools: Boolean): JSONObject = JSONObject().apply {
         put(

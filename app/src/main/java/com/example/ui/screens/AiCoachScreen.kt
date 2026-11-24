@@ -101,6 +101,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
@@ -274,6 +276,8 @@ fun AiChatView(
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val coroutineScope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     // Let the host hide the bottom dock while the history drawer is open. The dock overlays the
     // whole app, so leaving it visible covers the last chat in a long history list.
@@ -311,6 +315,16 @@ fun AiChatView(
         animationSpec = tween(220, easing = FastOutSlowInEasing),
         label = "ai_chat_input_dock_clearance"
     )
+
+    // A right-swipe opens the drawer while the composer may still own the IME. Hide the keyboard
+    // first, then clear focus so focus cannot re-open it. This runs for gestures, the hamburger
+    // button and any programmatic drawerState.open().
+    LaunchedEffect(drawerOpen) {
+        if (drawerOpen) {
+            keyboardController?.hide()
+            focusManager.clearFocus(force = true)
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -709,15 +723,23 @@ fun AiChatView(
 
                     IconButton(
                         onClick = {
-                            if (inputQuery.isNotBlank()) {
+                            if (!isLoading && inputQuery.isNotBlank()) {
                                 viewModel.sendChatMessage(inputQuery)
                                 inputQuery = ""
                             }
                         },
+                        enabled = !isLoading && inputQuery.isNotBlank(),
                         modifier = Modifier
                             .padding(bottom = 4.dp)
                             .size(44.dp)
-                            .background(ElectricCyan, CircleShape)
+                            .background(
+                                if (isLoading || inputQuery.isBlank()) {
+                                    ElectricCyan.copy(alpha = 0.35f)
+                                } else {
+                                    ElectricCyan
+                                },
+                                CircleShape
+                            )
                             .testTag("ai_chat_send_button")
                     ) {
                         Icon(

@@ -38,7 +38,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -85,6 +87,8 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -101,6 +105,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.DistanceFormat
 import com.example.data.model.Exercise
+import com.example.data.model.EffortDisplay
+import com.example.data.model.EffortScale
 import com.example.data.model.ExerciseField
 import com.example.data.model.ExerciseFieldCatalog
 import com.example.data.model.ExerciseFieldValues
@@ -1315,7 +1321,11 @@ fun SelectedRoutineExerciseRow(
     /** Opens the same read-only exercise sheet the workout uses. */
     onShowDetails: () -> Unit,
     onUpdate: (RoutineExerciseItem) -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    isSuperset: Boolean = false,
+    showSupersetAction: Boolean = true,
+    onSuperset: () -> Unit = {},
+    effortDisplay: EffortDisplay = EffortDisplay.RIR
 ) {
     val fields = supportedFields.ifEmpty {
         ExerciseFieldCatalog.defaultsForType(item.exerciseType)
@@ -1511,6 +1521,40 @@ fun SelectedRoutineExerciseRow(
                         )
                     }
 
+                    if (showSupersetAction) {
+                        Box(
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (isSuperset) ElectricCyan.copy(alpha = 0.16f)
+                                    else DarkSurfaceVariant
+                                )
+                                .border(
+                                    1.dp,
+                                    if (isSuperset) ElectricCyan.copy(alpha = 0.65f) else DarkBorder,
+                                    CircleShape
+                                )
+                                .clickable(onClick = onSuperset)
+                                .semantics {
+                                    contentDescription = if (isSuperset) {
+                                        "Manage superset"
+                                    } else {
+                                        "Link superset"
+                                    }
+                                }
+                                .testTag("routine_superset_$index"),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AttachFile,
+                                contentDescription = null,
+                                tint = if (isSuperset) ElectricCyan else TextMuted,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+
                     IconButton(
                         onClick = onDelete,
                         modifier = Modifier.size(32.dp)
@@ -1618,6 +1662,112 @@ fun SelectedRoutineExerciseRow(
                                 )
                             }
                         )
+                    }
+                }
+            }
+
+            val repBased = ExerciseField.REPS in fields
+            // Undo returns to the target that was persisted when this editor row opened. The slot
+            // is always measured so the outlined field never shifts when the icon appears.
+            val initialEffort = remember(item.exerciseId) { item.targetEffortRpe }
+            val effortChanged = item.targetEffortRpe != initialEffort
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .heightIn(min = 42.dp)
+                    .background(DarkBg, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Target effort",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = TextMuted,
+                    maxLines = 1,
+                    modifier = Modifier.weight(1f)
+                )
+                Row(
+                    modifier = Modifier
+                        .height(32.dp)
+                        .background(DarkSurface, RoundedCornerShape(6.dp))
+                        .border(1.dp, DarkBorder, RoundedCornerShape(6.dp)),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.inverseSurface)
+                            .clickable {
+                                onUpdate(
+                                    item.copy(
+                                        targetEffortRpe = EffortScale.step(
+                                            item.targetEffortRpe,
+                                            effortDisplay,
+                                            repBased,
+                                            -1
+                                        )
+                                    )
+                                )
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "−",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.inverseOnSurface
+                        )
+                    }
+                    Text(
+                        text = EffortScale.labelForTarget(item.targetEffortRpe, effortDisplay, repBased),
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = if (item.targetEffortRpe == null) TextMuted else ElectricCyan,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        modifier = Modifier.widthIn(min = 48.dp)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.inverseSurface)
+                            .clickable {
+                                onUpdate(
+                                    item.copy(
+                                        targetEffortRpe = EffortScale.step(
+                                            item.targetEffortRpe,
+                                            effortDisplay,
+                                            repBased,
+                                            1
+                                        )
+                                    )
+                                )
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "+",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.inverseOnSurface
+                        )
+                    }
+                }
+                Box(modifier = Modifier.size(32.dp), contentAlignment = Alignment.Center) {
+                    if (effortChanged) {
+                        IconButton(
+                            onClick = { onUpdate(item.copy(targetEffortRpe = initialEffort)) },
+                            modifier = Modifier
+                                .size(30.dp)
+                                .testTag("routine_target_effort_undo")
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.Undo,
+                                contentDescription = "Undo target effort change",
+                                tint = TextMuted,
+                                modifier = Modifier.size(17.dp)
+                            )
+                        }
                     }
                 }
             }

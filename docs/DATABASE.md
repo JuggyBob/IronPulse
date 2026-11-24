@@ -1,7 +1,7 @@
 # Database and migrations
 
 IronPulse stores everything on the device in a Room (SQLite) database named
-`ironpulse_database`. The current schema is **version 19**. The database is created and upgraded by
+`ironpulse_database`. The current schema is **version 20**. The database is created and upgraded by
 [`AppDatabase.kt`](../app/src/main/java/com/example/data/db/AppDatabase.kt); the entities live in
 [`Entities.kt`](../app/src/main/java/com/example/data/model/Entities.kt).
 
@@ -16,7 +16,7 @@ database, so the app never depends on a remote restore.
 |---|---|---|
 | `exercises` | The built-in catalogue, user-created movements and AI-created movements, including the ordered `supportedFields` list. | Unique `name`. |
 | `workout_sessions` | One logged workout: start/end time, duration, notes and the routine/schedule/planned-date link. | `startTime`. |
-| `logged_sets` | Every set: exercise, number, weight, added weight, reps, hold/time, distance, completion, timestamp, body-weight snapshot, `isWarmup`, `restSecondsOverride`, `setUid`, `parentSetUid`, `dropIndex`. | `sessionId`, `exerciseName`, `timestamp`. |
+| `logged_sets` | Every set: exercise, number, weight, added weight, reps, hold/time, distance, completion, timestamp, body-weight snapshot, `isWarmup`, `restSecondsOverride`, `setUid`, `parentSetUid`, `dropIndex`, nullable `effortRpe` and `supersetGroupId`. | `sessionId`, `exerciseName`, `timestamp`. |
 | `user_profile` | The single athlete row: name, units, goal and current weight. | Primary key only. |
 | `saved_routines` | One standalone workout Routine: ordered exercises as JSON, description, goal and `modelVersion` (`0` = legacy awaiting conversion, `1` = hidden legacy history row, `2` = current single-workout Routine). | `createdAt`. |
 | `schedules` | One weekly Schedule: name, description, goal strategy, creation time and the legacy routine it was migrated from. | `createdAt`. |
@@ -63,6 +63,23 @@ parent clears its children; deleting a parent deletes its children.
 Migration 18 gives every existing set a deterministic `legacy-<id>` UID and `parentSetUid = null`.
 No historical set is guessed into a drop set from its position, load or number.
 
+## Supersets and effort
+
+A superset is an exercise-level pair, deliberately separate from drop sets: a drop set is a child of
+one main set, while a superset links the main sets of two adjacent exercises in one workout.
+
+- `supersetGroupId` is a nullable string shared by exactly the two members. `SupersetRules` is the
+  single authority for linking, unlinking, validating and moving a pair; an invalid group (not two
+  adjacent same-day exercises) is cleared rather than guessed.
+- A pair moves as one block when either member is dragged, and completed history keeps the group id
+  so both members show their A1/A2 badges. A member may also have drop children; the two structures
+  stay independent.
+- `effortRpe` is a nullable real number on each set. The canonical value is RPE 6–10; RIR is only a
+  display (`10 − RPE`), controlled by a DataStore preference. A Routine exercise can also store a
+  nullable `targetEffortRpe` in `saved_routines.exercisesJson`.
+- Migration 20 leaves every existing `effortRpe` and `supersetGroupId` null: no historical set is
+  assigned an effort value or grouped into a superset.
+
 ## Exercise fields
 
 `exercises.supportedFields` is a compact, ordered, comma-separated list of field identifiers:
@@ -78,7 +95,7 @@ weight and added weight are mutually exclusive.
 
 ## Migration history
 
-Every step is registered in the builder; there is no gap in the chain from 1 to 19.
+Every step is registered in the builder; there is no gap in the chain from 1 to 20.
 
 | Step | What it does |
 |---|---|
@@ -100,6 +117,7 @@ Every step is registered in the builder; there is no gap in the chain from 1 to 
 | 16 → 17 | Adds `logged_sets.isWarmup` and `restSecondsOverride`. Legacy sets become normal, inherited sets. |
 | 17 → 18 | Adds `logged_sets.setUid`, `parentSetUid` and `dropIndex`; every existing set becomes a top-level set with a deterministic `legacy-<id>` UID. |
 | 18 → 19 | Adds `exercises.supportedFields`; the dataset reseed fills every catalogue row while preserving custom and AI-created exercises. |
+| 19 → 20 | Adds nullable `logged_sets.supersetGroupId` (TEXT) and `logged_sets.effortRpe` (REAL). Existing sets stay ungrouped and effort-free; no table is rebuilt. |
 
 ### 11 → 12 indexes
 
@@ -179,6 +197,8 @@ normal upgrade never drops a table or a row.
 | `DatabaseUpgradePathTest` | Opens real databases at older schemas, runs the full chain, checks that history survives, and verifies the schedule tables, new columns and indexes. |
 | `DropSetMigrationTest` | Schema 17 → 18 and backup v4 → v5 UID/parent defaults. |
 | `ExerciseFieldBackupTest` | Schema 18 → 19 and backup v5 → v6 field defaults. |
+| `SupersetSerializationTest` | Superset group ids and target effort survive routine JSON round trips, with invalid groups cleared. |
+| `EffortScaleTest` | Canonical RPE 6–10 values and the RIR display mapping, including the 4+ bucket. |
 | `BodyWeightRepairTest` | The body-weight snapshot and the idempotent repair, including the profile fallback. |
 | `DatasetSeederTest` | Seeded rows carry the canonical display spelling and field configuration. |
 | `RoutineLegacyLoadTest` | Legacy `addedWeight`, text prescriptions and JSON prescription fallback. |

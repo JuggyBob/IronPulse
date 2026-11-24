@@ -22,7 +22,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
@@ -59,6 +61,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.Settings
@@ -113,16 +116,22 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.example.data.model.UpdateState
 import com.example.ui.components.LiquidGlassLens
+import com.example.data.export.ExportState
 import com.example.ui.components.BottomDockState
+import com.example.ui.components.ExportSheet
 import com.example.ui.components.LocalBottomDockState
 import com.example.ui.components.LocalLiquidGlassEnabled
 import com.example.ui.components.StartupUpdateDialog
+import com.example.ui.components.WorkoutDayDetailScreen
+import com.example.ui.components.WorkoutHistoryScreen
 import com.example.ui.components.WorkoutSummaryDialog
 import com.example.ui.components.detectLiquidGlassLensGesture
 import com.example.ui.components.drawLiquidGlassLens
@@ -152,6 +161,7 @@ import com.example.ui.viewmodel.MainViewModel
 import com.example.util.ApkInstaller
 import com.example.util.LauncherIconOption
 import com.example.util.LauncherIcons
+import com.example.util.PerfTrace
 import java.io.File
 import kotlin.math.abs
 import kotlinx.coroutines.delay
@@ -169,6 +179,20 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector,
         Icons.Default.Settings,
         "nav_widget_appearance"
     )
+    object WorkoutHistory : Screen(
+        "workout_history",
+        "Workout History",
+        Icons.Default.History,
+        "nav_workout_history"
+    )
+    object WorkoutDetail : Screen(
+        "workout_detail/{sessionId}",
+        "Workout",
+        Icons.Default.History,
+        "nav_workout_detail"
+    ) {
+        fun route(sessionId: Long): String = "workout_detail/$sessionId"
+    }
 
     companion object {
         /**
@@ -177,8 +201,11 @@ sealed class Screen(val route: String, val title: String, val icon: ImageVector,
          * Settings and the widget appearance screen are opened from Settings and are not
          * destinations of their own, so the dock would otherwise have no selected index.
          */
-        fun selectedTabRoute(route: String): String =
-            if (route == Settings.route || route == WidgetAppearance.route) Home.route else route
+        fun selectedTabRoute(route: String): String = when (route) {
+            Settings.route, WidgetAppearance.route -> Home.route
+            WorkoutHistory.route, WorkoutDetail.route -> Progress.route
+            else -> route
+        }
     }
 }
 
@@ -252,6 +279,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val startupStart = PerfTrace.start()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setFullscreenMode(true)
@@ -262,6 +290,8 @@ class MainActivity : ComponentActivity() {
                 onWidgetNavigationHandled = { consumeWidgetNavigation(it) }
             )
         }
+        PerfTrace.mark("activity.setContent", startupStart)
+        window.decorView.post { PerfTrace.mark("activity.firstFrame", startupStart) }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -331,7 +361,10 @@ fun IronPulseApp(
     widgetNavigation: kotlinx.coroutines.flow.StateFlow<WidgetNavigationRequest?>? = null,
     onWidgetNavigationHandled: (Long) -> Unit = {}
 ) {
+    val appCompositionStart = remember { PerfTrace.start() }
+    val viewModelStart = remember { PerfTrace.start() }
     val viewModel: MainViewModel = viewModel()
+    PerfTrace.mark("compose.viewModel", viewModelStart)
     val launcherIcon by viewModel.launcherIcon.collectAsStateWithLifecycle()
     val launcherContext = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(launcherIcon) {
@@ -354,6 +387,7 @@ fun IronPulseApp(
         (context as? MainActivity)?.setFullscreenMode(fullscreenEnabled)
     }
     LaunchedEffect(Unit) {
+        PerfTrace.mark("compose.ironPulseApp", appCompositionStart)
         com.example.widget.WorkoutWidgetUpdater.updateAll(context)
         com.example.widget.WidgetMidnightScheduler.schedule(context)
     }
@@ -403,6 +437,8 @@ private fun IronPulseAppContent(
 ) {
     var navigationGeneration by rememberSaveable { mutableIntStateOf(0) }
     val navController = key(navigationGeneration) { rememberNavController() }
+    val reducedMotion = rememberReducedMotion()
+    val baseTransitionMs = if (reducedMotion) 0 else 300
     var wasOnboarding by remember { mutableStateOf(!onboardingCompleted) }
     LaunchedEffect(onboardingCompleted) {
         if (!onboardingCompleted) navigationGeneration++
@@ -704,6 +740,8 @@ private fun IronPulseAppContent(
         val isKeyboardOpen = WindowInsets.ime.getBottom(LocalDensity.current) > 0
         val glassEnabled = LocalLiquidGlassEnabled.current
         var aiChatDrawerOpen by remember { mutableStateOf(false) }
+        val exportState by viewModel.exportState.collectAsStateWithLifecycle()
+        val exportSheetOpen = exportState !is ExportState.Idle
         var navBounds by remember { mutableStateOf<Rect?>(null) }
         var contentBounds by remember { mutableStateOf<Rect?>(null) }
         LaunchedEffect(currentRoute) {
@@ -770,20 +808,41 @@ private fun IronPulseAppContent(
             }
         }
         val navigate: (Screen) -> Unit = { screen ->
-            if (currentRoute != screen.route) {
-                navController.navigate(screen.route) {
-                    popUpTo(navController.graph.findStartDestination().id) {
-                        saveState = true
+            val historyRoute = currentRoute == Screen.WorkoutHistory.route ||
+                currentRoute == Screen.WorkoutDetail.route
+            when {
+                // The dock highlights Progress while history is open. Tapping it should return
+                // to the Progress root instead of leaving the full-screen record on top.
+                historyRoute && screen == Screen.Progress -> {
+                    navController.popBackStack(Screen.Progress.route, inclusive = false)
+                }
+                // Leaving history for another tab must not save the detail route into the
+                // Progress tab's restorable state.
+                historyRoute -> {
+                    navController.popBackStack(Screen.Progress.route, inclusive = false)
+                    navController.navigate(screen.route) {
+                        popUpTo(navController.graph.findStartDestination().id) {
+                            saveState = true
+                        }
+                        launchSingleTop = true
+                        restoreState = true
                     }
-                    launchSingleTop = true
-                    restoreState = true
+                }
+                currentRoute != screen.route -> {
+                    navController.navigate(screen.route) {
+                        popUpTo(navController.graph.findStartDestination().id) {
+                            saveState = true
+                        }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
                 }
             }
         }
 
         CompositionLocalProvider(
             LocalBottomDockState provides BottomDockState(
-                visible = !isKeyboardOpen && !aiChatDrawerOpen,
+                visible = !isKeyboardOpen && !aiChatDrawerOpen && !exportSheetOpen,
                 attached = quickWorkoutAttached,
                 topInset = dockTopInset
             )
@@ -820,7 +879,78 @@ private fun IronPulseAppContent(
                     LogWorkoutScreen(viewModel = viewModel)
                 }
                 composable(Screen.Progress.route) {
-                    ProgressScreen(viewModel = viewModel)
+                    ProgressScreen(
+                        viewModel = viewModel,
+                        onOpenWorkoutHistory = {
+                            navController.navigate(Screen.WorkoutHistory.route) {
+                                launchSingleTop = true
+                            }
+                        }
+                    )
+                }
+                composable(
+                    route = Screen.WorkoutHistory.route,
+                    enterTransition = {
+                        slideInHorizontally(
+                            animationSpec = tween(baseTransitionMs, easing = FastOutSlowInEasing),
+                            initialOffsetX = { it / 5 }
+                        ) + fadeIn(tween(if (reducedMotion) 0 else 180))
+                    },
+                    exitTransition = {
+                        slideOutHorizontally(
+                            animationSpec = tween(baseTransitionMs, easing = FastOutSlowInEasing),
+                            targetOffsetX = { -it / 10 }
+                        ) + fadeOut(tween(if (reducedMotion) 0 else 160))
+                    },
+                    popEnterTransition = {
+                        slideInHorizontally(
+                            animationSpec = tween(baseTransitionMs, easing = FastOutSlowInEasing),
+                            initialOffsetX = { -it / 10 }
+                        ) + fadeIn(tween(if (reducedMotion) 0 else 180))
+                    },
+                    popExitTransition = {
+                        slideOutHorizontally(
+                            animationSpec = tween(baseTransitionMs, easing = FastOutSlowInEasing),
+                            targetOffsetX = { it / 5 }
+                        ) + fadeOut(tween(if (reducedMotion) 0 else 160))
+                    }
+                ) {
+                    WorkoutHistoryScreen(
+                        viewModel = viewModel,
+                        onBack = { navController.popBackStack() },
+                        onOpenSession = { sessionId ->
+                            navController.navigate(Screen.WorkoutDetail.route(sessionId)) {
+                                launchSingleTop = true
+                            }
+                        }
+                    )
+                }
+                composable(
+                    route = Screen.WorkoutDetail.route,
+                    arguments = listOf(navArgument("sessionId") { type = NavType.LongType }),
+                    enterTransition = {
+                        slideInHorizontally(
+                            animationSpec = tween(baseTransitionMs, easing = FastOutSlowInEasing),
+                            initialOffsetX = { it / 4 }
+                        ) + fadeIn(tween(if (reducedMotion) 0 else 180))
+                    },
+                    exitTransition = { fadeOut(tween(if (reducedMotion) 0 else 140)) },
+                    popEnterTransition = {
+                        fadeIn(tween(if (reducedMotion) 0 else 180))
+                    },
+                    popExitTransition = {
+                        slideOutHorizontally(
+                            animationSpec = tween(baseTransitionMs, easing = FastOutSlowInEasing),
+                            targetOffsetX = { it / 4 }
+                        ) + fadeOut(tween(if (reducedMotion) 0 else 160))
+                    }
+                ) { entry ->
+                    val sessionId = entry.arguments?.getLong("sessionId") ?: return@composable
+                    WorkoutDayDetailScreen(
+                        viewModel = viewModel,
+                        sessionId = sessionId,
+                        onBack = { navController.popBackStack() }
+                    )
                 }
                 composable(Screen.Plan.route) {
                     PlanScreen(
@@ -963,7 +1093,7 @@ private fun IronPulseAppContent(
             // would shrink the visible list to a row of dead space above the keyboard.
             if (!isKeyboardOpen) {
                 AnimatedVisibility(
-                    visible = !aiChatDrawerOpen,
+                    visible = !aiChatDrawerOpen && !exportSheetOpen,
                     modifier = Modifier.align(Alignment.BottomCenter),
                     enter = slideInVertically(
                         initialOffsetY = { it },
@@ -994,6 +1124,7 @@ private fun IronPulseAppContent(
                 }
             }
         }
+        ExportSheet(viewModel)
     }
     }
     }

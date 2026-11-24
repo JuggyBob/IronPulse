@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -104,7 +105,9 @@ class PlanController(
                 }
             }
         }
-    }.stateIn(scope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    }
+        .flowOn(Dispatchers.Default)
+        .stateIn(scope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val dayKeyTicker = flow {
         while (true) {

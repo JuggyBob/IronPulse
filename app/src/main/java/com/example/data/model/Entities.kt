@@ -421,7 +421,21 @@ data class LoggedSet(
     val parentSetUid: String? = null,
     /** 1-based order among the children of [parentSetUid]; 0 for a main set. */
     @ColumnInfo(defaultValue = "0")
-    val dropIndex: Int = 0
+    val dropIndex: Int = 0,
+    /**
+     * Stable superset pair identity shared by the two exercises performed together.
+     *
+     * Null means the exercise was not part of a superset. A non-null value must appear on exactly
+     * two exercises in the session; historical sessions never guess a value from adjacency.
+     */
+    val supersetGroupId: String? = null,
+    /**
+     * Canonical Rating of Perceived Exertion for this set, 6.0 through 10.0.
+     *
+     * RIR is a presentation of the same value (10 - RPE, with 4+ at RPE 6). Null means the athlete
+     * did not record effort; it is never backfilled or inferred from load/reps.
+     */
+    val effortRpe: Double? = null
 ) {
     /** Whether this set records a distance rather than a load. */
     val isDistanceBased: Boolean get() = ExerciseType.DISTANCE_BASED.contains(exerciseType)

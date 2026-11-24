@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.data.model.EffortDisplay
 import com.example.data.model.UserProfile
 import com.example.ui.theme.AccentColors
 import com.example.ui.theme.ThemeMode
@@ -108,6 +109,9 @@ class UserPreferencesRepository(private val context: Context) {
 
         /** Body weight unit used across the app: "kg" or "lb". */
         val WEIGHT_UNIT = stringPreferencesKey("weight_unit")
+
+        /** Whether effort is presented as RIR or RPE. The stored value is always canonical RPE. */
+        val EFFORT_DISPLAY = stringPreferencesKey("effort_display")
 
         /**
          * Whether exercise animations play by themselves.
@@ -270,6 +274,8 @@ class UserPreferencesRepository(private val context: Context) {
 
     data class AppSettings(
         val unit: String = "kg",
+        /** Presentation only; historical values are never rewritten when this changes. */
+        val effortDisplay: EffortDisplay = EffortDisplay.RIR,
         val restTimerVibration: Boolean = true,
         val restTimerSound: Boolean = true,
         // Off by default, matching what the onboarding and the settings page say. The previous
@@ -315,6 +321,7 @@ class UserPreferencesRepository(private val context: Context) {
     val appSettingsFlow: Flow<AppSettings> = context.userDataStore.data.map { prefs ->
         AppSettings(
             unit = prefs[WEIGHT_UNIT] ?: "kg",
+            effortDisplay = EffortDisplay.fromStorage(prefs[EFFORT_DISPLAY]),
             restTimerVibration = prefs[REST_TIMER_VIBRATION_ENABLED] ?: true,
             restTimerSound = prefs[REST_TIMER_SOUND_ENABLED] ?: true,
             shareAthleteDataWithAi = prefs[SHARE_ATHLETE_DATA_WITH_AI] ?: false,
@@ -335,6 +342,10 @@ class UserPreferencesRepository(private val context: Context) {
 
     val aiWorkoutDataAccessFlow: Flow<Boolean> = context.userDataStore.data.map { prefs ->
         prefs[AI_WORKOUT_DATA_ACCESS] ?: false
+    }
+
+    suspend fun setEffortDisplay(display: EffortDisplay) {
+        context.userDataStore.edit { it[EFFORT_DISPLAY] = display.name }
     }
 
     suspend fun setAiWorkoutDataAccess(enabled: Boolean) {

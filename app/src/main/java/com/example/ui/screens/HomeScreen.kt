@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
@@ -12,6 +13,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -36,6 +38,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.FitnessCenter
@@ -69,6 +72,12 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -107,7 +116,10 @@ import com.example.ui.components.HomeStatTile
 import com.example.ui.components.HomeWeeklyGoalWidget
 import com.example.ui.components.HomeWidget
 import com.example.ui.components.HomeWidgetsEmptyState
+import com.example.ui.components.RecentWorkoutFormatter
+import com.example.ui.components.WarmupBadge
 import com.example.ui.components.WorkoutStreakCard
+import com.example.ui.components.rememberReducedMotion
 import com.example.ui.components.TrainingQuotes
 import com.example.ui.components.WeeklyGoalDialog
 import com.example.ui.theme.DarkBg
@@ -122,12 +134,14 @@ import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextWhite
 import com.example.ui.theme.OnAccent
 import com.example.ui.viewmodel.MainViewModel
+import com.example.util.PerfTrace
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /**
  * The Home dashboard.
@@ -148,6 +162,8 @@ fun HomeScreen(
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val homeCompositionStart = remember { PerfTrace.start() }
+    LaunchedEffect(Unit) { PerfTrace.mark("home.firstComposition", homeCompositionStart) }
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
     val unit by viewModel.weightUnit.collectAsStateWithLifecycle()
     val weekStartsOnMonday by viewModel.weekStartFlow.collectAsStateWithLifecycle()
@@ -232,6 +248,17 @@ fun HomeScreen(
     // Set for the short glide between the card under the finger and the slot it is released into.
     // While it is non-null the card still floats and the auto-scroll loop is stopped.
     var droppingWidgetId by remember { mutableStateOf<String?>(null) }
+    // Incremented only when a release actually changes the order, so a no-op or cancelled drag can
+    // never show the success wave.
+    var releaseWaveTrigger by remember { mutableStateOf(0) }
+    val reducedMotion = rememberReducedMotion()
+    // The outline grows/shrinks instead of switching on and off with the gesture. It is already
+    // fading during the 170 ms drop glide, so the card lands without a hard-edged flash.
+    val dragOutlineProgress by animateFloatAsState(
+        targetValue = if (draggingWidgetId != null && droppingWidgetId == null) 1f else 0f,
+        animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing),
+        label = "home_widget_drag_outline"
+    )
     // The finger's position in the list viewport, and where the widget would land if released now.
     // Both are kept as state so the preview gap can be kept under the card while the finger is held
     // still and the list auto-scrolls underneath it.
@@ -337,6 +364,7 @@ fun HomeScreen(
                 if (next != orderedWidgets) {
                     orderedWidgets = next
                     viewModel.setHomeWidgetOrder(next.map { it.id })
+                    releaseWaveTrigger++
                 }
             }
         }
@@ -608,12 +636,20 @@ fun HomeScreen(
         }
     }
 
-    Box(modifier = modifier.fillMaxSize()) {
+    Box(modifier = modifier.fillMaxSize().background(DarkBg)) {
+        // Sits behind the transparent list, so it is visible in the gutters and the gaps between
+        // cards but never over a label, image or control. The list itself now only paints its
+        // content; the page colour lives on this Box.
+        if (!reducedMotion) {
+            HomeReleaseWave(
+                trigger = releaseWaveTrigger,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .background(DarkBg)
                 .testTag("home_screen"),
             // Clearance for the floating dock: the last widget can scroll fully above the glass.
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 120.dp),
@@ -762,10 +798,14 @@ fun HomeScreen(
                     // the same page colour behind the whole widget, exactly as it is seen in the
                     // list; the card then reads as one lifted object.
                     .background(DarkBg, RoundedCornerShape(18.dp))
-                    // The card is the selected thing on the page while it is held. The full-strength
-                    // cyan outline matches the selected tab and makes it read as lifted, not just
-                    // duplicated.
-                    .border(2.dp, ElectricCyan, RoundedCornerShape(18.dp))
+                    // The card is the selected thing on the page while it is held. The outline is
+                    // the athlete's current accent colour and grows in/out with the gesture, so it
+                    // reads as a lifted state instead of a hard-edged selection flash.
+                    .border(
+                        width = (2f * dragOutlineProgress).dp,
+                        color = ElectricCyan.copy(alpha = dragOutlineProgress),
+                        shape = RoundedCornerShape(18.dp)
+                    )
                     .testTag("home_widget_drag_overlay")
             ) {
                 widgetContent(draggedWidget)
@@ -1210,6 +1250,90 @@ private fun BodyWeightCard(
 }
 
 /**
+ * One-shot accent wave after a successful Home widget drop.
+ *
+ * It is drawn behind the transparent list, so the cards cover it and only the gutters and the
+ * spaces between cards show the light. The animation runs through [Animatable] and reads
+ * `progress.value` inside the Canvas draw lambda: each frame invalidates the draw, not the Home
+ * composition, so widget contents are not recomposed. A no-op or cancelled drag never increments
+ * [trigger], and reduced-motion devices do not compose the effect at all.
+ */
+@Composable
+private fun HomeReleaseWave(trigger: Int, modifier: Modifier = Modifier) {
+    val progress = remember { Animatable(0f) }
+    LaunchedEffect(trigger) {
+        if (trigger <= 0) return@LaunchedEffect
+        progress.snapTo(0f)
+        progress.animateTo(
+            targetValue = 1f,
+            animationSpec = tween(durationMillis = 760, easing = FastOutSlowInEasing)
+        )
+    }
+    Canvas(modifier = modifier) {
+        val p = progress.value
+        if (p <= 0f || p >= 1f) return@Canvas
+        val band = 150.dp.toPx()
+        val centreY = -band + p * (size.height + band * 2f)
+        val accent = ElectricCyan
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(
+                    Color.Transparent,
+                    accent.copy(alpha = 0.14f),
+                    Color.Transparent
+                ),
+                startY = centreY - band / 2f,
+                endY = centreY + band / 2f
+            ),
+            topLeft = Offset(0f, centreY - band / 2f),
+            size = Size(size.width, band)
+        )
+
+        // A shallow sine crest gives the band a wave shape without turning it into an overlay.
+        val amplitude = 12.dp.toPx()
+        val path = Path()
+        val steps = 32
+        for (i in 0..steps) {
+            val x = size.width * i / steps
+            val phase = i.toFloat() / steps * Math.PI.toFloat() * 2f
+            val y = centreY + sin(phase) * amplitude
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        val fade = (1f - (p - 0.5f) * (p - 0.5f) * 4f).coerceIn(0f, 1f)
+        drawPath(
+            path = path,
+            color = accent.copy(alpha = 0.32f * fade),
+            style = Stroke(width = 1.5.dp.toPx())
+        )
+    }
+}
+
+/** Compact version of the history paperclip badge, sized for the Home card. */
+@Composable
+private fun HomeSupersetBadge(label: String) {
+    Row(
+        modifier = Modifier
+            .background(ElectricCyan.copy(alpha = 0.12f), RoundedCornerShape(6.dp))
+            .border(1.dp, ElectricCyan.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 5.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Default.AttachFile,
+            contentDescription = "Superset $label",
+            tint = ElectricCyan,
+            modifier = Modifier.size(12.dp)
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+            color = ElectricCyan
+        )
+    }
+}
+
+/**
  * The last workout the athlete finished.
  *
  * The summary is always visible; tapping it slides the saved sets open underneath, without leaving
@@ -1235,6 +1359,9 @@ private fun RecentWorkoutCard(
         animationSpec = tween(300),
         label = "recent_workout_arrow"
     )
+
+    // Pure presentation: ordering, D-labels and A1/A2 derivation live in one tested helper.
+    val exerciseBlocks = remember(sets) { RecentWorkoutFormatter.blocks(sets) }
 
     Card(
         modifier = Modifier
@@ -1352,28 +1479,53 @@ private fun RecentWorkoutCard(
 
                     // Grouping keeps the exercise as the heading and its sets as bullets. The map
                     // preserves the order the exercises were performed in.
-                    sets.groupBy { it.exerciseName }.forEach { (exerciseName, exerciseSets) ->
+                    exerciseBlocks.forEach { block ->
                         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                            Text(
-                                text = exerciseName,
-                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
-                                color = TextWhite
-                            )
-                            exerciseSets.sortedBy { it.setNumber }.forEach { set ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = block.exerciseName,
+                                    style = MaterialTheme.typography.bodySmall
+                                        .copy(fontWeight = FontWeight.Bold),
+                                    color = TextWhite,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                block.supersetLabel?.let { HomeSupersetBadge(it) }
+                            }
+                            block.rows.forEach { line ->
+                                val set = line.set
                                 val bodyweight =
                                     BodyWeightTimeline.bodyWeightForSet(set, profileWeightKg)
                                 val load = WorkoutMetrics.historyLine(set, bodyweight, weightUnit)
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    modifier = Modifier.padding(
+                                        start = if (line.isDrop) 14.dp else 0.dp
+                                    ),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     Text(
                                         text = "•",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = ElectricCyan
+                                        color = if (line.isDrop) {
+                                            ElectricCyan.copy(alpha = 0.7f)
+                                        } else {
+                                            ElectricCyan
+                                        }
                                     )
                                     Text(
-                                        text = "Set ${set.setNumber} — $load",
+                                        text = "${line.label} — $load",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = TextMuted
+                                        color = if (line.isDrop) ElectricCyan else TextMuted
                                     )
+                                    if (set.isWarmup) {
+                                        WarmupBadge(compact = true)
+                                    }
                                 }
                             }
                         }

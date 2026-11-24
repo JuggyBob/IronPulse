@@ -11,8 +11,21 @@
     trusts, it only says that these are the domains the app expects to be talking to.
 -->
 <network-security-config>
+    <!-- Remote traffic is HTTPS-only. The sole exception is a local AI runner on localhost. -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
     <domain-config cleartextTrafficPermitted="false">
         <domain includeSubdomains="true">github.com</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>

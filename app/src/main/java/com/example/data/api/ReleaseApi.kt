@@ -132,6 +132,11 @@ class ReleaseApi(
                         ReleaseApiException("The download was empty.", null)
                     )
                 val total = source.contentLength().takeIf { it > 0L } ?: asset.size
+                if (total > MAX_DOWNLOAD_BYTES) {
+                    return@withContext Result.failure(
+                        ReleaseApiException("The update is larger than IronPulse accepts.", null)
+                    )
+                }
 
                 source.byteStream().use { input ->
                     FileOutputStream(temporary).use { output ->
@@ -140,8 +145,18 @@ class ReleaseApi(
                         while (true) {
                             val read = input.read(buffer)
                             if (read <= 0) break
-                            output.write(buffer, 0, read)
                             written += read
+                            // Never let a hostile or corrupt asset fill the device.
+                            if (written > MAX_DOWNLOAD_BYTES) {
+                                temporary.delete()
+                                return@withContext Result.failure(
+                                    ReleaseApiException(
+                                        "The update is larger than IronPulse accepts.",
+                                        null
+                                    )
+                                )
+                            }
+                            output.write(buffer, 0, read)
                             onProgress(written, total)
                         }
                         output.flush()
@@ -183,6 +198,7 @@ class ReleaseApi(
     companion object {
         private const val TAG = "ReleaseApi"
         private const val USER_AGENT = "IronPulse-Android"
+        private const val MAX_DOWNLOAD_BYTES = 200L * 1024L * 1024L
 
         /** The GitHub account the IronPulse releases are published under. */
         const val DEFAULT_OWNER = "JuggyBob"

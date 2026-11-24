@@ -135,6 +135,11 @@ open class BackupPreferencesStore(private val context: Context) {
             }
 
             preferences.unit?.let { prefs[UserPreferencesRepository.WEIGHT_UNIT] = it }
+            preferences.effortDisplay?.let { raw ->
+                com.example.data.model.EffortDisplay.fromStorage(raw).let {
+                    prefs[UserPreferencesRepository.EFFORT_DISPLAY] = it.name
+                }
+            }
             preferences.restTimerVibrationEnabled?.let { prefs[UserPreferencesRepository.REST_TIMER_VIBRATION_ENABLED] = it }
             preferences.restTimerSoundEnabled?.let { prefs[UserPreferencesRepository.REST_TIMER_SOUND_ENABLED] = it }
             preferences.shareAthleteDataWithAi?.let { prefs[UserPreferencesRepository.SHARE_ATHLETE_DATA_WITH_AI] = it }
@@ -321,6 +326,7 @@ open class BackupPreferencesStore(private val context: Context) {
 
         return PreferencesSectionV1(
             unit = prefs[UserPreferencesRepository.WEIGHT_UNIT],
+            effortDisplay = prefs[UserPreferencesRepository.EFFORT_DISPLAY],
             restTimerVibrationEnabled = prefs[UserPreferencesRepository.REST_TIMER_VIBRATION_ENABLED],
             restTimerSoundEnabled = prefs[UserPreferencesRepository.REST_TIMER_SOUND_ENABLED],
             shareAthleteDataWithAi = prefs[UserPreferencesRepository.SHARE_ATHLETE_DATA_WITH_AI],
@@ -444,6 +450,7 @@ open class BackupPreferencesStore(private val context: Context) {
             UserPreferencesRepository.REST_TIMER_SOUND_ENABLED,
             UserPreferencesRepository.SHARE_ATHLETE_DATA_WITH_AI,
             UserPreferencesRepository.WEIGHT_UNIT,
+            UserPreferencesRepository.EFFORT_DISPLAY,
             UserPreferencesRepository.AUTOPLAY_EXERCISE_DEMOS,
             UserPreferencesRepository.LIQUID_GLASS_ENABLED,
             UserPreferencesRepository.FULLSCREEN_MODE,

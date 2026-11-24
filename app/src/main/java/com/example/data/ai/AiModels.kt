@@ -211,5 +211,13 @@ data class AiConversationResult(
     /** Present when the model asked for a routine change that needs explicit approval. */
     val routineProposal: RoutineModificationProposal? = null,
     /** Present when the model proposed a complete new routine in chat. */
-    val newRoutineProposal: NewRoutineProposal? = null
+    val newRoutineProposal: NewRoutineProposal? = null,
+    /** Wall-clock duration of the whole bounded conversation. */
+    val totalDurationMs: Long = 0L,
+    /** Calls the model requested, including calls rejected by the per-turn or total budgets. */
+    val toolCallsRequested: Int = toolCallsExecuted,
+    /** Tool dispatches that exceeded their individual deadline. */
+    val toolTimeouts: Int = 0,
+    /** Last provider finish reason observed, useful for diagnosing truncation. */
+    val finishReason: AiFinishReason? = null
 )

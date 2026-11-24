@@ -1,6 +1,5 @@
 package com.example.ui.components
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -19,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,11 +27,14 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AssignmentTurnedIn
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronLeft
@@ -39,7 +42,6 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FilterList
-import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -47,8 +49,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -65,6 +67,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -76,15 +79,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import com.example.data.model.BodyWeightTimeline
 import com.example.data.model.describeCardioSet
 import com.example.data.model.ExerciseType
 import com.example.data.model.describeLoggedSetEffort
 import com.example.data.model.WeightUnit
 import com.example.data.model.WeightConversion
+import com.example.data.model.EffortDisplay
+import com.example.data.model.EffortScale
+import com.example.data.model.LocalDateKey
 import com.example.data.model.LoggedSet
 import com.example.data.model.DropSetRules
 import com.example.data.model.WorkoutMetrics
@@ -124,37 +130,50 @@ private fun formatWeightDisplay(weight: Double): String =
     if (weight % 1.0 == 0.0) weight.toInt().toString() else String.format(Locale.getDefault(), "%.1f", weight)
 
 /**
- * Enlarged, comprehensive Workout History Dialog.
- * Supports:
- * - Search by workout name or notes
- * - Date filtering (Before a date, On a specific date, After a date)
- * - Built-in calendar picker capped at current system date
- * - Click on workout title or Info button to open full Workout Day details (all sets, reps, weight)
+ * Full-screen Workout History destination.
+ *
+ * The list owns the search/date/exercise filter state and opens a workout as a separate route,
+ * so the old dialog and its nested detail swap are gone. Filter state is saveable so returning
+ * from a workout restores the exact list the athlete left.
  */
 @Composable
-fun WorkoutHistoryDialog(
+fun WorkoutHistoryScreen(
     viewModel: MainViewModel,
-    onDismiss: () -> Unit
+    onBack: () -> Unit,
+    onOpenSession: (Long) -> Unit
 ) {
     val allSessions by viewModel.allSessions.collectAsStateWithLifecycle()
+    val loggedExercises by viewModel.distinctLoggedExercises.collectAsStateWithLifecycle()
     val workoutSummaries by viewModel.workoutSummaries.collectAsStateWithLifecycle()
     val summaryByWorkout = remember(workoutSummaries) {
         workoutSummaries.associateBy { it.workoutId }
     }
-    var selectedSessionForDetail by remember { mutableStateOf<WorkoutSession?>(null) }
     var sessionToDelete by remember { mutableStateOf<WorkoutSession?>(null) }
 
     // Search query & Date filtering state
-    var searchQuery by remember { mutableStateOf("") }
-    var dateFilterMode by remember { mutableStateOf(HistoryDateFilterMode.ALL) }
-    var selectedDateMillis by remember {
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var dateFilterMode by rememberSaveable { mutableStateOf(HistoryDateFilterMode.ALL) }
+    var selectedDateMillis by rememberSaveable {
         mutableStateOf(System.currentTimeMillis())
     }
     var showCalendarPicker by remember { mutableStateOf(false) }
+    var showDateMenu by remember { mutableStateOf(false) }
+    var pendingDateMode by remember { mutableStateOf<HistoryDateFilterMode?>(null) }
+    var selectedExercise by rememberSaveable { mutableStateOf<String?>(null) }
+    var showExercisePicker by remember { mutableStateOf(false) }
+
+
 
     // Date formatter
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy, h:mm a", Locale.getDefault()) }
     val shortDateFormat = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
+    val dateFilterLabel = remember(dateFilterMode, selectedDateMillis, shortDateFormat) {
+        if (dateFilterMode == HistoryDateFilterMode.ALL) {
+            "All dates"
+        } else {
+            "${dateFilterMode.label}: ${shortDateFormat.format(Date(selectedDateMillis))}"
+        }
+    }
     // Compute start and end of selected day
     val (startOfSelectedDay, endOfSelectedDay) = remember(selectedDateMillis) {
         val cal = Calendar.getInstance().apply {
@@ -165,12 +184,29 @@ fun WorkoutHistoryDialog(
             set(Calendar.MILLISECOND, 0)
         }
         val start = cal.timeInMillis
-        val end = start + (24 * 60 * 60 * 1000L) - 1L
+        // Move by a calendar day, not a fixed 24 h, so DST changes do not move the boundary.
+        cal.add(Calendar.DAY_OF_MONTH, 1)
+        val end = cal.timeInMillis - 1L
         Pair(start, end)
     }
 
+    // Session membership for the exercise filter. No set payload is needed on the list screen.
+    val exerciseSessionIds by remember(selectedExercise) {
+        val exercise = selectedExercise
+        if (exercise.isNullOrBlank()) flowOf(emptySet<Long>())
+        else viewModel.getSessionIdsForExercise(exercise)
+    }.collectAsStateWithLifecycle(initialValue = emptySet())
+
     // Filtered sessions
-    val filteredSessions by remember(allSessions, searchQuery, dateFilterMode, startOfSelectedDay, endOfSelectedDay) {
+    val filteredSessions by remember(
+        allSessions,
+        searchQuery,
+        dateFilterMode,
+        startOfSelectedDay,
+        endOfSelectedDay,
+        selectedExercise,
+        exerciseSessionIds
+    ) {
         derivedStateOf {
             allSessions.filter { session ->
                 // Name / Note query match
@@ -186,14 +222,12 @@ fun WorkoutHistoryDialog(
                     HistoryDateFilterMode.AFTER_DATE -> session.startTime > endOfSelectedDay
                 }
 
-                matchesQuery && matchesDate
+                val matchesExercise = selectedExercise.isNullOrBlank() ||
+                    session.id in exerciseSessionIds
+
+                matchesQuery && matchesDate && matchesExercise
             }
         }
-    }
-
-    // Back handler for detail sub-view
-    BackHandler(enabled = selectedSessionForDetail != null) {
-        selectedSessionForDetail = null
     }
 
     // The list is grouped by training day: a separator line introduces each day, newest first.
@@ -221,82 +255,40 @@ fun WorkoutHistoryDialog(
         }
     }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            dismissOnBackPress = selectedSessionForDetail == null
-        )
+    // Full-screen list. The dock overlays it, so the scrolling area reserves bottom space.
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(DarkBg)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .testTag("workout_history_screen")
     ) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth(0.96f)
-                .fillMaxHeight(0.90f)
-                .testTag("workout_history_dialog_card"),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = DarkSurface),
-            border = BorderStroke(1.dp, DarkBorder)
-        ) {
-            if (selectedSessionForDetail != null) {
-                // Day details view with all exercises, sets, reps, weight
-                WorkoutDayDetailView(
-                    session = selectedSessionForDetail!!,
-                    viewModel = viewModel,
-                    onBack = { selectedSessionForDetail = null }
-                )
-            } else {
-                // History List View with Search and Date Filters
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                ) {
-                    // Header Row
+                    // Header Row: back on the left, matching every other pushed screen.
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .background(ElectricCyan.copy(alpha = 0.15f), CircleShape)
-                                    .border(1.dp, ElectricCyan.copy(alpha = 0.4f), CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.FitnessCenter,
-                                    contentDescription = null,
-                                    tint = ElectricCyan,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            Column {
-                                Text(
-                                    text = "Workout History",
-                                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                                    color = TextWhite
-                                )
-                                Text(
-                                    text = "${filteredSessions.size} of ${allSessions.size} workouts",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = TextMuted
-                                )
-                            }
-                        }
-
                         IconButton(
-                            onClick = onDismiss,
-                            modifier = Modifier.testTag("close_workout_history_button")
+                            onClick = onBack,
+                            modifier = Modifier.testTag("back_from_workout_history_button")
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Close",
-                                tint = TextMuted
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = ElectricCyan
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Workout History",
+                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                                color = TextWhite
+                            )
+                            Text(
+                                text = "${filteredSessions.size} of ${allSessions.size} workouts",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted
                             )
                         }
                     }
@@ -335,86 +327,154 @@ fun WorkoutHistoryDialog(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Date Filter Modes Row
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        HistoryDateFilterMode.entries.forEach { mode ->
-                            val isSelected = dateFilterMode == mode
-                            FilterChip(
-                                selected = isSelected,
-                                onClick = {
-                                    dateFilterMode = mode
-                                    if (mode != HistoryDateFilterMode.ALL) {
-                                        showCalendarPicker = true
-                                    }
-                                },
-                                label = {
-                                    Text(
-                                        text = mode.label,
-                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal),
-                                        fontSize = 11.sp
-                                    )
-                                },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = ElectricCyan.copy(alpha = 0.2f),
-                                    selectedLabelColor = ElectricCyan,
-                                    containerColor = DarkBg,
-                                    labelColor = TextMuted
+                    // Date filter: one dropdown, with the same calendar dialog used elsewhere.
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedButton(
+                                onClick = { showDateMenu = true },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("history_date_filter_button"),
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (dateFilterMode == HistoryDateFilterMode.ALL) DarkBorder
+                                    else ElectricCyan.copy(alpha = 0.55f)
                                 ),
-                                border = FilterChipDefaults.filterChipBorder(
-                                    enabled = true,
-                                    selected = isSelected,
-                                    borderColor = DarkBorder,
-                                    selectedBorderColor = ElectricCyan
-                                ),
-                                modifier = Modifier.testTag("date_filter_chip_${mode.name}")
-                            )
-                        }
-                    }
-
-                    // Active Date Filter Badge if not ALL
-                    if (dateFilterMode != HistoryDateFilterMode.ALL) {
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(DarkSurfaceVariant, RoundedCornerShape(8.dp))
-                                .border(1.dp, ElectricCyan.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
-                                .clickable { showCalendarPicker = true }
-                                .padding(horizontal = 10.dp, vertical = 6.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.CalendarToday,
                                     contentDescription = null,
-                                    tint = ElectricCyan,
-                                    modifier = Modifier.size(14.dp)
+                                    tint = if (dateFilterMode == HistoryDateFilterMode.ALL) TextMuted else ElectricCyan,
+                                    modifier = Modifier.size(16.dp)
                                 )
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "${dateFilterMode.label}: ${shortDateFormat.format(Date(selectedDateMillis))}",
-                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                                    color = ElectricCyan
+                                    text = dateFilterLabel,
+                                    style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                    color = if (dateFilterMode == HistoryDateFilterMode.ALL) TextMuted else ElectricCyan,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
                                 )
-                                Text(
-                                    text = "(Tap to change)",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = TextMuted,
-                                    fontSize = 10.sp
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = null,
+                                    tint = TextMuted,
+                                    modifier = Modifier.size(18.dp)
                                 )
                             }
+                            if (dateFilterMode != HistoryDateFilterMode.ALL) {
+                                IconButton(
+                                    onClick = {
+                                        dateFilterMode = HistoryDateFilterMode.ALL
+                                        pendingDateMode = null
+                                    },
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .testTag("clear_history_date_filter")
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Clear date filter",
+                                        tint = TextMuted,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                        DropdownMenu(
+                            expanded = showDateMenu,
+                            onDismissRequest = { showDateMenu = false },
+                            modifier = Modifier.width(190.dp),
+                            containerColor = DarkSurface
+                        ) {
+                            HistoryDateFilterMode.entries.forEach { mode ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = mode.label,
+                                            color = if (dateFilterMode == mode) ElectricCyan else TextWhite,
+                                            fontWeight = if (dateFilterMode == mode) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        if (dateFilterMode == mode) {
+                                            Icon(
+                                                Icons.Default.Check,
+                                                contentDescription = null,
+                                                tint = ElectricCyan,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        showDateMenu = false
+                                        if (mode == HistoryDateFilterMode.ALL) {
+                                            dateFilterMode = HistoryDateFilterMode.ALL
+                                            pendingDateMode = null
+                                        } else {
+                                            pendingDateMode = mode
+                                            showCalendarPicker = true
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Exercise filter: complete sessions that contain the chosen exercise.
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(
+                            onClick = { showExercisePicker = true },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("history_exercise_filter_button"),
+                            shape = RoundedCornerShape(10.dp),
+                            border = BorderStroke(
+                                1.dp,
+                                if (selectedExercise == null) DarkBorder else ElectricCyan.copy(alpha = 0.55f)
+                            ),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.FilterList,
+                                contentDescription = null,
+                                tint = if (selectedExercise == null) TextMuted else ElectricCyan,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = selectedExercise ?: "All exercises",
+                                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                color = if (selectedExercise == null) TextMuted else ElectricCyan,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = null,
+                                tint = TextMuted,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        if (selectedExercise != null) {
                             IconButton(
-                                onClick = { dateFilterMode = HistoryDateFilterMode.ALL },
-                                modifier = Modifier.size(20.dp)
+                                onClick = { selectedExercise = null },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .testTag("clear_history_exercise_filter")
                             ) {
-                                Icon(Icons.Default.Close, contentDescription = "Clear filter", tint = TextMuted, modifier = Modifier.size(14.dp))
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Clear exercise filter",
+                                    tint = TextMuted,
+                                    modifier = Modifier.size(16.dp)
+                                )
                             }
                         }
                     }
@@ -440,7 +500,7 @@ fun WorkoutHistoryDialog(
                                     modifier = Modifier.size(36.dp)
                                 )
                                 Text(
-                                    text = if (allSessions.isEmpty()) "No past workouts logged yet." else "No workouts match your search or date filter.",
+                                    text = if (allSessions.isEmpty()) "No past workouts logged yet." else "No workouts match your search, date or exercise filter.",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = TextMuted,
                                     textAlign = TextAlign.Center
@@ -450,6 +510,7 @@ fun WorkoutHistoryDialog(
                                         onClick = {
                                             searchQuery = ""
                                             dateFilterMode = HistoryDateFilterMode.ALL
+                                            selectedExercise = null
                                         }
                                     ) {
                                         Text("Clear Filters", color = ElectricCyan)
@@ -462,6 +523,7 @@ fun WorkoutHistoryDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .weight(1f),
+                            contentPadding = PaddingValues(bottom = 120.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             // One interleaved list: a day separator, then that day's cards
@@ -477,7 +539,7 @@ fun WorkoutHistoryDialog(
                                 Card(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clickable { selectedSessionForDetail = session }
+                                        .clickable { onOpenSession(session.id) }
                                         .testTag("session_card_${session.id}"),
                                     colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
                                     shape = RoundedCornerShape(12.dp),
@@ -493,7 +555,7 @@ fun WorkoutHistoryDialog(
                                             Column(
                                                 modifier = Modifier
                                                     .weight(1f)
-                                                    .clickable { selectedSessionForDetail = session }
+                                                    .clickable { onOpenSession(session.id) }
                                             ) {
                                                 Text(
                                                     text = session.title,
@@ -595,31 +657,35 @@ fun WorkoutHistoryDialog(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Close Button
-                    Button(
-                        onClick = onDismiss,
-                        colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan, contentColor = OnAccent),
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Close", color = OnAccent, fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        }
     }
 
     // Built-in Calendar Picker Dialog (cannot exceed current system date)
     if (showCalendarPicker) {
+
         CalendarPickerDialog(
             initialDateMillis = selectedDateMillis,
             onDateSelected = { pickedMillis ->
                 selectedDateMillis = pickedMillis
+                pendingDateMode?.let { dateFilterMode = it }
+                pendingDateMode = null
                 showCalendarPicker = false
             },
-            onDismiss = { showCalendarPicker = false }
+            onDismiss = {
+                pendingDateMode = null
+                showCalendarPicker = false
+            }
+        )
+    }
+
+    if (showExercisePicker) {
+        ExerciseHistoryFilterDialog(
+            exercises = loggedExercises,
+            selected = selectedExercise,
+            onSelect = {
+                selectedExercise = it
+                showExercisePicker = false
+            },
+            onDismiss = { showExercisePicker = false }
         )
     }
 
@@ -653,6 +719,142 @@ fun WorkoutHistoryDialog(
             }
         )
     }
+}
+
+/**
+ * Exercise picker for Workout History. It searches only the exercises that actually appear in
+ * completed sets, so every result is guaranteed to produce at least one session.
+ */
+@Composable
+private fun ExerciseHistoryFilterDialog(
+    exercises: List<String>,
+    selected: String?,
+    onSelect: (String?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var query by remember { mutableStateOf("") }
+    val matches = remember(exercises, query) {
+        val needle = query.trim()
+        if (needle.isBlank()) exercises
+        else exercises.filter { it.contains(needle, ignoreCase = true) }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = DarkSurface,
+        title = { Text("Filter by exercise", color = TextWhite, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("history_exercise_search_input"),
+                    placeholder = { Text("Search exercise...", color = TextMuted, fontSize = 13.sp) },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = null,
+                            tint = TextMuted,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    },
+                    trailingIcon = {
+                        if (query.isNotBlank()) {
+                            IconButton(onClick = { query = "" }) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Clear exercise search",
+                                    tint = TextMuted,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = DarkBg,
+                        unfocusedContainerColor = DarkBg,
+                        focusedBorderColor = ElectricCyan,
+                        unfocusedBorderColor = DarkBorder,
+                        focusedTextColor = TextWhite,
+                        unfocusedTextColor = TextWhite
+                    )
+                )
+
+                Surface(
+                    color = if (selected == null) ElectricCyan.copy(alpha = 0.14f) else DarkBg,
+                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(
+                        1.dp,
+                        if (selected == null) ElectricCyan.copy(alpha = 0.55f) else DarkBorder
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSelect(null) }
+                ) {
+                    Text(
+                        text = "All exercises",
+                        style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                        color = if (selected == null) ElectricCyan else TextWhite,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)
+                    )
+                }
+
+                if (matches.isEmpty()) {
+                    Text(
+                        text = "No logged exercise matches \"${query.trim()}\".",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextMuted,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 320.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(matches, key = { it }) { exercise ->
+                            Surface(
+                                color = if (exercise == selected) {
+                                    ElectricCyan.copy(alpha = 0.14f)
+                                } else {
+                                    DarkBg
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (exercise == selected) {
+                                        ElectricCyan.copy(alpha = 0.55f)
+                                    } else {
+                                        DarkBorder
+                                    }
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onSelect(exercise) }
+                            ) {
+                                Text(
+                                    text = exercise,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (exercise == selected) ElectricCyan else TextWhite,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextMuted)
+            }
+        }
+    )
 }
 
 /**
@@ -906,6 +1108,46 @@ fun CalendarPickerDialog(
 }
 
 /**
+ * Full-screen workout detail route. The session is resolved from the existing allSessions flow,
+ * so deleting a session while the detail is open cannot leave a stale copy on screen.
+ */
+@Composable
+fun WorkoutDayDetailScreen(
+    viewModel: MainViewModel,
+    sessionId: Long,
+    onBack: () -> Unit
+) {
+    val allSessions by viewModel.allSessions.collectAsStateWithLifecycle()
+    val session = remember(allSessions, sessionId) {
+        allSessions.firstOrNull { it.id == sessionId }
+    }
+    if (session == null) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(DarkBg)
+                .padding(16.dp)
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back to History",
+                    tint = ElectricCyan
+                )
+            }
+            Text(
+                text = "This workout is no longer available.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = TextMuted,
+                modifier = Modifier.padding(16.dp)
+            )
+        }
+    } else {
+        WorkoutDayDetailContent(session = session, viewModel = viewModel, onBack = onBack)
+    }
+}
+
+/**
  * Detailed Workout Day Page View.
  * Displays:
  * - Workout Title, Date & Time, and Diary Breakthrough / Notes
@@ -913,7 +1155,7 @@ fun CalendarPickerDialog(
  * - Each exercise formatted with sets, reps, weight, and completion state
  */
 @Composable
-fun WorkoutDayDetailView(
+private fun WorkoutDayDetailContent(
     session: WorkoutSession,
     viewModel: MainViewModel,
     onBack: () -> Unit
@@ -927,6 +1169,9 @@ fun WorkoutDayDetailView(
     // weight after a weigh-in today. Reading the current profile weight instead is what made a
     // new weigh-in rewrite the history of everything logged before it.
     val userProfile by viewModel.userProfile.collectAsStateWithLifecycle()
+    val effortDisplay by viewModel.appSettings
+        .map { it.effortDisplay }
+        .collectAsStateWithLifecycle(initialValue = EffortDisplay.RIR)
     val weightUnit = WeightUnit.fromLabel(userProfile.preferredUnit)
     val unit = weightUnit.suffix
 
@@ -939,6 +1184,26 @@ fun WorkoutDayDetailView(
             map.getOrPut(set.exerciseName) { mutableListOf() }.add(set)
         }
         map
+    }
+
+    // A1/A2 is derived from the same group id stored on the recorded sets. Supersets are shown
+    // with a paperclip badge in each exercise header instead of indenting one exercise under the
+    // other, which used to consume a large part of the row on phones.
+    val supersetLabels = remember(setsForSession) {
+        val groups = LinkedHashMap<String, LinkedHashSet<String>>()
+        setsForSession.forEach { set ->
+            val groupId = set.supersetGroupId
+            if (!set.isDropSet && !groupId.isNullOrBlank()) {
+                groups.getOrPut(groupId) { LinkedHashSet() }.add(set.exerciseName)
+            }
+        }
+        buildMap {
+            groups.values.filter { it.size == 2 }.forEach { names ->
+                names.forEachIndexed { index, name ->
+                    put(name, "A${index + 1}")
+                }
+            }
+        }
     }
 
     // The volume of the session, in kilogram-reps.
@@ -960,7 +1225,8 @@ fun WorkoutDayDetailView(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .background(DarkBg)
+            .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         // Top Navigation Bar
         Row(
@@ -1002,6 +1268,7 @@ fun WorkoutDayDetailView(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1f),
+            contentPadding = PaddingValues(bottom = 120.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // Diary Breakthrough / Workout Notes Card
@@ -1154,45 +1421,50 @@ fun WorkoutDayDetailView(
                     }
                 }
             } else {
-                items(groupedExercises.entries.toList(), key = { it.key }) { (exerciseName, sets) ->
+                itemsIndexed(
+                    groupedExercises.entries.toList(),
+                    key = { _, entry -> entry.key }
+                ) { index, (exerciseName, sets) ->
+                    val supersetLabel = supersetLabels[exerciseName]
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant),
                         shape = RoundedCornerShape(12.dp),
-                        border = BorderStroke(1.dp, DarkBorder)
+                        border = BorderStroke(
+                            1.dp,
+                            if (supersetLabel != null) ElectricCyan.copy(alpha = 0.42f) else DarkBorder
+                        )
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             // Exercise Header
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    modifier = Modifier.weight(1f)
+                                Box(
+                                    modifier = Modifier
+                                        .size(26.dp)
+                                        .background(ElectricCyan.copy(alpha = 0.15f), CircleShape),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(26.dp)
-                                            .background(ElectricCyan.copy(alpha = 0.15f), CircleShape),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.FitnessCenter,
-                                            contentDescription = null,
-                                            tint = ElectricCyan,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                    }
                                     Text(
-                                        text = exerciseName,
-                                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                                        color = TextWhite
+                                        text = "${index + 1}",
+                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                        color = ElectricCyan
                                     )
                                 }
-
+                                Text(
+                                    text = exerciseName,
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = TextWhite,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (supersetLabel != null) {
+                                    SupersetHistoryBadge(supersetLabel)
+                                }
                                 Surface(
                                     color = MintGreen.copy(alpha = 0.15f),
                                     shape = RoundedCornerShape(6.dp),
@@ -1200,11 +1472,13 @@ fun WorkoutDayDetailView(
                                 ) {
                                     val mainCount = sets.count { !it.isDropSet }
                                     val dropCount = sets.count { it.isDropSet }
+                                    val mainLabel = "$mainCount Set${if (mainCount == 1) "" else "s"}"
                                     Text(
                                         text = if (dropCount > 0) {
-                                            "$mainCount Sets + $dropCount Drops"
+                                            val dropLabel = "$dropCount Drop${if (dropCount == 1) "" else "s"}"
+                                            "$mainLabel + $dropLabel"
                                         } else {
-                                            "$mainCount Sets"
+                                            mainLabel
                                         },
                                         style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                                         color = MintGreen,
@@ -1223,10 +1497,9 @@ fun WorkoutDayDetailView(
                                     .padding(horizontal = 8.dp, vertical = 4.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("SET", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp, modifier = Modifier.width(42.dp))
-                                Text("REPS / DURATION", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp, modifier = Modifier.weight(1f))
-                                Text("WEIGHT", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp, modifier = Modifier.weight(1f), textAlign = TextAlign.End)
-                                Text("STATUS", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp, modifier = Modifier.width(48.dp), textAlign = TextAlign.End)
+                                Text("SET", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp, modifier = Modifier.width(34.dp))
+                                Text("REPS / DURATION · LOAD", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp, modifier = Modifier.weight(1f))
+                                Text("DONE", style = MaterialTheme.typography.labelSmall, color = TextMuted, fontSize = 10.sp, modifier = Modifier.width(28.dp), textAlign = TextAlign.End)
                             }
 
                             Spacer(modifier = Modifier.height(4.dp))
@@ -1242,8 +1515,8 @@ fun WorkoutDayDetailView(
                                         // branch grows from its centre, not from the card edge.
                                         DropSetBranchConnector(
                                             isLastChild = ordered.isLastChild,
-                                            width = 42.dp,
-                                            gutter = 29.dp
+                                            width = 34.dp,
+                                            gutter = 23.dp
                                         )
                                         Box(
                                             modifier = Modifier
@@ -1255,7 +1528,8 @@ fun WorkoutDayDetailView(
                                                 label = "D${ordered.set.dropIndex}",
                                                 isDrop = true,
                                                 currentBodyWeightKg = userProfile.currentWeightKg,
-                                                weightUnit = weightUnit
+                                                weightUnit = weightUnit,
+                                                effortDisplay = effortDisplay
                                             )
                                         }
                                     }
@@ -1266,6 +1540,7 @@ fun WorkoutDayDetailView(
                                         isDrop = false,
                                         currentBodyWeightKg = userProfile.currentWeightKg,
                                         weightUnit = weightUnit,
+                                        effortDisplay = effortDisplay,
                                         modifier = Modifier.padding(horizontal = 8.dp)
                                     )
                                 }
@@ -1283,19 +1558,33 @@ fun WorkoutDayDetailView(
             }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+    }
+}
 
-        // Return Button
-        OutlinedButton(
-            onClick = onBack,
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = ElectricCyan),
-            border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.6f)),
-            shape = RoundedCornerShape(10.dp),
-            modifier = Modifier.fillMaxWidth()
+/** Coloured paperclip badge that marks both members of a recorded superset. */
+@Composable
+private fun SupersetHistoryBadge(label: String) {
+    Surface(
+        color = ElectricCyan.copy(alpha = 0.12f),
+        shape = RoundedCornerShape(6.dp),
+        border = BorderStroke(1.dp, ElectricCyan.copy(alpha = 0.4f))
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Back to All Workouts", fontWeight = FontWeight.Bold)
+            Icon(
+                imageVector = Icons.Default.AttachFile,
+                contentDescription = "Superset $label",
+                tint = ElectricCyan,
+                modifier = Modifier.size(12.dp)
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                color = ElectricCyan
+            )
         }
     }
 }
@@ -1313,61 +1602,74 @@ private fun HistoryRecordedSetRow(
     isDrop: Boolean,
     currentBodyWeightKg: Double,
     weightUnit: WeightUnit,
+    effortDisplay: EffortDisplay,
     modifier: Modifier = Modifier
 ) {
+    val effortText = WorkoutMetrics.recordedEffortLabel(set, weightUnit) +
+        (set.effortRpe?.let { rpe ->
+            " · " + EffortScale.display(rpe, effortDisplay, set.reps > 0)
+        } ?: "")
+    val hasRecordedEffort = effortText != "-"
+    val bodyweightAtSet = BodyWeightTimeline.bodyWeightForSet(set, currentBodyWeightKg)
+    val loadText = WorkoutMetrics.loadLabel(set, bodyweightAtSet, weightUnit)
+    val showLoadAsSecondary = hasRecordedEffort &&
+        !(set.exerciseType == ExerciseType.CARDIO && set.weight <= 0.0 && set.addedWeight <= 0.0) &&
+        loadText.isNotBlank()
+    val secondaryColor = if (
+        set.distanceKm > 0.0 ||
+        set.holdDurationSeconds > 0 ||
+        set.addedWeight > 0.0 ||
+        set.weight > 0.0
+    ) {
+        ElectricCyan
+    } else {
+        TextMuted
+    }
+
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+            .padding(horizontal = 8.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Bold),
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
             color = if (isDrop) ElectricCyan else TextWhite,
-            modifier = Modifier.width(42.dp)
+            modifier = Modifier.width(34.dp)
         )
 
-        Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 4.dp)
         ) {
-            if (set.isWarmup) {
-                WarmupBadge(compact = true)
-                Spacer(modifier = Modifier.width(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (set.isWarmup) {
+                    WarmupBadge(compact = true)
+                    Spacer(modifier = Modifier.width(4.dp))
+                }
+                Text(
+                    text = if (hasRecordedEffort) effortText else loadText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = TextWhite,
+                    maxLines = 2
+                )
             }
-            Text(
-                text = WorkoutMetrics.recordedEffortLabel(set, weightUnit),
-                style = MaterialTheme.typography.bodySmall,
-                color = TextWhite,
-                maxLines = 2
-            )
+            if (showLoadAsSecondary) {
+                Spacer(modifier = Modifier.height(1.dp))
+                Text(
+                    text = loadText,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = secondaryColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
 
-        val bodyweightAtSet = BodyWeightTimeline.bodyWeightForSet(set, currentBodyWeightKg)
-        val weightText = WorkoutMetrics.loadLabel(set, bodyweightAtSet, weightUnit)
-        Text(
-            text = weightText,
-            style = MaterialTheme.typography.bodySmall.copy(
-                color = if (
-                    set.distanceKm > 0.0 ||
-                    set.holdDurationSeconds > 0 ||
-                    set.addedWeight > 0.0 ||
-                    set.weight > 0.0
-                ) {
-                    ElectricCyan
-                } else {
-                    TextMuted
-                }
-            ),
-            modifier = Modifier.weight(1f),
-            maxLines = 2,
-            textAlign = TextAlign.End
-        )
-
         Box(
-            modifier = Modifier.width(48.dp),
+            modifier = Modifier.width(28.dp),
             contentAlignment = Alignment.CenterEnd
         ) {
             if (set.isCompleted) {
@@ -1384,11 +1686,8 @@ private fun HistoryRecordedSetRow(
     }
 }
 
-/** Local midnight of a timestamp: the key the workout list is grouped by. */
-private fun dayKeyOf(timestamp: Long): Long {
-    val dayMs = 24L * 60L * 60L * 1000L
-    return timestamp - Math.floorMod(timestamp, dayMs)
-}
+/** Timezone-stable local calendar key the workout list is grouped by. */
+private fun dayKeyOf(timestamp: Long): Long = LocalDateKey.keyOf(timestamp)
 
 /**
  * One row of the workout history list.

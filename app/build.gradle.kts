@@ -18,18 +18,14 @@ android {
     applicationId = "com.aistudio.fitness.ironpulse"
     minSdk = 24
     targetSdk = 36
-    versionCode = 14
-    versionName = "5.0.1"
+    versionCode = 15
+    versionName = "5.1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-    val properties = Properties()
-    val localPropertiesFile = rootProject.file("local.properties")
-    if (localPropertiesFile.exists()) {
-      properties.load(localPropertiesFile.inputStream())
-    }
-    val geminiKey = properties.getProperty("GEMINI_API_KEY") ?: ""
-    buildConfigField("String", "GEMINI_API_KEY", "\"$geminiKey\"")
+    // Release builds must never embed a provider key. A developer may use one in debug only;
+    // production requires the athlete's user-entered key (or an attested backend).
+    buildConfigField("String", "GEMINI_API_KEY", "\"\"")
   }
 
   signingConfigs {
@@ -59,7 +55,15 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
-    debug { }
+    debug {
+      val properties = Properties()
+      val localPropertiesFile = rootProject.file("local.properties")
+      if (localPropertiesFile.exists()) {
+        properties.load(localPropertiesFile.inputStream())
+      }
+      val geminiKey = properties.getProperty("GEMINI_API_KEY") ?: ""
+      buildConfigField("String", "GEMINI_API_KEY", "\"$geminiKey\"")
+    }
   }
   compileOptions {
     sourceCompatibility = JavaVersion.VERSION_11
@@ -148,7 +152,8 @@ implementation(libs.media3.ui)
   // implementation(libs.androidx.credentials.play.services)
   // implementation(libs.googleid)
   implementation(libs.firebase.appcheck.recaptcha)
-  implementation(libs.firebase.appcheck.debug)
+  // The debug App Check provider must never be packaged into a release build.
+  debugImplementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)
