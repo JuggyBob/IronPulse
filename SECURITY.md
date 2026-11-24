@@ -21,7 +21,7 @@ there is no patched older branch.
 
 ## Reporting a vulnerability
 
-**Email: security@ironpulse.app** (or use GitHub's
+**Email: coding.ivan2010@gmail.com** (or use GitHub's
 [private vulnerability reporting](https://github.com/JuggyBob/IronPulse/security/advisories/new)
 if it is enabled on this repository — prefer that route, as it creates a private thread
 automatically).
